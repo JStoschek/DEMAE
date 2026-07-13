@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# uv
+# (uv.lock IS committed — it's the reproducibility anchor)
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data — the corpus and any cached COGs are large and reproducible; never commit
+data/
+tiles/
+shards/
+*.tif
+*.tiff
+*.zarr/
+cache/
+
+# Env / secrets
+.env
+.env.*
+
+# OS
+.DS_Store

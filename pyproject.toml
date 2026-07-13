@@ -1,0 +1,34 @@
+[project]
+name = "demae"
+version = "0.1.0"
+description = "DEMAE — a ViT-MAE foundation model for terrain. Phase 0: reproducible DEM data pipeline."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Jonathan Stoschek" }]
+
+# Core geospatial stack for the Phase-0 data pipeline.
+# rasterio ships manylinux/macos wheels with GDAL bundled, so no system GDAL is
+# required (see CONTEXT.md → Environment). COG windowed reads from the public
+# Copernicus bucket go through GDAL's /vsis3/ with anonymous access.
+dependencies = [
+    "rasterio>=1.4,<2",
+    "numpy>=2.0,<3",
+    "pyproj>=3.6,<4",
+    "boto3>=1.35",          # anonymous bucket listing / STAC-adjacent discovery
+]
+
+[dependency-groups]
+# Dev-only; kept out of the runtime pipeline so the reproducible core stays lean.
+dev = [
+    "jupyterlab>=4.2",
+    "matplotlib>=3.9",
+    "ipykernel>=6.29",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataset"]
