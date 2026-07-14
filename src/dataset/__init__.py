@@ -3,14 +3,21 @@
 Turns the global Copernicus DEM GLO-30 collection into a terrain-diverse,
 per-tile-normalized corpus of 224x224 elevation tiles for ViT-MAE pretraining.
 
-The pipeline is deliberately a *skeleton* at this stage: the modules below name
-the stages, but their design decisions are still open wayfinder tickets on the
-Phase-0 map (see CONTEXT.md and the repo issues). Each stub module documents the
-ticket that will fill it in. Nothing here pre-commits an undecided design.
-
-Stage map (data flow, top to bottom):
+The pipeline implements the locked Phase-0 design (ADRs 0001-0003). Stage map
+(data flow, top to bottom):
 
     discovery  ->  tiling  ->  stratify  ->  normalize  ->  manifest/shards  ->  loader
+
+- :mod:`dataset.discovery`  — list released COGs from the public bucket (§stage 1)
+- :mod:`dataset.geometry`   — pure key/lat-band/geocell/window-grid math
+- :mod:`dataset.tiling`     — COG reads behind a swappable ``CogReader`` (§stage 2)
+- :mod:`dataset.stratify`   — ocean screen, TRI, quantile strata, quota fill (§3)
+- :mod:`dataset.normalize`  — clip, land-only stats, degenerate drop, int16 (§4)
+- :mod:`dataset.shards`     — sharded int16 memmap storage (§5b)
+- :mod:`dataset.manifest`   — Parquet index + corpus_meta.json fingerprint (§5a)
+- :mod:`dataset.pipeline`   — end-to-end orchestrator
+- :mod:`dataset.throughput` — smoke-sample measurement + cloud-burst decision
+- :mod:`dataset.loader`     — Phase-1 torch read path (imports torch lazily)
 
 Standing constraint across every stage: **elevation-only output, but architected
 channel-ready** — adding slope/curvature later is a config flag, not a rewrite.
