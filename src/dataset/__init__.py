@@ -18,6 +18,8 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0003). Stage map
 - :mod:`dataset.pipeline`   — end-to-end orchestrator
 - :mod:`dataset.throughput` — smoke-sample measurement + cloud-burst decision
 - :mod:`dataset.loader`     — Phase-1 torch read path (imports torch lazily)
+- :mod:`dataset.synthetic`  — deterministic zero-network sample bucket
+- :mod:`dataset.build`      — smoke-gated corpus build CLI (``python -m dataset.build``)
 
 Standing constraint across every stage: **elevation-only output, but architected
 channel-ready** — adding slope/curvature later is a config flag, not a rewrite.

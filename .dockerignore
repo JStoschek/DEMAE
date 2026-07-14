@@ -1,0 +1,19 @@
+# Keep the build context lean and reproducible — deps come from uv.lock, not the
+# host venv, and the corpus is rebuilt inside the container, never copied in.
+.venv/
+.git/
+data/
+tiles/
+shards/
+cache/
+notebooks/
+docs/
+tests/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+*.tif
+*.tiff
+DEMAE_Project_Plan.md
