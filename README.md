@@ -29,11 +29,18 @@ full corpus.
 uv run python -m dataset.build --source synthetic      # -> data/sample/
 
 # Ship the ~50k-tile Phase-0 debug corpus from the live Copernicus bucket:
-uv run python -m dataset.build --source live           # -> data/corpus/
+uv run python -m dataset.build --source live           # -> data/corpus/ (8 read workers)
 
 # Before a live run, project throughput and get a local-vs-cloud-burst verdict:
 uv run python -m dataset.throughput
 ```
+
+The COG reads dominate wall-clock and are I/O-bound, so the full build fans them
+across a thread pool (`--workers`, default 8 — matching the throughput probe's
+projection). The written corpus is **identical for any worker count** (reads are
+consumed in COG order), so parallelism is a pure speedup, never a recipe change;
+`--workers 1` is the sequential path. Live builds show a `tqdm` progress bar with
+a live ETA over both long stages (scoring every COG, materializing every tile).
 
 Each build writes `manifest.parquet`, `corpus_meta.json` (with a `dataset_version`
 fingerprint), and int16 `shards/`. The corpus itself is gitignored — it's large

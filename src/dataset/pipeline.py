@@ -18,12 +18,68 @@ import logging
 import math
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Iterable, Iterator, Protocol, TypeVar
 
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _ordered_map(
+    fn: Callable[[_T], _R], items: Iterable[_T], workers: int
+) -> Iterator[_R]:
+    """``map(fn, items)`` yielding in input order, run concurrently when
+    ``workers > 1``.
+
+    The COG reads that dominate the build (overview scoring, full-res windows) are
+    independent and I/O-bound — GDAL/rasterio release the GIL during the S3 fetch —
+    so a thread pool overlaps the transatlantic latency the throughput probe
+    measured. Results are yielded strictly in ``items`` order (``Executor.map``
+    guarantees this), so the corpus stays byte-identical to the ``workers=1`` path
+    regardless of how the reads interleave; only the wall-clock changes.
+    """
+    if workers <= 1:
+        yield from map(fn, items)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        yield from ex.map(fn, items)
+
+
+class _Bar(Protocol):
+    """The tiny slice of a progress bar the pipeline drives (tqdm satisfies it)."""
+
+    def update(self, n: int = ...) -> object: ...
+
+    def __enter__(self) -> "_Bar": ...
+
+    def __exit__(self, *exc: object) -> object: ...
+
+
+# A progress factory turns ``(total, desc)`` into a context-managed bar. Injected
+# so the ETL core stays free of any progress dependency (the CLI wires tqdm in);
+# ``None`` -> the no-op bar below, which is what every test and library call gets.
+ProgressFactory = Callable[[int, str], _Bar]
+
+
+class _NullBar:
+    def update(self, n: int = 1) -> None:
+        pass
+
+    def __enter__(self) -> "_NullBar":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _null_factory(total: int, desc: str) -> _NullBar:
+    return _NullBar()
 
 from . import config, manifest, normalize, stratify
 from .geometry import (
@@ -107,21 +163,29 @@ def run_pipeline(
     snapshot_date: str = "unknown",
     code_version: str = "unknown",
     build_timestamp: str | None = None,
+    progress: ProgressFactory | None = None,
+    workers: int = 1,
 ) -> PipelineResult:
     """Build a corpus into ``out_dir`` and return a :class:`PipelineResult`.
 
     ``limit_cogs`` truncates discovery for smoke runs; ``per_stratum_quota`` sets
     the per-stratum target (equal quotas -> ``5 * quota`` total, ADR-0001 §5).
+    ``progress`` is an optional bar factory for the two long stages (scoring every
+    COG, materializing every selected tile); ``None`` runs silently. ``workers``
+    fans the I/O-bound COG reads across a thread pool (``1`` = sequential); the
+    written corpus is identical for any ``workers`` (reads are consumed in COG
+    order), so the throughput probe still measures single-thread per-unit costs.
     """
     out_dir = Path(out_dir)
     shard_dir = out_dir / "shards"
     timings = Timings()
+    make_bar = progress or _null_factory
 
     cogs = reader.list_cogs()
     if limit_cogs is not None:
         cogs = cogs[:limit_cogs]
 
-    candidates = _score(reader, cogs, tri_factor, timings)
+    candidates = _score(reader, cogs, tri_factor, timings, make_bar, workers)
 
     # Global stratification of the candidate TRI distribution, then quota fill.
     if candidates:
@@ -151,7 +215,9 @@ def run_pipeline(
     else:
         selected = []
 
-    rows, drops, gstats = _materialize(reader, selected, shard_dir, timings)
+    rows, drops, gstats = _materialize(
+        reader, selected, shard_dir, timings, make_bar, workers
+    )
 
     # The quota is filled from overview-scored candidates; the authoritative
     # full-res screen in prepare_tile can still drop some, so the written corpus
@@ -207,54 +273,75 @@ def run_pipeline(
 # --- Stage: score every candidate window from one x8-overview read per COG -----
 
 
+def _score_one(
+    reader: CogReader, cog: CogRef, tri_factor: int
+) -> tuple[list[_Candidate], float, float]:
+    """Score every land window of one COG from a single x8-overview read.
+
+    Pure w.r.t. the COG (no shared state), so it is safe to run across the thread
+    pool; returns its candidates plus the read/compute times to accumulate.
+    """
+    t0 = time.perf_counter()
+    ov = reader.read_overview(cog, tri_factor)
+    t1 = time.perf_counter()
+    tri_map = stratify.tri_riley(ov.array)
+    cands: list[_Candidate] = []
+    for win_row0, win_col0 in grid_windows(ov.full_w, ov.full_h):
+        o_r0, o_r1, o_c0, o_c1 = stratify.window_overview_slice(
+            win_row0=win_row0,
+            win_col0=win_col0,
+            tile=config.TILE_PX,
+            full_h=ov.full_h,
+            full_w=ov.full_w,
+            ov_h=ov.ov_h,
+            ov_w=ov.ov_w,
+        )
+        region = ov.array[o_r0:o_r1, o_c0:o_c1]
+        if stratify.is_ocean(region):  # coarse pre-screen on the overview
+            continue
+        tri = stratify.window_tri(tri_map, o_r0=o_r0, o_c0=o_c0, o_r1=o_r1, o_c1=o_c1)
+        lon, lat = window_center_lonlat(
+            origin_lon=cog.origin_lon,
+            origin_lat=cog.origin_lat,
+            width=ov.full_w,
+            height=ov.full_h,
+            win_row0=win_row0,
+            win_col0=win_col0,
+        )
+        cands.append(
+            _Candidate(
+                cog=cog,
+                win_row0=win_row0,
+                win_col0=win_col0,
+                tri=tri,
+                lon=lon,
+                lat=lat,
+                lat_band=lat_band(lat),
+                geocell=geocell_id(lon, lat),
+                tile_id=make_tile_id(cog.stem, win_row0, win_col0),
+            )
+        )
+    t2 = time.perf_counter()
+    return cands, t1 - t0, t2 - t1
+
+
 def _score(
-    reader: CogReader, cogs: list[CogRef], tri_factor: int, timings: Timings
+    reader: CogReader,
+    cogs: list[CogRef],
+    tri_factor: int,
+    timings: Timings,
+    make_bar: ProgressFactory,
+    workers: int,
 ) -> list[_Candidate]:
     candidates: list[_Candidate] = []
-    for cog in cogs:
-        t0 = time.perf_counter()
-        ov = reader.read_overview(cog, tri_factor)
-        t1 = time.perf_counter()
-        tri_map = stratify.tri_riley(ov.array)
-        for win_row0, win_col0 in grid_windows(ov.full_w, ov.full_h):
-            o_r0, o_r1, o_c0, o_c1 = stratify.window_overview_slice(
-                win_row0=win_row0,
-                win_col0=win_col0,
-                tile=config.TILE_PX,
-                full_h=ov.full_h,
-                full_w=ov.full_w,
-                ov_h=ov.ov_h,
-                ov_w=ov.ov_w,
-            )
-            region = ov.array[o_r0:o_r1, o_c0:o_c1]
-            if stratify.is_ocean(region):  # coarse pre-screen on the overview
-                continue
-            tri = stratify.window_tri(tri_map, o_r0=o_r0, o_c0=o_c0, o_r1=o_r1, o_c1=o_c1)
-            lon, lat = window_center_lonlat(
-                origin_lon=cog.origin_lon,
-                origin_lat=cog.origin_lat,
-                width=ov.full_w,
-                height=ov.full_h,
-                win_row0=win_row0,
-                win_col0=win_col0,
-            )
-            candidates.append(
-                _Candidate(
-                    cog=cog,
-                    win_row0=win_row0,
-                    win_col0=win_col0,
-                    tri=tri,
-                    lon=lon,
-                    lat=lat,
-                    lat_band=lat_band(lat),
-                    geocell=geocell_id(lon, lat),
-                    tile_id=make_tile_id(cog.stem, win_row0, win_col0),
-                )
-            )
-        t2 = time.perf_counter()
-        timings.overview_read_s += t1 - t0
-        timings.score_s += t2 - t1
-        timings.n_cogs_scored += 1
+    scored = _ordered_map(lambda c: _score_one(reader, c, tri_factor), cogs, workers)
+    with make_bar(len(cogs), "scoring COGs") as bar:
+        for cands, read_s, score_s in scored:
+            candidates.extend(cands)  # extended in COG order -> deterministic
+            timings.overview_read_s += read_s
+            timings.score_s += score_s
+            timings.n_cogs_scored += 1
+            bar.update(1)
     return candidates
 
 
@@ -283,11 +370,34 @@ class _GlobalStats:
         return mean, math.sqrt(var)
 
 
+@dataclass
+class _CogWindows:
+    """One COG's selected windows, read at full-res and awaiting the writer."""
+
+    stem: str
+    cands: list[_Candidate]
+    windows: list[np.ndarray]
+    read_s: float
+
+
+def _read_cog_windows(
+    reader: CogReader, stem: str, cands: list[_Candidate], cog: CogRef
+) -> _CogWindows:
+    """Full-res read of every selected window in one COG (thread-pool safe: it
+    only touches its own COG and returns arrays, never the shared writer)."""
+    origins = [(c.win_row0, c.win_col0) for c in cands]
+    t0 = time.perf_counter()
+    windows = reader.read_windows(cog, origins, config.TILE_PX)
+    return _CogWindows(stem, cands, windows, time.perf_counter() - t0)
+
+
 def _materialize(
     reader: CogReader,
     selected: list[_Candidate],
     shard_dir: Path,
     timings: Timings,
+    make_bar: ProgressFactory,
+    workers: int,
 ) -> tuple[list[TileRecord], Counter, _GlobalStats]:
     # Group by COG so each source is opened once for all its selected windows.
     by_cog: dict[str, list[_Candidate]] = defaultdict(list)
@@ -300,43 +410,49 @@ def _materialize(
     drops: Counter = Counter()
     gstats = _GlobalStats()
 
-    with ShardWriter(shard_dir) as writer:
-        for stem, cands in by_cog.items():
-            origins = [(c.win_row0, c.win_col0) for c in cands]
-            t0 = time.perf_counter()
-            windows = reader.read_windows(cog_ref[stem], origins, config.TILE_PX)
-            t1 = time.perf_counter()
-            timings.window_read_s += t1 - t0
-            timings.n_windows_read += len(windows)
+    # Reads fan out across the pool; the shard writer, global stats, and row order
+    # stay on this single thread (the writer is not thread-safe, and sequential
+    # writes in COG order are what make shard assignment reproducible). Results
+    # arrive in COG order, so the corpus is identical to the workers=1 path.
+    read = _ordered_map(
+        lambda item: _read_cog_windows(reader, item[0], item[1], cog_ref[item[0]]),
+        by_cog.items(),
+        workers,
+    )
+    with ShardWriter(shard_dir) as writer, make_bar(len(selected), "materializing tiles") as bar:
+        for batch in read:
+            timings.window_read_s += batch.read_s
+            timings.n_windows_read += len(batch.windows)
 
             p0 = time.perf_counter()
-            for cand, win in zip(cands, windows):
+            for cand, win in zip(batch.cands, batch.windows):
                 tile, reason = normalize.prepare_tile(win)
                 if tile is None:
                     drops[reason] += 1
-                    continue
-                ref = writer.add(tile.raw_i16)
-                gstats.update(tile.raw_i16)
-                rows.append(
-                    TileRecord(
-                        tile_id=cand.tile_id,
-                        shard_id=ref.shard_id,
-                        row_index=ref.row_index,
-                        source_cog=f"{stem}/{stem}.tif",
-                        win_row0=cand.win_row0,
-                        win_col0=cand.win_col0,
-                        lon=cand.lon,
-                        lat=cand.lat,
-                        lat_band=cand.lat_band,
-                        geocell_id=cand.geocell,
-                        tri=cand.tri,
-                        stratum=cand.stratum,
-                        mean=tile.mean,
-                        std=tile.std,
-                        land_frac=tile.land_frac,
-                        content_hash=ref.content_hash,
+                else:
+                    ref = writer.add(tile.raw_i16)
+                    gstats.update(tile.raw_i16)
+                    rows.append(
+                        TileRecord(
+                            tile_id=cand.tile_id,
+                            shard_id=ref.shard_id,
+                            row_index=ref.row_index,
+                            source_cog=f"{batch.stem}/{batch.stem}.tif",
+                            win_row0=cand.win_row0,
+                            win_col0=cand.win_col0,
+                            lon=cand.lon,
+                            lat=cand.lat,
+                            lat_band=cand.lat_band,
+                            geocell_id=cand.geocell,
+                            tri=cand.tri,
+                            stratum=cand.stratum,
+                            mean=tile.mean,
+                            std=tile.std,
+                            land_frac=tile.land_frac,
+                            content_hash=ref.content_hash,
+                        )
                     )
-                )
+                bar.update(1)
             timings.process_s += time.perf_counter() - p0
     return rows, drops, gstats
 

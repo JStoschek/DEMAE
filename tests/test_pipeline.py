@@ -115,6 +115,63 @@ def test_pipeline_records_timings(tmp_path):
     assert t.per_cog_overview_s >= 0.0
 
 
+def test_pipeline_parallel_matches_sequential(tmp_path):
+    # The whole safety claim of the thread pool: workers>1 must produce a
+    # byte-identical corpus to workers=1 (reads consumed in COG order).
+    seq = _run(tmp_path / "seq", per_stratum_quota=5, per_tile_cap=1000, workers=1)
+    par = _run(tmp_path / "par", per_stratum_quota=5, per_tile_cap=1000, workers=4)
+
+    assert par.dataset_version == seq.dataset_version
+    assert par.n_written == seq.n_written
+
+    seq_rows = pq.read_table(seq.manifest_path).to_pylist()
+    par_rows = pq.read_table(par.manifest_path).to_pylist()
+    assert par_rows == seq_rows  # same rows, same shard/row assignment, same order
+    assert json.loads(par.corpus_meta_path.read_text())["global_mean"] == pytest.approx(
+        json.loads(seq.corpus_meta_path.read_text())["global_mean"]
+    )
+
+
+def test_pipeline_parallel_scores_all_cogs(tmp_path):
+    res = _run(tmp_path, workers=4)
+    assert res.timings.n_cogs_scored == 4  # every COG scored under the pool
+    assert res.n_written > 0
+
+
+def test_pipeline_drives_progress_bars(tmp_path):
+    events: list[tuple[str, int]] = []
+
+    class _Bar:
+        def __init__(self, total, desc):
+            events.append((desc, total))
+            self.n = 0
+
+        def update(self, n=1):
+            self.n += n
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    res = _run(tmp_path, progress=lambda total, desc: _Bar(total, desc))
+    descs = [d for d, _ in events]
+    # both long stages open a bar, sized to their real work
+    assert any("scoring" in d for d in descs)
+    assert any("materializing" in d for d in descs)
+    score_total = next(t for d, t in events if "scoring" in d)
+    mat_total = next(t for d, t in events if "materializing" in d)
+    assert score_total == res.timings.n_cogs_scored
+    assert mat_total == res.n_selected
+
+
+def test_pipeline_progress_defaults_silent(tmp_path):
+    # No factory -> the no-op bar; build still succeeds and writes tiles.
+    res = _run(tmp_path)
+    assert res.n_written > 0
+
+
 def test_pipeline_ocean_windows_dropped(tmp_path):
     # the N55 cell has a 300-row ocean band; those windows must not be written
     res = _run(tmp_path, per_stratum_quota=50, per_tile_cap=1000)

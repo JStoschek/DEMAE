@@ -28,10 +28,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
-from .pipeline import PipelineResult, run_pipeline
+from .pipeline import PipelineResult, ProgressFactory, run_pipeline
 from .tiling import CogReader
 
 log = logging.getLogger(__name__)
+
+
+def tqdm_progress() -> ProgressFactory | None:
+    """A tqdm-backed progress factory for the long stages, or ``None`` if tqdm is
+    absent (the pipeline then runs silently — the bar is cosmetic, never required)."""
+    try:
+        from tqdm import tqdm
+    except ImportError:  # pragma: no cover - tqdm is a declared dependency
+        return None
+
+    def factory(total: int, desc: str) -> object:
+        return tqdm(total=total, desc=desc, unit="it", dynamic_ncols=True, smoothing=0.02)
+
+    return factory
 
 
 class SmokeValidationError(RuntimeError):
@@ -60,12 +74,17 @@ def build_corpus(
     run_smoke: bool = True,
     smoke_cogs: int = 4,
     smoke_quota: int = 2,
+    progress: ProgressFactory | None = None,
+    workers: int = 8,
 ) -> BuildOutcome:
     """Build a corpus into ``out_dir``, gating on a smoke tier first.
 
     The smoke tier is written to ``out_dir/smoke`` and validated (``n_written >
     0``) before the full build lands in ``out_dir``. Pass ``run_smoke=False`` to
-    skip the gate. All recipe knobs mirror :func:`run_pipeline`.
+    skip the gate. ``progress`` is a bar factory for the (long) full build only —
+    the smoke tier runs in seconds and stays quiet. ``workers`` fans the full
+    build's COG reads across a thread pool (the smoke tier stays sequential). All
+    other recipe knobs mirror :func:`run_pipeline`.
     """
     out_dir = Path(out_dir)
 
@@ -104,6 +123,8 @@ def build_corpus(
         snapshot_date=snapshot_date,
         code_version=code_version,
         build_timestamp=build_timestamp,
+        progress=progress,
+        workers=workers,
     )
     log.info(
         "corpus built: %d tiles (%d candidates, %d selected) -> %s",
@@ -179,6 +200,13 @@ def build_parser() -> argparse.ArgumentParser:
         "~50k; 40 synthetic -> a few-hundred-tile sample)",
     )
     p.add_argument("--limit-cogs", type=int, default=None, help="cap COGs scanned")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="thread-pool size for the I/O-bound COG reads (1 = sequential); the "
+        "corpus is identical regardless (default: 8, matching the throughput probe)",
+    )
     p.add_argument("--seed", type=int, default=config.RANDOM_SEED)
     p.add_argument("--snapshot-date", default=None, help="corpus snapshot date")
     p.add_argument("--no-smoke", action="store_true", help="skip the smoke gate")
@@ -206,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_date=args.snapshot_date or ("synthetic" if synthetic else _today()),
         code_version=git_sha(),
         run_smoke=not args.no_smoke,
+        progress=tqdm_progress(),
+        workers=args.workers,
     )
 
     r = outcome.corpus

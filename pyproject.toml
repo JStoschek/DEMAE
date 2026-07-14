@@ -17,6 +17,7 @@ dependencies = [
     "pyproj>=3.6,<4",
     "boto3>=1.35",          # anonymous bucket listing / STAC-adjacent discovery
     "pyarrow>=16",          # Parquet tile-manifest (ADR 0002)
+    "tqdm>=4.66",           # build-CLI progress bars over the long scan/materialize
 ]
 
 # The corpus build CLI (smoke-gated); equivalent to `python -m dataset.build`.
