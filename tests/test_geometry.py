@@ -132,3 +132,44 @@ def test_window_centre_stays_inside_the_cell():
             assert 6 <= lon <= 7
             assert 45 <= lat <= 46
             assert not math.isnan(lon) and not math.isnan(lat)
+
+
+# --- Ground pixel spacing (feeds the metric library's (dy, dx) contract) -------
+
+
+def test_pixel_spacing_is_square_ish_at_the_equator():
+    # A 3600x3600 COG over a 1-degree cell at the equator: ~31 m either way.
+    dy, dx = geometry.pixel_spacing_m(0.5, rows_per_degree=3600, cols_per_degree=3600)
+    assert dy == pytest.approx(30.92, abs=0.01)
+    assert dx == pytest.approx(dy, rel=1e-3)
+
+
+def test_pixel_spacing_narrows_east_west_with_latitude():
+    # Same grid, higher latitude: a degree of longitude is cos(lat) as wide.
+    dy, dx = geometry.pixel_spacing_m(60.0, rows_per_degree=3600, cols_per_degree=3600)
+    assert dx == pytest.approx(dy * 0.5, rel=1e-6)
+
+
+def test_pixel_spacing_is_why_copernicus_coarsens_columns_poleward():
+    # Copernicus drops to 1800 columns above 60 deg precisely to hold the ground
+    # sample distance near 31 m instead of letting it halve (recon §6, ADR-0001 §1).
+    _, dx_naive = geometry.pixel_spacing_m(65.0, rows_per_degree=3600, cols_per_degree=3600)
+    _, dx_actual = geometry.pixel_spacing_m(65.0, rows_per_degree=3600, cols_per_degree=1800)
+    assert dx_naive == pytest.approx(13.07, abs=0.01)
+    assert dx_actual == pytest.approx(26.14, abs=0.01)
+
+
+def test_pixel_spacing_anisotropy_peaks_just_below_fifty_degrees():
+    # ADR-0001 §1's worst case, ~1.55:1, and it is not at the pole: it is at the
+    # top of the 3600-column band, right before Copernicus coarsens to 2400 and
+    # hands most of the width back.
+    def ratio(lat, *, cols_per_degree):
+        dy, dx = geometry.pixel_spacing_m(
+            lat, rows_per_degree=3600, cols_per_degree=cols_per_degree
+        )
+        return dy / dx
+
+    worst = ratio(49.9, cols_per_degree=3600)
+    assert worst == pytest.approx(1.55, abs=0.02)
+    assert ratio(50.1, cols_per_degree=2400) < worst  # the coarsening step
+    assert ratio(85.5, cols_per_degree=360) < worst  # and the pole is milder still

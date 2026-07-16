@@ -10,8 +10,10 @@ recipe unit-testable without touching S3.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
+from typing import Final
 
 from . import config
 
@@ -19,6 +21,9 @@ from . import config
 _KEY_RE = re.compile(
     r"Copernicus_DSM_COG_10_([NS])(\d{2})_00_([EW])(\d{3})_00_DEM"
 )
+
+# Mean metres per degree of latitude on a spherical earth.
+_M_PER_DEG_LAT: Final = 111_320.0
 
 
 @dataclass(frozen=True)
@@ -77,8 +82,6 @@ def geocell_id(lon: float, lat: float) -> str:
 
 
 def _floor_to(value: float, step: int) -> int:
-    import math
-
     return int(math.floor(value / step) * step)
 
 
@@ -128,3 +131,29 @@ def window_center_lonlat(
     lon = west_lon + (win_col0 + tile / 2) * (1.0 / width)
     lat = north_lat - (win_row0 + tile / 2) * (1.0 / height)
     return lon, lat
+
+
+def pixel_spacing_m(
+    lat: float, *, rows_per_degree: int, cols_per_degree: int
+) -> tuple[float, float]:
+    """Ground metres per pixel ``(dy, dx)`` for a raster sampling a 1-degree cell.
+
+    This is what :mod:`dataset.metrics` wants: the metrics take a pixel size and
+    refuse to know about latitude, so somebody has to do the conversion, and this
+    is the only place that does. Pass the dimensions of the raster that spans the
+    degree — the full COG, or its x8 overview — and the spacing holds for any
+    window cut from it.
+
+    ``dy`` is latitude-independent; ``dx`` shrinks with ``cos(lat)``, which is why
+    the two must be applied to their own axes rather than averaged into one
+    resolution (ADR-0001 §1). Copernicus's poleward column coarsening cancels most
+    of that shrink, but not all of it: the anisotropy peaks around 1.55:1 near
+    50 deg, just inside the 3600-column band.
+
+    A spherical earth is close enough here. The metrics feed a *ranking* — the
+    stratifier's quantile cuts — and the ~0.3% ellipsoidal error is far below the
+    resolution at which a rank flips.
+    """
+    dy = _M_PER_DEG_LAT / rows_per_degree
+    dx = _M_PER_DEG_LAT * math.cos(math.radians(lat)) / cols_per_degree
+    return dy, dx
