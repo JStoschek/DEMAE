@@ -25,6 +25,12 @@ _KEY_RE = re.compile(
 # Mean metres per degree of latitude on a spherical earth.
 _M_PER_DEG_LAT: Final = 111_320.0
 
+#: Ground metres per pixel, ``(dy, dx)`` — north-south first, then east-west. The
+#: pair travels together everywhere (:func:`pixel_spacing_m` makes it,
+#: :mod:`dataset.metrics` consumes it) and the two are never interchangeable:
+#: Copernicus's columns are up to ~1.55x wider on the ground than its rows.
+PixelSize = tuple[float, float]
+
 
 @dataclass(frozen=True)
 class CogRef:

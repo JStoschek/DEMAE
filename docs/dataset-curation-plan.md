@@ -40,7 +40,12 @@ distribution (PRISM/panda or the public GLO-30 mask packages) `[verified]`.
 
 **A2. Metric library — all eight candidates, pure numpy/scipy, unit-tested.**
 `src/dataset/metrics.py` (extends `prototypes/terrain_stratify_proto.py`), one function
-per metric, each testable on synthetic surfaces from `src/dataset/synthetic.py`:
+per metric, each testable on synthetic surfaces from `src/dataset/surfaces.py`:
+
+> **Correction (issue #16).** This section originally cited `src/dataset/synthetic.py`
+> for the test surfaces. That was a slip: `synthetic.py` is the fabricated
+> Copernicus-shaped S3 bucket for zero-network pipeline tests. The oracle surfaces
+> live in a new `src/dataset/surfaces.py` and `synthetic.py` is untouched.
 
 | metric | formula sketch | unit test oracle |
 |---|---|---|

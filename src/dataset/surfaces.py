@@ -22,8 +22,9 @@ import math
 
 import numpy as np
 
+from .geometry import PixelSize
+
 Shape = tuple[int, int]
-PixelSize = tuple[float, float]  # (dy, dx) ground metres per pixel
 
 _DEFAULT_SHAPE: Shape = (64, 64)
 
@@ -31,21 +32,21 @@ _DEFAULT_SHAPE: Shape = (64, 64)
 def ramp(
     shape: Shape = _DEFAULT_SHAPE,
     *,
-    low: float = 0.0,
-    high: float = 100.0,
+    low: float = 100.0,
+    high: float = 200.0,
     axis: int = 0,
 ) -> np.ndarray:
     """A linear ramp from ``low`` to ``high`` across ``axis``.
 
     Oracles: local relief is exactly ``high - low``; the mean is the midpoint
     ``(low + high) / 2``; the elevation-relief ratio is exactly 0.5.
+
+    ``low`` defaults clear of ``0.0`` rather than to it: a ramp starting at sea
+    level would have its floor row eaten by the land mask, and every oracle above
+    would quietly be a little wrong.
     """
-    n = shape[axis]
-    line = np.linspace(low, high, n, dtype=np.float64)
-    z = np.broadcast_to(
-        line.reshape((-1, 1) if axis == 0 else (1, -1)), shape
-    )
-    return np.ascontiguousarray(z, dtype=np.float64)
+    line = np.linspace(low, high, shape[axis], dtype=np.float64)
+    return _spread_along_axis(line, shape, axis)
 
 
 def inclined_plane(
@@ -60,8 +61,10 @@ def inclined_plane(
 
     Aspect is the downslope azimuth in degrees clockwise from north, the GIS
     convention; the raster is north-up, so rows increase southward and columns
-    eastward. ``base`` is the elevation at the north-west corner pixel and is
-    lifted well clear of ``0.0`` so no pixel is mistaken for ocean.
+    eastward. ``base`` is the elevation at the north-west corner pixel; a steep
+    enough tilt over a big enough grid will still run the far corner below sea
+    level, which is harmless — only exactly ``0.0`` reads as ocean, and a plane
+    hits that on at most one contour line.
 
     Oracles: the gradient magnitude is exactly ``tan(slope_deg)`` everywhere, so
     slope mean is the tilt and slope std is zero, whatever the aspect and whatever
@@ -74,7 +77,7 @@ def inclined_plane(
     cols = np.arange(shape[1], dtype=np.float64).reshape(1, -1)
     # Downslope unit vector is (east, north) = (sin a, cos a); north = -row * dy.
     z = base + s * (rows * dy * math.cos(a) - cols * dx * math.sin(a))
-    return np.ascontiguousarray(np.broadcast_to(z, shape), dtype=np.float64)
+    return np.broadcast_to(z, shape).astype(np.float64, copy=True)
 
 
 def plateau(shape: Shape = _DEFAULT_SHAPE, *, height: float = 250.0) -> np.ndarray:
@@ -162,8 +165,19 @@ def sinusoid(
     n = shape[axis]
     distance_m = np.arange(n, dtype=np.float64) * spacing
     wave = base + amplitude * np.sin(2.0 * math.pi * distance_m / wavelength_m)
-    z = np.broadcast_to(wave.reshape((-1, 1) if axis == 0 else (1, -1)), shape)
-    return np.ascontiguousarray(z, dtype=np.float64)
+    return _spread_along_axis(wave, shape, axis)
+
+
+def _spread_along_axis(line: np.ndarray, shape: Shape, axis: int) -> np.ndarray:
+    """Repeat a 1-D profile across the other axis into a writable ``shape`` grid.
+
+    Writable matters: callers paint ocean into these surfaces to build the coastal
+    cases, and ``np.broadcast_to`` alone hands back a read-only view.
+    """
+    if axis not in (0, 1):
+        raise ValueError(f"axis must be 0 or 1: {axis!r}")
+    profile = line.reshape((-1, 1) if axis == 0 else (1, -1))
+    return np.broadcast_to(profile, shape).astype(np.float64, copy=True)
 
 
 def constant(shape: Shape = _DEFAULT_SHAPE, *, value: float = 250.0) -> np.ndarray:

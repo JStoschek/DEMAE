@@ -83,16 +83,29 @@ def test_constant_surface_is_degenerate():
     assert z.max() == z.min() == 250.0
 
 
-def test_no_surface_accidentally_paints_ocean_fill():
-    # Every default surface must stay clear of the exact 0.0 the mask reserves
-    # for ocean, or the oracles would silently lose pixels (ADR-0001 §3).
+def test_every_surface_is_writable_so_callers_can_paint_ocean_into_it():
+    # Painting sea into a surface is how the coastal cases get built; a surface
+    # handed back as a read-only broadcast view would make that impossible.
     px = (30.0, 30.0)
-    for z in (
-        surfaces.ramp(low=100.0, high=350.0),
+    for z in _every_default_surface(px):
+        z[0, 0] = 0.0  # must not raise
+
+
+def test_no_surface_accidentally_paints_ocean_fill():
+    # Every surface must stay clear on *its own defaults* of the exact 0.0 the
+    # mask reserves for ocean, or the oracles silently lose pixels (ADR-0001 §3):
+    # a ramp defaulting to low=0.0 would report 98.4 m of relief, not 100.
+    for z in _every_default_surface((30.0, 30.0)):
+        assert not np.any(z == 0.0)
+
+
+def _every_default_surface(px):
+    """Each surface built on its own defaults, so the defaults are what's tested."""
+    return [
+        surfaces.ramp(),
         surfaces.inclined_plane(pixel_size=px, slope_deg=20.0, aspect_deg=45.0),
         surfaces.plateau(),
         surfaces.plateau_with_pit(),
         surfaces.sinusoid(pixel_size=px),
         surfaces.constant(),
-    ):
-        assert not np.any(z == 0.0)
+    ]

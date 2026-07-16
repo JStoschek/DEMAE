@@ -173,11 +173,39 @@ def test_relief_and_err_ignore_ocean_fill():
     assert metrics.elevation_relief_ratio(z, (30.0, 30.0)) == pytest.approx(0.5, abs=1e-12)
 
 
+def test_slope_ignores_the_cliff_against_the_ocean_fill():
+    # A flat coastal plateau is flat. The 250 m step down to the fill is a
+    # digitization artifact, not terrain: the fill is painted, not measured.
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    assert metrics.slope_mean(z, (30.0, 30.0)) == pytest.approx(0.0, abs=1e-9)
+    assert metrics.slope_std(z, (30.0, 30.0)) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_coastal_slope_does_not_depend_on_the_resolution_it_is_read_at():
+    # The artifact this guards against is resolution-dependent -- a one-pixel
+    # step is steeper at 30 m than at 240 m -- so leaving it in would show up as
+    # drift in A3's overview-vs-full-res calibration and be read as real.
+    z = surfaces.inclined_plane((32, 32), pixel_size=(30.0, 30.0), slope_deg=8.0)
+    z[:8] = 0.0  # sea in the north
+    full = metrics.slope_mean(z, (30.0, 30.0))
+    assert full == pytest.approx(8.0, abs=1e-9)
+
+
 def test_sub_sea_level_land_is_not_mistaken_for_ocean():
     # ADR-0001 §3: genuine land can be negative (the Netherlands at -12 m); only
     # exactly 0.0 is ocean.
     z = surfaces.constant((16, 16), value=-12.0)
     assert metrics.mean_elevation(z, (30.0, 30.0)) == pytest.approx(-12.0)
+
+
+def test_err_guard_fires_when_masking_is_what_flattens_the_window():
+    # The window is not constant, but its *land* is: the guard has to look at
+    # what survives the mask, not at the raw array.
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    assert np.isnan(metrics.elevation_relief_ratio(z, (30.0, 30.0)))
+    assert metrics.local_relief(z, (30.0, 30.0)) == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize("name", sorted(metrics.METRICS))
