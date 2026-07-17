@@ -168,6 +168,110 @@ def sinusoid(
     return _spread_along_axis(wave, shape, axis)
 
 
+def ridge(
+    shape: Shape = _DEFAULT_SHAPE,
+    *,
+    pixel_size: PixelSize,
+    flank_slope_deg: float = 20.0,
+    crest_height: float = 1000.0,
+    axis: int = 0,
+) -> np.ndarray:
+    """A tent: a straight crest at ``crest_height``, flanks falling at
+    ``flank_slope_deg`` to either side across ``axis``.
+
+    The convex counterpart to :func:`valley`, and the surface the geomorphon
+    classes were named for. Oracles: the crest cell sees terrain falling in the
+    six directions that leave the crest line and level ground along the other two,
+    which is the canonical geomorphon *ridge*; every flank cell is a plane tilted
+    at ``flank_slope_deg``. With an even ``shape[axis]`` the crest falls between
+    two cells and both sit half a pixel below the nominal height, so pass an odd
+    length when the crest itself is what's under test.
+
+    ``crest_height`` is the top of the surface and the flanks fall away from it, so
+    a steep enough tilt over a wide enough grid runs them down through ``0.0`` and
+    the mask eats a contour line of the terrain. The defaults leave the flanks
+    clear; a shallower ``crest_height`` needs checking against them.
+    """
+    return _tent(shape, pixel_size, flank_slope_deg, crest_height, axis, falls_away=True)
+
+
+def valley(
+    shape: Shape = _DEFAULT_SHAPE,
+    *,
+    pixel_size: PixelSize,
+    flank_slope_deg: float = 20.0,
+    floor_height: float = 1000.0,
+    axis: int = 0,
+) -> np.ndarray:
+    """A trough: a straight floor at ``floor_height``, walls rising at
+    ``flank_slope_deg`` to either side across ``axis``.
+
+    :func:`ridge` upside down, and the concave half of the geomorphon oracle: the
+    floor cell sees terrain rising in six directions, the canonical *valley*.
+
+    ``floor_height`` is the bottom of the surface and the walls only climb from it,
+    so nothing here can reach ``0.0`` unless the floor is put there.
+    """
+    return _tent(shape, pixel_size, flank_slope_deg, floor_height, axis, falls_away=False)
+
+
+def _tent(
+    shape: Shape,
+    pixel_size: PixelSize,
+    flank_slope_deg: float,
+    height: float,
+    axis: int,
+    *,
+    falls_away: bool,
+) -> np.ndarray:
+    """A vee across ``axis``, hinged at ``height`` on the centre line: pointing up
+    into a ridge when it ``falls_away`` from the hinge, down into a valley when not.
+    """
+    spacing = pixel_size[axis]
+    n = shape[axis]
+    centre = (n - 1) / 2.0
+    distance_m = np.abs(np.arange(n, dtype=np.float64) - centre) * spacing
+    rise = -1.0 if falls_away else 1.0
+    line = height + rise * math.tan(math.radians(flank_slope_deg)) * distance_m
+    return _spread_along_axis(line, shape, axis)
+
+
+def basin(
+    shape: Shape = _DEFAULT_SHAPE,
+    *,
+    pixel_size: PixelSize,
+    depth: float = 100.0,
+    radius_m: float = 960.0,
+    floor: float = 1000.0,
+) -> np.ndarray:
+    """A paraboloid bowl centred on the array: ``floor + depth * (r / radius_m)**2``,
+    where ``r`` is the ground distance in metres from the centre.
+
+    A negative ``depth`` turns the bowl over into a dome — the same paraboloid, so
+    the same oracles with the signs flipped, which is why there is no separate
+    ``dome``. The centre cell is a geomorphon *pit* (a dome's is a *peak*).
+
+    The quadratic is what makes this the TPI oracle: the mean of ``r**2`` over any
+    kernel symmetric about a cell is that cell's ``r**2`` plus the kernel's own
+    mean squared radius, so cell-minus-neighbourhood is the same negative constant
+    at every interior cell, ``-depth / radius_m**2`` times that kernel constant. A
+    bowl reads below its surroundings everywhere, however the window is placed.
+
+    ``r`` is measured in metres through ``pixel_size``, so the contours are round
+    on the ground rather than round in pixels.
+
+    A dome deep enough to bring its skirt down through ``0.0`` loses that contour
+    to the mask; the defaults keep a 64-cell window's corners well clear of it.
+    """
+    if radius_m <= 0:
+        raise ValueError(f"radius_m must be positive: {radius_m!r}")
+    dy, dx = pixel_size
+    rows = (np.arange(shape[0], dtype=np.float64) - (shape[0] - 1) / 2.0).reshape(-1, 1) * dy
+    cols = (np.arange(shape[1], dtype=np.float64) - (shape[1] - 1) / 2.0).reshape(1, -1) * dx
+    r2 = rows**2 + cols**2
+    return floor + depth * r2 / radius_m**2
+
+
 def _spread_along_axis(line: np.ndarray, shape: Shape, axis: int) -> np.ndarray:
     """Repeat a 1-D profile across the other axis into a writable ``shape`` grid.
 

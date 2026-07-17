@@ -8,6 +8,11 @@ import pytest
 
 from dataset import metrics, surfaces
 
+#: Square 30 m pixels -- Copernicus at the equator, and the default the oracles
+#: below are hand-computed against. Cases that turn on the pixel size (anisotropy,
+#: the x8 overview) spell theirs out locally instead.
+PX = (30.0, 30.0)
+
 
 # --- local relief: ramp of known range ----------------------------------------
 
@@ -151,6 +156,311 @@ def test_mean_elevation_of_plateau_is_its_height():
 def test_mean_elevation_of_ramp_is_the_midpoint():
     z = surfaces.ramp((64, 64), low=100.0, high=350.0)
     assert metrics.mean_elevation(z, (30.0, 30.0)) == pytest.approx(225.0)
+
+
+# --- Iwahashi-Pike texture: the sinusoid frequency sweep ----------------------
+
+
+def test_texture_of_a_plateau_is_zero():
+    z = surfaces.plateau((32, 32), height=250.0)
+    assert metrics.texture(z, (30.0, 30.0)) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("aspect", [0.0, 90.0, 180.0, 270.0])
+def test_texture_of_a_plane_is_zero_however_steep_it_is(aspect):
+    # Texture is pits and peaks, not steepness: the median of a monotone
+    # neighbourhood is the cell in the middle of it, so nothing is ever marked.
+    px = (30.0, 30.0)
+    z = surfaces.inclined_plane((48, 48), pixel_size=px, slope_deg=40.0, aspect_deg=aspect)
+    assert metrics.texture(z, px) == pytest.approx(0.0)
+
+
+def test_texture_rises_as_the_corrugations_tighten():
+    # The oracle: same amplitude, shorter wavelength -> more pits and peaks per
+    # cell. A 1-D wave marks exactly its crest and trough columns, so the density
+    # is 2 cells per period -- 2/16, 2/8, 2/4 at 16, 8 and 4 pixels per period.
+    px = (30.0, 30.0)
+    textures = [
+        metrics.texture(
+            surfaces.sinusoid((64, 64), pixel_size=px, wavelength_m=w, amplitude=50.0), px
+        )
+        for w in (480.0, 240.0, 120.0)
+    ]
+    assert textures[0] < textures[1] < textures[2]
+    assert textures[0] == pytest.approx(0.125, abs=0.02)
+    assert textures[1] == pytest.approx(0.25, abs=0.02)
+    assert textures[2] == pytest.approx(0.5, abs=0.02)
+
+
+def test_texture_ignores_relief_too_small_for_its_threshold():
+    # Iwahashi & Pike count a cell only where it departs from the local median by
+    # more than a metre. A wave stretched over 64 pixels bends by 0.24 m per cell
+    # at its crest: real relief, but below the noise floor the threshold is there
+    # to reject.
+    px = (30.0, 30.0)
+    z = surfaces.sinusoid((64, 64), pixel_size=px, wavelength_m=1920.0, amplitude=50.0)
+    assert metrics.texture(z, px) == pytest.approx(0.0)
+
+
+def test_texture_is_indifferent_to_the_pixel_size_it_is_given():
+    # Same array, coarser pixels: the wave is 4 cells per period either way, so
+    # the pit/peak density does not move. Texture counts cells, not metres --
+    # which is exactly the scale sensitivity Gate A3 measures.
+    px_full, px_ov = (30.0, 30.0), (240.0, 240.0)
+    z = surfaces.sinusoid((64, 64), pixel_size=px_full, wavelength_m=120.0, amplitude=50.0)
+    assert metrics.texture(z, px_ov) == pytest.approx(metrics.texture(z, px_full))
+
+
+def test_texture_does_not_invent_pits_at_the_shoreline():
+    # The fill is painted, not measured: a flat coastal plateau has no texture.
+    # An unmasked median would read the 250 m step down to the sea as a peak
+    # along the whole waterline.
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    assert metrics.texture(z, (30.0, 30.0)) == pytest.approx(0.0)
+
+
+# --- normals dispersion: the metric that must not be slope --------------------
+
+
+@pytest.mark.parametrize("tilt", [0.0, 5.0, 30.0, 60.0, 85.0])
+@pytest.mark.parametrize("aspect", [0.0, 45.0, 90.0, 205.0, 330.0])
+def test_normals_dispersion_of_any_plane_is_zero_regardless_of_tilt(tilt, aspect):
+    # The sharp one. Every normal on a plane points the same way, so they sum to
+    # a unit vector and disperse by nothing -- at 5 degrees and at 85. An
+    # implementation that has quietly reinvented slope fails here.
+    px = (30.0, 30.0)
+    z = surfaces.inclined_plane((48, 48), pixel_size=px, slope_deg=tilt, aspect_deg=aspect)
+    assert metrics.normals_dispersion(z, px) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_normals_dispersion_of_a_plane_is_zero_under_anisotropic_pixels():
+    px = (30.9, 19.9)
+    z = surfaces.inclined_plane((48, 48), pixel_size=px, slope_deg=12.0, aspect_deg=70.0)
+    assert metrics.normals_dispersion(z, px) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_normals_dispersion_separates_rough_from_merely_steep():
+    # A cliff face is steep and smooth; corrugations are gentle and rough. Slope
+    # ranks these the wrong way round, which is the whole reason this metric is a
+    # candidate.
+    px = (30.0, 30.0)
+    cliff = surfaces.inclined_plane((64, 64), pixel_size=px, slope_deg=60.0)
+    ripples = surfaces.sinusoid((64, 64), pixel_size=px, wavelength_m=240.0, amplitude=20.0)
+    assert metrics.slope_mean(cliff, px) > metrics.slope_mean(ripples, px)
+    assert metrics.normals_dispersion(cliff, px) < metrics.normals_dispersion(ripples, px)
+
+
+def test_normals_dispersion_rises_as_the_corrugations_tighten():
+    px = (30.0, 30.0)
+    values = [
+        metrics.normals_dispersion(
+            surfaces.sinusoid((64, 64), pixel_size=px, wavelength_m=w, amplitude=50.0), px
+        )
+        for w in (1920.0, 960.0, 480.0, 240.0)
+    ]
+    assert values == sorted(values)
+    assert 0.0 < values[0] < values[-1] < 1.0
+
+
+def test_normals_dispersion_never_reports_a_negative_spread():
+    # Rounding puts the resultant a hair over unit length on a smooth window, and
+    # smooth windows are most of them: a manifest column of -2e-16 is a column of
+    # noise where the answer is zero.
+    px = (30.0, 30.0)
+    for tilt in (0.0, 1.0, 10.0, 45.0):
+        z = surfaces.inclined_plane((48, 48), pixel_size=px, slope_deg=tilt)
+        assert metrics.normals_dispersion(z, px) >= 0.0
+
+
+def test_normals_dispersion_ignores_the_cliff_against_the_ocean_fill():
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    assert metrics.normals_dispersion(z, (30.0, 30.0)) == pytest.approx(0.0, abs=1e-12)
+
+
+# --- geomorphons: the class map, then the entropy over it ---------------------
+
+_CENTRE = 24  # of the (49, 49) surfaces below: an interior cell, its rays uncut
+
+
+def _class_at_the_centre(z):
+    return metrics.GEOMORPHON_CLASSES[metrics.geomorphons(z, PX)[_CENTRE, _CENTRE]]
+
+
+def test_geomorphons_call_a_peak_a_peak():
+    # The orientation test. The canonical lookup is indexed by (directions that
+    # fall away, directions that rise): an apex with all eight falling is
+    # (8, 0) -> peak, and reading the table the other way round returns "pit" --
+    # numerically plausible, exactly wrong, and what the prototype does.
+    dome = surfaces.basin((49, 49), pixel_size=PX, depth=-100.0, radius_m=480.0)
+    assert _class_at_the_centre(dome) == "peak"
+
+
+def test_geomorphons_call_a_pit_a_pit():
+    bowl = surfaces.basin((49, 49), pixel_size=PX, depth=100.0, radius_m=480.0)
+    assert _class_at_the_centre(bowl) == "pit"
+
+
+def test_geomorphons_call_a_ridge_crest_a_ridge():
+    # Six directions leave the crest downhill; the two along it are level.
+    z = surfaces.ridge((49, 49), pixel_size=PX, flank_slope_deg=20.0)
+    assert _class_at_the_centre(z) == "ridge"
+
+
+def test_geomorphons_call_a_valley_floor_a_valley():
+    z = surfaces.valley((49, 49), pixel_size=PX, flank_slope_deg=20.0)
+    assert _class_at_the_centre(z) == "valley"
+
+
+def test_geomorphons_call_a_plane_a_slope():
+    z = surfaces.inclined_plane((49, 49), pixel_size=PX, slope_deg=20.0, aspect_deg=0.0)
+    assert _class_at_the_centre(z) == "slope"
+
+
+def test_geomorphons_call_a_plateau_flat():
+    z = surfaces.plateau((49, 49), height=250.0)
+    assert set(np.unique(metrics.geomorphons(z, PX))) == {metrics.GEOMORPHON_CLASSES.index("flat")}
+
+
+def test_geomorphons_give_the_ocean_fill_no_class_at_all():
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    codes = metrics.geomorphons(z, PX)
+    assert np.all(codes[:16] == metrics.GEOMORPHON_UNCLASSED)
+    assert np.all(codes[16:] == metrics.GEOMORPHON_CLASSES.index("flat"))
+
+
+def test_geomorphon_entropy_of_a_plateau_is_zero():
+    # One class for every cell: no uncertainty, no entropy.
+    z = surfaces.plateau((49, 49), height=250.0)
+    assert metrics.geomorphon_entropy(z, PX) == pytest.approx(0.0)
+
+
+def test_geomorphon_entropy_of_a_plateau_is_not_negative_zero():
+    # One class is a clean zero, and the negation in Shannon's formula turns it
+    # into -0.0. Equal to zero, and still wrong on the face of a table.
+    z = surfaces.plateau((49, 49), height=250.0)
+    assert not np.signbit(metrics.geomorphon_entropy(z, PX))
+
+
+def test_geomorphon_entropy_of_a_ridge_is_higher_than_of_a_plateau():
+    # The oracle: a ridge is a crest, two flanks and their breaks -- several
+    # classes, so a spread-out histogram.
+    ridge = surfaces.ridge((49, 49), pixel_size=PX, flank_slope_deg=20.0)
+    plateau = surfaces.plateau((49, 49), height=250.0)
+    assert metrics.geomorphon_entropy(ridge, PX) > metrics.geomorphon_entropy(plateau, PX)
+    assert metrics.geomorphon_entropy(ridge, PX) > 0.0
+
+
+def test_geomorphon_entropy_cannot_exceed_a_ten_class_histogram():
+    px = PX
+    for z in (
+        surfaces.ridge((49, 49), pixel_size=px, flank_slope_deg=20.0),
+        surfaces.valley((49, 49), pixel_size=px, flank_slope_deg=20.0),
+        surfaces.basin((49, 49), pixel_size=px, radius_m=480.0),
+        surfaces.sinusoid((49, 49), pixel_size=px, wavelength_m=240.0),
+    ):
+        assert 0.0 <= metrics.geomorphon_entropy(z, px) <= np.log2(10)
+
+
+def test_geomorphon_entropy_ignores_the_ocean_fill():
+    # The land is a flat plateau, so its entropy is zero. Letting the fill in
+    # would carve a coastline of spurious ridges and shoulders out of a painted
+    # cliff and report a busy, high-entropy window.
+    z = surfaces.plateau((32, 32), height=250.0)
+    z[:16] = 0.0
+    assert metrics.geomorphon_entropy(z, PX) == pytest.approx(0.0)
+
+
+# --- TPI-proxy: the reserve metric --------------------------------------------
+
+
+@pytest.mark.parametrize("aspect", [0.0, 45.0, 90.0, 205.0])
+@pytest.mark.parametrize("shape", [(64, 64), (49, 49)])
+def test_tpi_proxy_of_any_plane_is_zero(aspect, shape):
+    # The sharp one, and what a concentric core buys: a plane's middle sits as far
+    # under its uphill half as it stands over its downhill half, so the two cancel
+    # at any tilt and any aspect. A core off by half a cell would read the tilt as
+    # position, so the odd-sided window is here on purpose.
+    z = surfaces.inclined_plane(shape, pixel_size=PX, slope_deg=20.0, aspect_deg=aspect)
+    assert metrics.tpi_proxy(z, PX) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_tpi_proxy_of_a_plateau_is_zero():
+    z = surfaces.plateau((64, 64), height=250.0)
+    assert metrics.tpi_proxy(z, PX) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_tpi_proxy_reads_a_basin_as_below_its_surroundings():
+    # The oracle: the floor of a bowl sits under the rim around it, so the reading
+    # is negative; turned over into a dome, the same surface reads positive.
+    bowl = surfaces.basin((64, 64), pixel_size=PX, depth=100.0, radius_m=960.0)
+    dome = surfaces.basin((64, 64), pixel_size=PX, depth=-100.0, radius_m=960.0)
+    assert metrics.tpi_proxy(bowl, PX) < 0.0
+    assert metrics.tpi_proxy(dome, PX) > 0.0
+    assert metrics.tpi_proxy(dome, PX) == pytest.approx(-metrics.tpi_proxy(bowl, PX))
+
+
+def test_tpi_proxy_tells_a_basin_floor_from_a_ridge_crest():
+    # The distinction B3's flat-wet check is made of: the low ground and the high
+    # ground, told apart by position rather than by shape.
+    valley = surfaces.valley((64, 64), pixel_size=PX, flank_slope_deg=20.0)
+    ridge = surfaces.ridge((64, 64), pixel_size=PX, flank_slope_deg=20.0)
+    assert metrics.tpi_proxy(valley, PX) < 0.0 < metrics.tpi_proxy(ridge, PX)
+
+
+def test_tpi_proxy_deepens_with_the_basin():
+    # TPI is linear in elevation, so twice the bowl is exactly twice the reading.
+    shallow = surfaces.basin((64, 64), pixel_size=PX, depth=100.0, radius_m=960.0)
+    deep = surfaces.basin((64, 64), pixel_size=PX, depth=200.0, radius_m=960.0)
+    assert metrics.tpi_proxy(deep, PX) == pytest.approx(2.0 * metrics.tpi_proxy(shallow, PX))
+
+
+def test_tpi_proxy_cannot_see_a_basin_wider_than_the_window():
+    # The documented blind spot: from inside a basin ten times the width of the
+    # window, the window is nearly flat, and the metric says so. B3 has to read a
+    # null here as "not visible at this scale", not as "not there".
+    broad = surfaces.basin((64, 64), pixel_size=PX, depth=100.0, radius_m=9600.0)
+    tight = surfaces.basin((64, 64), pixel_size=PX, depth=100.0, radius_m=960.0)
+    assert abs(metrics.tpi_proxy(broad, PX)) < 0.01 * abs(metrics.tpi_proxy(tight, PX))
+
+
+def test_tpi_proxy_tells_a_flat_floor_from_a_plateau_only_with_the_surroundings():
+    # The plan's actual formula, and B3's flat-wet check in miniature. Flat is not
+    # one terrain: the low wet ground and the high dry ground are both featureless
+    # inside the window, and only what surrounds them tells them apart.
+    #
+    # A 128-cell array holding a flat-floored basin exactly one 64-cell window
+    # wide, and a plateau. Scored on the window alone, the two are the same
+    # reading -- not a bug, and not the terrain's fault. Scored on the array that
+    # holds the rim as well, the window *is* the core, the frame is the ground
+    # around it, and the floor sits exactly its 100 m below. Same metric, same
+    # contract; the reach came in through the array argument.
+    floor = surfaces.plateau_with_pit((128, 128), height=250.0, pit_depth=100.0, pit_frac=0.25)
+    plateau = surfaces.plateau((128, 128), height=250.0)
+    window = (slice(32, 96), slice(32, 96))
+
+    assert metrics.tpi_proxy(floor[window], PX) == pytest.approx(0.0)
+    assert metrics.tpi_proxy(plateau[window], PX) == pytest.approx(0.0)
+
+    assert metrics.tpi_proxy(floor, PX) == pytest.approx(-100.0)
+    assert metrics.tpi_proxy(plateau, PX) == pytest.approx(0.0)
+
+
+def test_tpi_proxy_ignores_the_ocean_fill():
+    # The land is flat and level with itself; the fill is 250 m below it. Averaged
+    # in, it would report the whole coast as a plateau standing above the sea --
+    # true of the painted file, meaningless as terrain.
+    z = surfaces.plateau((64, 64), height=250.0)
+    z[:32] = 0.0
+    assert metrics.tpi_proxy(z, PX) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_tpi_proxy_is_undefined_when_the_window_has_no_frame_to_compare_against():
+    z = surfaces.basin((64, 64), pixel_size=PX, depth=100.0, radius_m=960.0)
+    z[:16] = z[48:] = z[:, :16] = z[:, 48:] = 0.0  # sea everywhere but the core
+    assert np.isnan(metrics.tpi_proxy(z, PX))
 
 
 # --- the mask contract, binding on every metric (ADR-0001 §3) -----------------
