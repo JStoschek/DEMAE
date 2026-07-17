@@ -14,6 +14,7 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0003). Stage map
 - :mod:`dataset.stratify`   — ocean screen, TRI, quantile strata, quota fill (§3)
 - :mod:`dataset.sampling`   — deterministic global COG sample (lat bands + geo-cells)
 - :mod:`dataset.masks`      — resolve/read/cache the EDM/FLM/WBM quality masks
+- :mod:`dataset.prevalence` — measure EDM/FLM/WBM prevalence on a global sample (#19)
 - :mod:`dataset.normalize`  — clip, land-only stats, degenerate drop, int16 (§4)
 - :mod:`dataset.shards`     — sharded int16 memmap storage (§5b)
 - :mod:`dataset.manifest`   — Parquet index + corpus_meta.json fingerprint (§5a)
