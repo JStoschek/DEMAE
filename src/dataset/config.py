@@ -75,6 +75,13 @@ PER_STRATUM_QUOTA: Final = DEBUG_CORPUS_TILES // N_STRATA  # 10,000
 # generous; the round-robin geo spread is the primary anti-clustering lever.
 PER_TILE_WINDOW_CAP: Final = 64
 
+# --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
+# EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
+# The cache-locally-not-stream policy (and why it differs from the COG reads) is
+# argued in dataset.masks; these are just the knobs it reads.
+MASK_LAYERS: Final = ("EDM", "FLM", "WBM")
+MASK_CACHE_DIR: Final = "data/mask_cache"
+
 # --- Reproducibility (ADR 0001 §Consequences, ADR 0002 §3) --------------------
 RANDOM_SEED: Final = 0xDE_A_E  # fixed seed for all tie-breaking / round-robin
 MANIFEST_SCHEMA_VERSION: Final = 1
