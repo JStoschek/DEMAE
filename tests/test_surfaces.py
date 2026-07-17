@@ -78,6 +78,54 @@ def test_sinusoid_has_the_wavelength_it_was_given():
     assert z.mean() == pytest.approx(1000.0)  # whole periods integrate to base
 
 
+def test_ridge_is_a_tent_falling_away_from_its_crest():
+    px = (30.0, 30.0)
+    z = surfaces.ridge((5, 4), pixel_size=px, flank_slope_deg=45.0, crest_height=1000.0, axis=0)
+    # 5 rows: the crest is row 2, and 45 deg falls exactly one pixel-width per pixel.
+    assert z[:, 0] == pytest.approx([940.0, 970.0, 1000.0, 970.0, 940.0])
+    assert np.allclose(z[2], 1000.0)  # the crest runs across the other axis
+    assert z.max() == pytest.approx(1000.0)
+
+
+def test_valley_is_a_ridge_turned_upside_down():
+    px = (30.0, 30.0)
+    z = surfaces.valley((5, 4), pixel_size=px, flank_slope_deg=45.0, floor_height=1000.0, axis=0)
+    assert z[:, 0] == pytest.approx([1060.0, 1030.0, 1000.0, 1030.0, 1060.0])
+    assert z.min() == pytest.approx(1000.0)
+
+
+def test_ridge_reads_the_pixel_size_it_is_given():
+    # The flank tilt is a *ground* angle, so a coarser pixel means a taller ridge.
+    fine = surfaces.ridge((9, 9), pixel_size=(30.0, 30.0), flank_slope_deg=30.0)
+    coarse = surfaces.ridge((9, 9), pixel_size=(240.0, 240.0), flank_slope_deg=30.0)
+    assert (coarse.max() - coarse.min()) == pytest.approx(8 * (fine.max() - fine.min()))
+
+
+def test_basin_is_a_paraboloid_bowl_around_its_floor():
+    px = (30.0, 30.0)
+    z = surfaces.basin((65, 65), pixel_size=px, depth=100.0, radius_m=960.0, floor=1000.0)
+    assert z[32, 32] == pytest.approx(1000.0)  # the floor is the centre cell
+    # 32 columns east of centre is 960 m, exactly one radius: floor + depth * 1**2.
+    assert z[32, 64] == pytest.approx(1100.0)
+    assert z[64, 32] == pytest.approx(1100.0)
+    assert z.min() == pytest.approx(1000.0)
+
+
+def test_basin_with_a_negative_depth_is_a_dome():
+    px = (30.0, 30.0)
+    z = surfaces.basin((65, 65), pixel_size=px, depth=-100.0, radius_m=960.0, floor=1000.0)
+    assert z[32, 32] == pytest.approx(1000.0)  # now the apex
+    assert z[32, 64] == pytest.approx(900.0)
+    assert z.max() == pytest.approx(1000.0)
+
+
+def test_basin_is_round_on_the_ground_not_in_pixels():
+    # Anisotropic pixels: the bowl's contours are circles in metres, so a column
+    # step of 19.9 m climbs less than a row step of 30.9 m.
+    z = surfaces.basin((65, 65), pixel_size=(30.9, 19.9), depth=100.0, radius_m=960.0)
+    assert z[33, 32] > z[32, 33]
+
+
 def test_constant_surface_is_degenerate():
     z = surfaces.constant((8, 8), value=250.0)
     assert z.max() == z.min() == 250.0
@@ -107,5 +155,8 @@ def _every_default_surface(px):
         surfaces.plateau(),
         surfaces.plateau_with_pit(),
         surfaces.sinusoid(pixel_size=px),
+        surfaces.ridge(pixel_size=px),
+        surfaces.valley(pixel_size=px),
+        surfaces.basin(pixel_size=px),
         surfaces.constant(),
     ]
