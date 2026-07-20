@@ -33,6 +33,34 @@ def test_parse_cog_key_rejects_junk():
         geometry.parse_cog_key("not-a-copernicus-key")
 
 
+@pytest.mark.parametrize(
+    "origin_lon, origin_lat, stem",
+    [
+        (6, 45, "Copernicus_DSM_COG_10_N45_00_E006_00_DEM"),
+        (-123, -1, "Copernicus_DSM_COG_10_S01_00_W123_00_DEM"),
+        (0, 0, "Copernicus_DSM_COG_10_N00_00_E000_00_DEM"),
+    ],
+)
+def test_format_cog_stem_is_the_inverse_of_parse(origin_lon, origin_lat, stem):
+    assert geometry.format_cog_stem(origin_lon, origin_lat) == stem
+    cog = geometry.parse_cog_key(stem)
+    assert (cog.origin_lon, cog.origin_lat) == (origin_lon, origin_lat)
+
+
+@pytest.mark.parametrize(
+    "lon, lat, origin_lon, origin_lat",
+    [
+        (6.5, 45.2, 6, 45),      # north-east interior
+        (-91.05, 33.4, -92, 33), # floor pushes W of the given lon
+        (-57.0, -17.6, -57, -18),# south: lat floors poleward
+        (129.0, -31.0, 129, -31),
+    ],
+)
+def test_cog_at_floors_to_the_sw_corner(lon, lat, origin_lon, origin_lat):
+    cog = geometry.cog_at(lon, lat)
+    assert (cog.origin_lon, cog.origin_lat) == (origin_lon, origin_lat)
+
+
 # --- Latitude bands (resolution bands, recon §6 / ADR-0002) -------------------
 
 

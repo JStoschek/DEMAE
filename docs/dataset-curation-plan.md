@@ -95,7 +95,10 @@ the pilot frame; a notebook committed as the auditable artifact.
 resolved `[verified: no surviving evidence]`. Test: do the surviving metrics separate
 hand-picked flat-wet exemplars (Mississippi floodplain, Pantanal, playa, delta) from
 flat-dry plateaus in descriptor space? If not → add the large-window TPI-proxy back to
-the vector. This is the explicit re-entry trigger for TPI.
+the vector. This is the explicit re-entry trigger for TPI. The labelled contrast set —
+4 flat-wet + 4 flat-dry, scored through the B1 frame (#25) — is committed at
+[`research/exemplars.md`](research/exemplars.md)
+([CSV](research/exemplars-per-window.csv)).
 
 **B4. Freeze + record.**
 - Freeze the metric vector (target 4–6 dims — the global-classification lineage never
