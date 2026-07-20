@@ -58,6 +58,35 @@ def parse_cog_key(key: str) -> CogRef:
     return CogRef(stem=m.group(0), origin_lat=origin_lat, origin_lon=origin_lon)
 
 
+def format_cog_stem(origin_lon: int, origin_lat: int) -> str:
+    """Build the Copernicus stem for a 1-degree cell's south-west (origin) corner.
+
+    The inverse of :func:`parse_cog_key`'s stem extraction: ``(lon=6, lat=45)`` ->
+    ``Copernicus_DSM_COG_10_N45_00_E006_00_DEM``, ``(lon=-123, lat=-1)`` ->
+    ``Copernicus_DSM_COG_10_S01_00_W123_00_DEM``. Latitude is zero-padded to two
+    digits, longitude to three, matching the SRTM naming the regex parses.
+    """
+    ns = "N" if origin_lat >= 0 else "S"
+    ew = "E" if origin_lon >= 0 else "W"
+    return f"Copernicus_DSM_COG_10_{ns}{abs(origin_lat):02d}_00_{ew}{abs(origin_lon):03d}_00_DEM"
+
+
+def cog_at(lon: float, lat: float) -> CogRef:
+    """The COG whose 1-degree cell contains ``(lon, lat)`` (floor to the SW corner).
+
+    The tiling counterpart of a point: ``(lon=6.5, lat=45.2)`` lands in the cell
+    with origin ``(6, 45)``. Building the stem from the origin makes a named
+    location resolvable to a source COG without listing the bucket.
+    """
+    origin_lon = int(math.floor(lon))
+    origin_lat = int(math.floor(lat))
+    return CogRef(
+        stem=format_cog_stem(origin_lon, origin_lat),
+        origin_lat=origin_lat,
+        origin_lon=origin_lon,
+    )
+
+
 def lat_band(lat: float) -> str:
     """Resolution band label for a latitude (poleward-symmetric, recon §6).
 
