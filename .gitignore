@@ -21,6 +21,9 @@ shards/
 *.zarr/
 cache/
 
+# Prototypes — throwaway exploration code + figures (self-deleting per their headers); kept local only
+prototypes/
+
 # Env / secrets
 .env
 .env.*
