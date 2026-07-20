@@ -1,9 +1,11 @@
 # ADR 0001 — Corpus-construction recipe (Phase 0)
 
-- **Status:** Accepted
+- **Status:** Accepted — **partly superseded** (see [Amendments](#amendments))
 - **Date:** 2026-07-13
 - **Context ticket:** "Decide the corpus-construction recipe" (GitHub issue #4), Phase-0 wayfinder map (#1)
 - **Inputs:** reconnaissance findings in [`docs/research/copernicus-glo30-recon.md`](../research/copernicus-glo30-recon.md)
+- **Amended by:** Gate A3, 2026-07-19 ([issue #21](https://github.com/JStoschek/DEMAE/issues/21)) — the one-read
+  property of §4 is spent; see [Amendments](#amendments)
 
 ## Context
 
@@ -61,6 +63,8 @@ scale) is cheap and monotonic enough for *ranking*. The global candidate-window 
 distribution is cut at **quintiles** into 5 strata (data-driven, not fixed absolute
 thresholds). **One ×8-overview read per tile yields both the ocean signal (§3) and the
 ruggedness score for all of that tile's windows.**
+*(Superseded 2026-07-19 — Amendment 1: five metrics now require a full-resolution read at
+scoring time, so scoring is no longer one read per tile.)*
 
 ### 5. Quotas & geographic spread — equal per stratum, 10° geo-cell round-robin
 
@@ -100,6 +104,7 @@ bounds** for inverting reconstructions.
 - **Pipeline cost** ≈ **26,454 ×8-overview reads (scoring)** + **~50,000 full-resolution
   224² reads (materialization)** — the concrete workload the build ticket (#7) must
   measure, and the basis for the local-vs-cloud-burst decision (still fog on the map).
+  *(Stale as of 2026-07-19 — Amendment 1: scoring now also incurs full-resolution reads.)*
 - **Manifest fields required** (handed to #5 "storage format + manifest"): source COG,
   window origin, lon/lat, **latitude band**, **10° geo-cell id**, **TRI value + stratum**,
   **mean/std + clip bounds**, and a reference to the **land mask**.
@@ -110,6 +115,40 @@ bounds** for inverting reconstructions.
 - **Honesty note for the model card:** the corpus has coverage gaps over a few withheld
   countries (absent prefixes) and a deliberate rugged-oversampled, terrain-diverse (not
   geographically uniform) distribution.
+
+## Amendments
+
+### Amendment 1 (2026-07-19) — Gate A3 spends the one-read property
+
+- **Source:** [issue #21](https://github.com/JStoschek/DEMAE/issues/21), decided HITL against the
+  committed calibration table ([#20](https://github.com/JStoschek/DEMAE/issues/20)); closed the
+  Phase-A map ([#13](https://github.com/JStoschek/DEMAE/issues/13)).
+- **What it supersedes:** §4's one-read property ("one ×8-overview read per tile yields both the
+  ocean signal and the ruggedness score") and the Consequences cost model that follows from it.
+  The original decision text above is left as written — this note records what overrode it.
+
+**Verdict.** Five of the nine Phase-A metrics are scored at full resolution (30 m), in-region:
+`slope_mean`, `slope_std`, `normals_dispersion`, `texture`, `geomorphon_entropy`. Four stay on
+the ×8 overview: `local_relief`, `mean_elevation`, `elevation_relief_ratio`, and `tpi_proxy`
+(whose ρ ≈ 1.0 is *by construction* — [#22](https://github.com/JStoschek/DEMAE/issues/22) scores it
+on a box sized in window units, so both reads cover the same ground; it is not a survival test,
+but it needs no full-res read either).
+
+**Why the fork does not decompose — full-res is a *step* cost, not a per-metric cost.** Pulling
+the 30 m pixels for a tile is the expense; computing one metric from that read versus five is
+near-identical work. So the question was binary: does *any* kept metric force a full-res read at
+scoring time? The gradient trio (`slope_mean`, `slope_std`, `normals_dispersion`) does — they pass
+pooled at ρ ≈ 0.90 but collapse ≥50°, and per [#15](https://github.com/JStoschek/DEMAE/issues/15)
+that band is 55.2% of cells, i.e. the corpus *majority*. They can't be dropped (slope is the most
+fundamental terrain descriptor, and Phase A does not pre-prune — B2 owns redundancy), and they
+can't stay on the overview. Once the trio buys the read, `texture` and `geomorphon_entropy` ride
+along at ~zero marginal cost, which also hands B2 coherently-scored axes to prune against. This
+is **one architectural decision plus four free riders**, not five independent metric judgements.
+
+**Not settled here.** Implementing and benchmarking the full-res in-region scoring path is Phase
+C1's job; a hybrid worth pricing there is restricting full-res reads to tiles ≥50° (slope passes
+below 50° at ρ 0.95–0.96), at the price of a scoring-path seam at the boundary. The revised cost
+model belongs with that work — this ADR only records that scoring is no longer one read per tile.
 
 ## Alternatives considered
 
