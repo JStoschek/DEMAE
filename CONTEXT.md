@@ -43,6 +43,14 @@ GitHub issue #1.
   measurement — a Spearman correlation prune over a 15,000-window pilot frame — and
   frozen at Gate B ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)). A terrain-diverse
   corpus beats a geographically uniform one; the vector is how "diverse" is measured.
+- **Candidate catalog** — the raw, **ungated** frame holding one row per window of
+  every COG: the frozen metric vector, `exact_zero_frac`, `land_std`, the EDM/FLM/WBM
+  fractions, and the geography keys. Built once by `dataset.catalog` (Phase C) and
+  reused by every corpus tier without re-scoring, so it is the project's *sampling
+  frame* — distinct from the **manifest**, which indexes the tiles actually selected
+  and materialized. Every fraction is stored raw: **quality gates are filter columns
+  over the catalog, never drops during scoring**, so a threshold can be re-tuned
+  without touching S3.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.

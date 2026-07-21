@@ -18,7 +18,7 @@ import logging
 import math
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Protocol, TypeVar
@@ -31,6 +31,45 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
+def ordered_futures(
+    ex: ThreadPoolExecutor,
+    fn: Callable[[_T], _R],
+    items: Iterable[_T],
+    in_flight: int,
+) -> Iterator[tuple[_T, "Future[_R]"]]:
+    """Yield ``(item, future)`` in input order, keeping ``in_flight`` submitted.
+
+    The scheduling primitive under every parallel COG read here. Two properties it
+    has to hold at once:
+
+    - **Input order.** A caller consuming these in order gets a result sequence
+      independent of which read finished first, so the corpus (and the catalog) is
+      identical to the ``workers=1`` path — only the wall-clock changes.
+    - **Bounded memory.** ``Executor.map`` submits every item up front and buffers
+      each finished result until the one ahead of it is consumed. Each result here is
+      a whole COG's worth of rows or arrays, so one slow read could pin the rest of
+      the corpus in memory behind it. A sliding window keeps the pool fed while
+      bounding the queue and everything held in it.
+
+    Handing back the future rather than its value is what lets a caller decide per
+    item whether a failed read is fatal (:func:`_ordered_map`, which re-raises) or
+    something to record and step over (:func:`dataset.catalog.scan`).
+    """
+    from collections import deque
+
+    it = iter(items)
+    pending: deque[tuple[_T, "Future[_R]"]] = deque()
+    for item in it:
+        pending.append((item, ex.submit(fn, item)))
+        if len(pending) >= in_flight:
+            break
+    while pending:
+        yield pending.popleft()
+        nxt = next(it, None)
+        if nxt is not None:
+            pending.append((nxt, ex.submit(fn, nxt)))
+
+
 def _ordered_map(
     fn: Callable[[_T], _R], items: Iterable[_T], workers: int
 ) -> Iterator[_R]:
@@ -40,15 +79,15 @@ def _ordered_map(
     The COG reads that dominate the build (overview scoring, full-res windows) are
     independent and I/O-bound — GDAL/rasterio release the GIL during the S3 fetch —
     so a thread pool overlaps the transatlantic latency the throughput probe
-    measured. Results are yielded strictly in ``items`` order (``Executor.map``
-    guarantees this), so the corpus stays byte-identical to the ``workers=1`` path
-    regardless of how the reads interleave; only the wall-clock changes.
+    measured. Ordering and the memory bound both come from :func:`ordered_futures`;
+    a read that raises propagates here, aborting the build.
     """
     if workers <= 1:
         yield from map(fn, items)
         return
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        yield from ex.map(fn, items)
+        for _, fut in ordered_futures(fn=fn, ex=ex, items=items, in_flight=workers * 2):
+            yield fut.result()
 
 
 class _Bar(Protocol):
