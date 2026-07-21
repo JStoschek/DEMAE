@@ -373,6 +373,167 @@ def test_geomorphon_entropy_ignores_the_ocean_fill():
     assert metrics.geomorphon_entropy(z, PX) == pytest.approx(0.0)
 
 
+# --- geomorphons: the arctan hoist is bit-exact, and has to be -----------------
+#
+# `_sight_line_angles` used to call arctan once per line-of-sight step; it now
+# walks the ray in raw slopes and converts the two extremes at the end. That is
+# ~2.7x faster on a 224^2 window and was the dominant cost of the whole Phase-C
+# scoring pass, so the bar is identity of the class map, not closeness -- ADR-0004
+# froze this vector and the catalog's values feed every downstream tier.
+
+
+def _angles_via_per_step_arctan(z, dr, dc, step):
+    """The pre-hoist `_sight_line_angles`: arctan inside the k loop."""
+    h, w = z.shape
+    highest = np.full(z.shape, -np.inf)
+    lowest = np.full(z.shape, np.inf)
+    for k in range(1, metrics.GEOMORPHON_LOS_PX + 1):
+        r0, r1 = max(0, -dr * k), h - max(0, dr * k)
+        c0, c1 = max(0, -dc * k), w - max(0, dc * k)
+        if r1 <= r0 or c1 <= c0:
+            break
+        ahead = z[r0 + dr * k : r1 + dr * k, c0 + dc * k : c1 + dc * k]
+        here = z[r0:r1, c0:c1]
+        angle = np.arctan((ahead - here) / (step * k))
+        np.fmax(highest[r0:r1, c0:c1], angle, out=highest[r0:r1, c0:c1])
+        np.fmin(lowest[r0:r1, c0:c1], angle, out=lowest[r0:r1, c0:c1])
+    return highest, lowest
+
+
+def _geomorphon_windows():
+    """Windows chosen so that only an exact tie at a comparison boundary could
+    separate the two implementations: random, terrain-shaped, flat, coastal (with
+    the exact-0.0 ocean fill), single-cell-land, anisotropic, and cliff-steep --
+    the last because arctan stops being injective above a slope of about 2."""
+    rng = np.random.default_rng(20260720)
+    fill = np.zeros((32, 32))
+    lone = np.zeros((32, 32))
+    lone[16, 16] = 300.0
+    coast = surfaces.sinusoid((49, 49), pixel_size=PX, wavelength_m=240.0)
+    coast[:, :20] = 0.0
+    # Terrain-shaped: summed octaves, then the sub-metre detail a float32 COG
+    # carries -- integer-metre test surfaces tie far more often than real data.
+    terrain = sum(
+        surfaces.sinusoid((64, 64), pixel_size=PX, wavelength_m=wl) * (wl / 240.0)
+        for wl in (960.0, 480.0, 240.0, 120.0)
+    ) + rng.normal(0.0, 0.4, (64, 64))
+    cases = {
+        "random": (rng.normal(0.0, 200.0, (64, 64)), PX),
+        "terrain": (terrain, PX),
+        "terrain-anisotropic": (terrain, (30.9, 19.9)),
+        "cliffs": (rng.normal(0.0, 5000.0, (49, 49)), PX),
+        "quantised": (np.round(rng.normal(0.0, 3.0, (49, 49))), PX),
+        "plateau": (surfaces.plateau((49, 49)), PX),
+        "ridge": (surfaces.ridge((49, 49), pixel_size=PX, flank_slope_deg=20.0), PX),
+        "valley": (surfaces.valley((49, 49), pixel_size=PX, flank_slope_deg=20.0), PX),
+        "basin": (surfaces.basin((49, 49), pixel_size=PX, radius_m=480.0), PX),
+        "steep-plane": (
+            surfaces.inclined_plane((49, 49), pixel_size=PX, slope_deg=80.0, aspect_deg=17.0),
+            PX,
+        ),
+        "coastal": (coast, PX),
+        "single-cell-land": (lone, PX),
+        "all-ocean": (fill, PX),
+    }
+    return cases
+
+
+_GEOMORPHON_CASES = _geomorphon_windows()
+
+
+@pytest.mark.parametrize("case", sorted(_GEOMORPHON_CASES))
+def test_sight_line_angles_survive_the_arctan_hoist_bit_for_bit(case):
+    # arctan is monotone, so it commutes with the running max/min: the arctan of
+    # the winning slope is the winning angle, whatever the rounding does. The one
+    # difference is the seed for a cell that saw nothing -- arctan carries the
+    # +-inf to +-pi/2, which is level under every comparison the same way.
+    z, px = _GEOMORPHON_CASES[case]
+    masked = metrics._masked_land(np.asarray(z, dtype=np.float64))
+    dy, dx = px
+    diagonal = np.hypot(dy, dx)
+    for dr, dc, step in (
+        (-1, 0, dy), (1, 0, dy), (0, -1, dx), (0, 1, dx),
+        (-1, -1, diagonal), (-1, 1, diagonal), (1, -1, diagonal), (1, 1, diagonal),
+    ):
+        new = metrics._sight_line_angles(masked, dr, dc, step)
+        old = _angles_via_per_step_arctan(masked, dr, dc, step)
+        for got, want in zip(new, old):
+            unseen = np.isinf(want)
+            assert np.array_equal(got[unseen], np.arctan(want[unseen]))
+            assert np.array_equal(got[~unseen], want[~unseen], equal_nan=True)
+
+
+@pytest.mark.parametrize("case", sorted(_GEOMORPHON_CASES))
+def test_geomorphon_class_map_is_identical_after_the_hoist(case):
+    # Identical, not close: a single reclassified cell moves the entropy, and the
+    # entropy is a frozen catalog column.
+    z, px = _GEOMORPHON_CASES[case]
+    got = metrics.geomorphons(z, px)
+
+    a = np.asarray(z, dtype=np.float64)
+    masked = metrics._masked_land(a)
+    dy, dx = px
+    diagonal = np.hypot(dy, dx)
+    level = np.radians(metrics.GEOMORPHON_FLAT_DEG)
+    n_falls = np.zeros(a.shape, dtype=np.int8)
+    n_rises = np.zeros(a.shape, dtype=np.int8)
+    for dr, dc, step in (
+        (-1, 0, dy), (1, 0, dy), (0, -1, dx), (0, 1, dx),
+        (-1, -1, diagonal), (-1, 1, diagonal), (1, -1, diagonal), (1, 1, diagonal),
+    ):
+        highest, lowest = _angles_via_per_step_arctan(masked, dr, dc, step)
+        drop = -lowest
+        n_rises += ((highest > drop) & (highest > level)).astype(np.int8)
+        n_falls += ((drop > highest) & (drop > level)).astype(np.int8)
+    want = np.where(
+        metrics.land_mask(a),
+        metrics._LANDFORM_LOOKUP[n_falls, n_rises],
+        metrics.GEOMORPHON_UNCLASSED,
+    ).astype(np.int8)
+
+    assert np.array_equal(got, want)
+
+
+def test_arctan_commutes_with_the_running_extreme():
+    # The property the hoist rests on, asserted on the implementation rather than
+    # assumed of it: np.arctan must never reorder two floats. IEEE does not
+    # promise a monotone arctan, so if a numpy or libm build ever breaks it, this
+    # fails here rather than silently in a catalog column.
+    rng = np.random.default_rng(7)
+    for scale in (1e-3, 1e-1, 1.0, 3.0, 1e2, 1e6):
+        s = rng.normal(0.0, scale, (2048, 24))
+        assert np.array_equal(np.arctan(s.max(axis=1)), np.arctan(s).max(axis=1))
+        assert np.array_equal(np.arctan(s.min(axis=1)), np.arctan(s).min(axis=1))
+
+
+def test_raw_slopes_would_reclassify_a_cell_so_the_arctan_stays():
+    # Why the conversion is hoisted and not deleted. Every comparison downstream
+    # is monotone in the angle, which makes raw slopes look equivalent and ~1.4x
+    # faster again -- but arctan is not *injective* on float64: above a slope of
+    # ~2 (63 deg) neighbouring floats share an angle. Here the steepest rise and
+    # the steepest fall along the southward ray land one ulp apart, so the angles
+    # tie and the slopes do not, and the tie is the difference between "neither
+    # rises nor falls" and "falls".
+    dy, rise, drop_at_k3 = 30.9, 63.0, 189.0
+    z = np.full((40, 40), 1000.0)
+    r = c = 20
+    for k in range(1, metrics.GEOMORPHON_LOS_PX + 1):
+        z[r + k, c] = 1000.0 + rise
+        z[r, c + k] = z[r, c - k] = 500.0  # two clean falls, onto a lookup boundary
+    z[r + 3, c] = 1000.0 - drop_at_k3
+
+    step = dy
+    steepest_rise = rise / step
+    steepest_fall = drop_at_k3 / (step * 3)
+    assert steepest_rise != steepest_fall
+    assert np.arctan(steepest_rise) == np.arctan(steepest_fall)
+
+    codes = metrics.geomorphons(z, (dy, dy))
+    assert metrics.GEOMORPHON_CLASSES[codes[r, c]] == "flat"  # the tie holds
+    # and on raw slopes the same cell reads (3, 0) -> shoulder.
+    assert metrics._LANDFORM_LOOKUP[3, 0] == metrics.GEOMORPHON_CLASSES.index("shoulder")
+
+
 # --- TPI-proxy: the reserve metric --------------------------------------------
 
 

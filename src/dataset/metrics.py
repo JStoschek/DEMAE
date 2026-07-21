@@ -371,6 +371,11 @@ def geomorphons(z: np.ndarray, pixel_size: PixelSize) -> np.ndarray:
     sight itself is the prototype's simplification of Jasiewicz & Stepinski: the
     extreme elevation angle along the ray, not their zenith/nadir openness.
 
+    All four comparisons below are strict, so the *ties* matter as much as the
+    order: a direction whose steepest rise and steepest fall come out equal counts
+    as neither. That is why :func:`_sight_line_angles` still returns angles rather
+    than the slopes it now works in — the two orders agree, but the tie sets do not.
+
     The mask goes on before the sight lines, per ADR-0001 §3, so a ray stops at the
     shore and reads the land behind it rather than the painted cliff. A direction
     with no land in sight is level, which makes a lone coastal cell flat — the
@@ -401,12 +406,30 @@ def _sight_line_angles(
     z: np.ndarray, dr: int, dc: int, step: float
 ) -> tuple[np.ndarray, np.ndarray]:
     """Highest and lowest elevation angle in radians along one direction, over
-    :data:`GEOMORPHON_LOS_PX` cells; ``-inf`` / ``+inf`` where nothing is in sight.
+    :data:`GEOMORPHON_LOS_PX` cells; ``-pi/2`` / ``+pi/2`` where nothing is in sight.
 
     ``step`` is the ground distance of one cell in this direction, so the diagonals
     reach further than the axes and the anisotropy of ``dy`` against ``dx`` lands on
     the angle rather than being averaged away. NaN neighbours (fill, or off the
-    edge) are skipped by ``fmax`` / ``fmin`` rather than poisoning the ray.
+    edge) are skipped by ``fmax`` / ``fmin`` rather than poisoning the ray. A cell
+    that saw nothing at all keeps its ``∓inf`` seed, which ``arctan`` carries to
+    ``∓pi/2`` — level under every comparison in :func:`geomorphons`, exactly as the
+    infinity it replaces.
+
+    The ray is walked in raw slopes and converted to angles once at the end, not
+    converted at every step, which is where this metric's cost used to sit (see the
+    :mod:`dataset.catalog` module docstring). The rewrite is bit-exact, not merely
+    close: ``arctan`` is monotone, and a monotone map commutes with ``max`` and
+    ``min``, so ``max(arctan(s_k)) == arctan(max(s_k))`` for the floats too — the
+    ``arctan`` of the winning slope *is* the winning angle, whatever the rounding.
+    Two calls per direction therefore do the work of ten.
+
+    Converting at the end rather than not at all is the deliberate part. Every use
+    of these angles downstream is a comparison, and comparisons are monotone, so raw
+    slopes look like they would do — but ``arctan`` is monotone without being
+    *injective* on float64: above a slope of about 2 (~63°) neighbouring floats share
+    an angle. Raw slopes would break ties that the angles hold, and a broken tie is a
+    different landform. ``tests/test_metrics.py`` pins the window where it is.
     """
     h, w = z.shape
     highest = np.full(z.shape, -np.inf)
@@ -418,10 +441,10 @@ def _sight_line_angles(
             break  # the whole array is off the end of this ray
         ahead = z[r0 + dr * k : r1 + dr * k, c0 + dc * k : c1 + dc * k]
         here = z[r0:r1, c0:c1]
-        angle = np.arctan((ahead - here) / (step * k))
-        np.fmax(highest[r0:r1, c0:c1], angle, out=highest[r0:r1, c0:c1])
-        np.fmin(lowest[r0:r1, c0:c1], angle, out=lowest[r0:r1, c0:c1])
-    return highest, lowest
+        slope = (ahead - here) / (step * k)
+        np.fmax(highest[r0:r1, c0:c1], slope, out=highest[r0:r1, c0:c1])
+        np.fmin(lowest[r0:r1, c0:c1], slope, out=lowest[r0:r1, c0:c1])
+    return np.arctan(highest), np.arctan(lowest)
 
 
 def geomorphon_entropy(z: np.ndarray, pixel_size: PixelSize) -> float:

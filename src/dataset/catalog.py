@@ -37,16 +37,35 @@ by assumption:
    C1's own table prices the overview read at 1.35 s against 9.75 s of compute in the
    pixel-heavy 0–50° band, so the whole second open is ~12% of wall-clock. Not worth
    an unmeasured ruler on a frozen frame.
-2. **Is ``geomorphon_entropy`` the compute hotspot?** Yes, and by a wide margin.
-   Per 224² window, at this module's resolutions: ``geomorphon_entropy`` 25.8 ms,
-   ``texture`` 13.3 ms, ``slope_mean`` 0.54 ms, the three overview metrics together
-   under 0.02 ms, and the ``exact_zero_frac``/``land_std`` pair 0.24 ms. So ~98% of
-   scoring cost is the two full-res neighbourhood metrics, and C1's ~46 ms/window
-   reproduces. The lever is :func:`dataset.metrics._sight_line_angles`, which calls
-   ``arctan`` eight times per line-of-sight step; the comparisons downstream are all
-   monotone in that angle, so slopes would do. That is a change to a frozen metric's
-   implementation, and it is deliberately **not** made here — this pass is a one-time
-   ~4 h cost, and every downstream tier reads the values it produces.
+2. **Is ``geomorphon_entropy`` the compute hotspot?** It was, by a wide margin, and
+   the lever has since been pulled. Per 224² window, at this module's resolutions,
+   the original measurement read: ``geomorphon_entropy`` 25.8 ms, ``texture``
+   13.3 ms, ``slope_mean`` 0.54 ms, the three overview metrics together under
+   0.02 ms, and the ``exact_zero_frac``/``land_std`` pair 0.24 ms. So ~98% of
+   scoring cost was the two full-res neighbourhood metrics, and C1's ~46 ms/window
+   reproduced.
+
+   The lever was :func:`dataset.metrics._sight_line_angles`, which called ``arctan``
+   once per line-of-sight step — eighty times per cell. It now walks the ray in raw
+   slopes and converts the two extremes once, which is **bit-exact** rather than
+   merely close: ``arctan`` is monotone, so it commutes with the running max and
+   min. Re-measured as a matched pair on one machine, median over 30 real corpus
+   windows: ``geomorphon_entropy`` **30.2 ms → 14.1 ms** (2.1x), against ``texture``
+   12.9 ms and ``slope_mean`` 0.75 ms unchanged. (The pre-change number benches
+   higher here than the 25.8 ms on record while ``texture`` reproduces, so trust the
+   ratio and the matched pair, not the difference against the older figure.) Full-res
+   compute per window falls ~37%, from ~43.8 ms to ~27.7 ms; the pass is
+   compute-dominated, so the ~4 h estimate should land nearer ~2.5–3 h. That end of
+   it is inferred, not timed — no full pass has been run since the change.
+
+   What was *not* done: deleting the ``arctan`` rather than hoisting it. Every
+   comparison downstream is monotone in the angle, so raw slopes look equivalent and
+   are ~1.4x faster again — but ``arctan`` is monotone without being injective on
+   float64, and above a slope of ~2 (63°) neighbouring slopes share an angle. Raw
+   slopes therefore break ties the angles hold, and a broken tie is a different
+   landform: ``tests/test_metrics.py`` carries a window where one cell moves from
+   ``flat`` to ``shoulder`` and the entropy with it. ADR-0004 froze this vector and
+   every downstream tier reads these values, so the last 1.4x is declined.
 
 **Nothing is gated.** Every window of every COG gets a row, ocean-only windows
 included, and every fraction is stored raw. The quality gates (zero-fill, degenerate,
