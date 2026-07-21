@@ -18,7 +18,7 @@ import logging
 import math
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Protocol, TypeVar
@@ -32,15 +32,18 @@ _R = TypeVar("_R")
 
 
 def ordered_futures(
-    ex: ThreadPoolExecutor,
+    ex: Executor,
     fn: Callable[[_T], _R],
     items: Iterable[_T],
     in_flight: int,
 ) -> Iterator[tuple[_T, "Future[_R]"]]:
     """Yield ``(item, future)`` in input order, keeping ``in_flight`` submitted.
 
-    The scheduling primitive under every parallel COG read here. Two properties it
-    has to hold at once:
+    The scheduling primitive under every parallel COG read here. It is written
+    against :class:`~concurrent.futures.Executor`, not the thread pool specifically,
+    so :func:`dataset.catalog.scan` gets the same bounded, ordered scheduling from a
+    *process* pool without a second implementation (#38). Two properties it has to
+    hold at once:
 
     - **Input order.** A caller consuming these in order gets a result sequence
       independent of which read finished first, so the corpus (and the catalog) is

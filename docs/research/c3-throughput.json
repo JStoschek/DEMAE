@@ -1,0 +1,119 @@
+{
+  "n_cogs_per_config": 24,
+  "seed": 57006,
+  "cpu_count": 8,
+  "corpus_cogs": 26450,
+  "baseline": "processx1",
+  "results": [
+    {
+      "executor": "thread",
+      "workers": 4,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 61.37,
+      "per_cog_s": 2.557,
+      "corpus_hours": 18.79,
+      "speedup_vs_baseline": 2.15
+    },
+    {
+      "executor": "thread",
+      "workers": 8,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 54.41,
+      "per_cog_s": 2.267,
+      "corpus_hours": 16.66,
+      "speedup_vs_baseline": 2.43
+    },
+    {
+      "executor": "thread",
+      "workers": 16,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 56.85,
+      "per_cog_s": 2.369,
+      "corpus_hours": 17.4,
+      "speedup_vs_baseline": 2.33
+    },
+    {
+      "executor": "process",
+      "workers": 1,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 132.19,
+      "per_cog_s": 5.508,
+      "corpus_hours": 40.47,
+      "speedup_vs_baseline": 1.0
+    },
+    {
+      "executor": "process",
+      "workers": 4,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 45.42,
+      "per_cog_s": 1.892,
+      "corpus_hours": 13.9,
+      "speedup_vs_baseline": 2.91
+    },
+    {
+      "executor": "process",
+      "workers": 6,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 29.21,
+      "per_cog_s": 1.217,
+      "corpus_hours": 8.94,
+      "speedup_vs_baseline": 4.53
+    },
+    {
+      "executor": "process",
+      "workers": 8,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 26.96,
+      "per_cog_s": 1.123,
+      "corpus_hours": 8.25,
+      "speedup_vs_baseline": 4.9
+    },
+    {
+      "executor": "process",
+      "workers": 12,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 26.72,
+      "per_cog_s": 1.114,
+      "corpus_hours": 8.18,
+      "speedup_vs_baseline": 4.94
+    },
+    {
+      "executor": "process",
+      "workers": 16,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 20.94,
+      "per_cog_s": 0.872,
+      "corpus_hours": 6.41,
+      "speedup_vs_baseline": 6.32
+    },
+    {
+      "executor": "process",
+      "workers": 20,
+      "n_cogs": 24,
+      "n_anomalies": 0,
+      "n_rows": 3968,
+      "wall_s": 22.55,
+      "per_cog_s": 0.939,
+      "corpus_hours": 6.9,
+      "speedup_vs_baseline": 5.87
+    }
+  ]
+}

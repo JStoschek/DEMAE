@@ -54,9 +54,14 @@ by assumption:
    12.9 ms and ``slope_mean`` 0.75 ms unchanged. (The pre-change number benches
    higher here than the 25.8 ms on record while ``texture`` reproduces, so trust the
    ratio and the matched pair, not the difference against the older figure.) Full-res
-   compute per window falls ~37%, from ~43.8 ms to ~27.7 ms; the pass is
-   compute-dominated, so the ~4 h estimate should land nearer ~2.5–3 h. That end of
-   it is inferred, not timed — no full pass has been run since the change.
+   compute per window falls ~37%, from ~43.8 ms to ~27.7 ms.
+
+   The same bar was then applied to ``texture``, the metric the hoist promoted to
+   #1: :func:`dataset.metrics._median_filter` now takes a plain ``median`` on a
+   window with no ocean fill, which is the common case and **bit-exact** there (an
+   odd, all-finite neighbourhood's median is the middle element either way) — 3.3x
+   on the filter. What neither of them fixed was the *parallelism*, which is the
+   next section and was the larger error by far.
 
    What was *not* done: deleting the ``arctan`` rather than hoisting it. Every
    comparison downstream is monotone in the angle, so raw slopes look equivalent and
@@ -66,6 +71,17 @@ by assumption:
    landform: ``tests/test_metrics.py`` carries a window where one cell moves from
    ``flat`` to ``shoulder`` and the entropy with it. ADR-0004 froze this vector and
    every downstream tier reads these values, so the last 1.4x is declined.
+
+**The pass runs on a process pool** (:func:`main`, issue #38). C1's 4.19 h
+projection divided a *serial* per-COG cost by 16 threads, and the dry run came in at
+1.87 s/COG — a ~14 h job. The gap is not per-window cost, it is the GIL: scoring is
+~98% numpy neighbourhood compute, and threads measured 2.4x against one process at
+best, however many more you add. Worker *processes* remove the ceiling, and
+:func:`~dataset.pipeline.ordered_futures` supplies the same bounded, ordered
+scheduling either way, so the frame is identical and only the wall-clock moves. The
+measured scaling curve, the corrected corpus projection, and the bit-identity check
+against the pre-change catalog are in
+[`docs/research/c3-scoring-throughput.md`](../../docs/research/c3-scoring-throughput.md).
 
 **Nothing is gated.** Every window of every COG gets a row, ocean-only windows
 included, and every fraction is stored raw. The quality gates (zero-fill, degenerate,
@@ -96,12 +112,15 @@ import json
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import numpy as np
 
 if TYPE_CHECKING:  # pyarrow is imported lazily — only the writer needs it
+    from concurrent.futures import Executor
+
     import pyarrow as pa
 
 from . import config
@@ -643,6 +662,90 @@ def _discard_orphan_parts(out_dir: Path, next_part: int) -> list[Path]:
 # --- The scan driver ----------------------------------------------------------
 
 
+#: How a :func:`scan` fans its per-COG work out. ``"process"`` is what the global
+#: pass runs on (#38); ``"thread"`` is the in-process path — see :func:`_make_executor`.
+ExecutorKind = Literal["thread", "process"]
+
+#: Mild oversubscription: a worker blocked on an S3 read leaves its core idle, and
+#: another worker's compute fills it. Measured, not assumed — see :func:`default_workers`.
+WORKERS_PER_CORE: Final = 2
+#: The top of the measured curve on the dev box, and where its memory stops being
+#: free: a worker peaks at 337 MB (measured RSS), so 16 is ~5.4 GB resident. A
+#: *default*, not a limit — an explicit ``workers=`` is taken at its word, and a
+#: bigger or same-region box should re-measure before raising it.
+MAX_DEFAULT_WORKERS: Final = 16
+#: Where thread scaling flattens: measured 2.56 → 2.27 → 2.37 s/COG at 4, 8 and 16
+#: threads, so 8 is the top and 16 is already the far side of it (issue #38).
+THREAD_GIL_KNEE: Final = 8
+
+
+def _check_executor(kind: str) -> ExecutorKind:
+    """Reject an unknown executor at the first gate rather than the last.
+
+    Both :func:`default_workers` and :func:`_make_executor` branch on the kind, and
+    :func:`scan` calls them in that order — so without this the bad value would get a
+    plausible worker count before anything complained.
+    """
+    if kind not in ("thread", "process"):
+        raise ValueError(f"unknown executor {kind!r}; expected 'thread' or 'process'")
+    return kind  # type: ignore[return-value]
+
+
+def default_workers(kind: ExecutorKind = "process") -> int:
+    """How many COGs to score in parallel — measured on this box, not assumed (#38).
+
+    C1's projection divided a *serial* per-COG cost by 16 workers, which assumed
+    linear thread scaling. Scoring is dominated by numpy neighbourhood compute under
+    the GIL, so the two executors want very different counts, and neither wants 16.
+    One sweep, 24 spread COGs per config on the dev box (8 logical cores), against a
+    measured serial baseline of 5.51 s/COG (``docs/research/c3-throughput.json``):
+
+    - **thread** — 2.56 @4, 2.27 @8, 2.37 @16. Best case **2.4x**, reached at 8 and
+      given back by 16. Extra threads past :data:`THREAD_GIL_KNEE` buy contention.
+    - **process** — 1.89 @4, 1.22 @6, 1.12 @8, 1.11 @12, 0.87 @16, 0.94 @20. Best
+      case **6.3x**, and it keeps improving *past* the core count because a worker
+      waiting on a COG read is not using one. It turns over at ~2.5x cores, hence
+      :data:`WORKERS_PER_CORE` capped at :data:`MAX_DEFAULT_WORKERS`.
+
+    The oversubscription is transport-dependent: this box is in the US and the bucket
+    is in ``eu-central-1``, so there is a lot of read latency to hide. A same-region
+    run has less, and its knee will sit nearer the core count — re-measure with
+    ``notebooks/c3_throughput.py`` rather than porting this number.
+
+    ``os.process_cpu_count()`` (3.13+) respects an affinity mask or a container CPU
+    limit; ``os.cpu_count()`` is the 3.12 fallback. Both count *logical* cores, so on
+    an asymmetric box (this dev machine: 6P + 2E) the E-cores are included — they
+    contribute, just less, and mild oversubscription absorbs the difference anyway.
+    """
+    cores = getattr(os, "process_cpu_count", os.cpu_count)() or 1
+    if _check_executor(kind) == "thread":
+        return min(THREAD_GIL_KNEE, cores)
+    return max(1, min(WORKERS_PER_CORE * cores, MAX_DEFAULT_WORKERS))
+
+
+def _make_executor(kind: ExecutorKind, workers: int) -> Executor:
+    """Build the pool ``scan`` fans across — the one place the two paths differ.
+
+    Processes are forced onto the **spawn** start method rather than taking the
+    platform default. macOS spawns anyway, but the production run is a rented Linux
+    box where the default is fork, and forking a parent that has already opened GDAL
+    handles and a boto3 client inherits both into a child that must not share them.
+    Spawning everywhere means the box that runs the pass behaves like the box the
+    pass was measured on.
+    """
+    if _check_executor(kind) == "thread":
+        from concurrent.futures import ThreadPoolExecutor
+
+        return ThreadPoolExecutor(max_workers=workers)
+
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    return ProcessPoolExecutor(
+        max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+    )
+
+
 @dataclass(frozen=True)
 class ScanResult:
     """What one :func:`scan` invocation did, and what the catalog now holds."""
@@ -665,18 +768,36 @@ def scan(
     tile: int = config.TILE_PX,
     factor: int = OVERVIEW_FACTOR,
     rows_per_part: int = 500_000,
-    workers: int = 16,
+    workers: int | None = None,
+    executor: ExecutorKind = "thread",
     code_version: str = "unknown",
     snapshot_date: str = "unknown",
     progress: Callable[[int, str], Any] | None = None,
 ) -> ScanResult:
     """Score every window of every COG in ``cogs`` into a Parquet catalog at ``out_dir``.
 
-    Reads are fanned across a thread pool (network-bound, like :mod:`dataset.build`),
-    one COG per task, consumed in input order. Rows accumulate until ``rows_per_part``
-    and are then flushed as a part file, after which a ledger line names the COGs that
-    part covers — so a re-run resumes at the last completed flush rather than the
-    start.
+    Work is fanned out **one COG per task** and consumed in input order. Rows
+    accumulate until ``rows_per_part`` and are then flushed as a part file, after
+    which a ledger line names the COGs that part covers — so a re-run resumes at the
+    last completed flush rather than the start.
+
+    **``executor`` picks the pool, and it is the difference between a 14-hour pass and
+    a practical one** (#38). This work is not network-bound the way
+    :mod:`dataset.build`'s materialization is: most of it is numpy neighbourhood
+    compute holding the GIL, so *threads* measured 2.4x against one process at best
+    and gave some of it back at 16 — a ceiling, not a slope. ``"process"`` gives each
+    worker its own interpreter and reached 6.3x on the same draw; the global pass runs
+    on it (:func:`main` defaults
+    to it), and :func:`ordered_futures` provides the same bounded, ordered scheduling
+    either way, so the frame is byte-identical and only the wall-clock moves.
+
+    The default here is ``"thread"`` because the library entry point takes *injected*
+    readers, and a process pool constrains them in two ways an in-process caller has
+    no reason to expect: they must pickle, and any state they mutate while scoring
+    (a counter, a cache, a fault injector) mutates in the worker where the parent
+    cannot see it. The live readers satisfy both — :class:`RasterioMaskReader` was
+    made picklable for exactly this — so the driver opts in, and a caller passing its
+    own reader opts in when it knows the reader can take it.
 
     **A COG is marked done only when its rows are complete.** A read that raises —
     a transient S3 failure, a mask fetch that fell over — is recorded in
@@ -692,10 +813,11 @@ def scan(
     run that has written into ``out_dir`` — they describe the catalog, while
     ``n_cogs``/``n_skipped``/``n_anomalies`` describe this invocation.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
 
     from .pipeline import ordered_futures
 
+    workers = default_workers(executor) if workers is None else workers
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -734,11 +856,12 @@ def scan(
         buffer = []
         covered = []
 
-    def score(cog: CogRef):
-        return tile_rows(cog_reader, mask_reader, cog, tile=tile, factor=factor)
+    # A module-level function bound by `partial` rather than a closure: a process
+    # pool pickles the task, and a closure does not pickle.
+    score = partial(tile_rows, cog_reader, mask_reader, tile=tile, factor=factor)
 
     try:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
+        with _make_executor(executor, workers) as ex:
             for cog, fut in ordered_futures(
                 ex=ex, fn=score, items=todo, in_flight=max(1, workers * 2)
             ):
@@ -746,6 +869,11 @@ def scan(
                     bar.update(1)
                 try:
                     rows, anomaly = fut.result()
+                except BrokenProcessPool:
+                    # Every remaining future is already dead, so stepping over this
+                    # one would book 26,000 anomalies in a tight loop. Bail out and
+                    # let the `finally` flush; the ledger resumes the rest.
+                    raise
                 except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
                     n_anomalies += 1
                     _append_json_line(
@@ -922,7 +1050,12 @@ def main(argv: list[str] | None = None) -> int:
                         "--limit-cogs, for a dry run whose distributions mean something")
     p.add_argument("--seed", type=int, default=config.RANDOM_SEED,
                    help="seed for --sample-cogs")
-    p.add_argument("--workers", type=int, default=16, help="parallel whole-COG reads")
+    p.add_argument("--executor", choices=("process", "thread"), default="process",
+                   help="score COGs in worker processes (default) or threads; the "
+                        "work is GIL-bound numpy, so threads cap out near 2.1x")
+    p.add_argument("--workers", type=int, default=None,
+                   help="parallel whole-COG scorers (default: measured per executor "
+                        "— see catalog.default_workers)")
     p.add_argument("--factor", type=int, default=OVERVIEW_FACTOR, help="overview decimation")
     p.add_argument("--rows-per-part", type=int, default=500_000,
                    help="rows per Parquet part file (also the resume granularity)")
@@ -936,7 +1069,11 @@ def main(argv: list[str] | None = None) -> int:
     refs = select_cogs(
         frame, limit=args.limit_cogs, sample=args.sample_cogs, seed=args.seed
     )
-    log.info("frame: %d COGs, scoring %d -> %s", len(frame), len(refs), args.out_dir)
+    workers = args.workers if args.workers is not None else default_workers(args.executor)
+    log.info(
+        "frame: %d COGs, scoring %d -> %s (%d %s workers)",
+        len(frame), len(refs), args.out_dir, workers, args.executor,
+    )
 
     from .build import _today, git_sha
     from .masks import RasterioMaskReader
@@ -949,7 +1086,8 @@ def main(argv: list[str] | None = None) -> int:
         args.out_dir,
         factor=args.factor,
         rows_per_part=args.rows_per_part,
-        workers=args.workers,
+        workers=workers,
+        executor=args.executor,
         code_version=git_sha(),
         snapshot_date=args.snapshot_date or _today(),
         progress=_tqdm,

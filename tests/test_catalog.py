@@ -447,6 +447,70 @@ def test_read_catalog_returns_one_table_over_every_part(tmp_path: Path):
     assert table.column_names == list(catalog.COLUMNS)
 
 
+# --- the process pool: the lever that makes the global pass runnable (#38) ----
+
+
+def test_process_pool_scores_the_identical_catalog_as_the_thread_pool(tmp_path: Path):
+    """Same rows, same order — the executor changes wall-clock and nothing else.
+
+    The whole throughput fix rests on this: ADR-0004 froze the vector, so a pass that
+    scores faster but differently is not a faster pass, it is a different catalog.
+    """
+    pytest.importorskip("pyarrow.parquet")
+    cogs = [parse_cog_key(_STEM), parse_cog_key(_STEM2)]
+    tables = {}
+    for kind in ("thread", "process"):
+        out = tmp_path / kind
+        cog_reader, mask_reader = _readers(_STEM, _STEM2)
+        catalog.scan(
+            cog_reader, mask_reader, cogs, out,
+            rows_per_part=100, factor=8, workers=2, executor=kind,
+        )
+        tables[kind] = catalog.read_catalog(out)
+    assert tables["process"].num_rows == tables["thread"].num_rows == 18
+    assert tables["process"].to_pydict() == tables["thread"].to_pydict()
+
+
+def test_process_pool_surfaces_a_dead_cog_without_losing_the_rest(tmp_path: Path):
+    """A read that raises in a *worker* still travels back as one skipped COG.
+
+    The exception crosses a process boundary to get here, so it has to pickle — the
+    resume contract (record it, discard its rows, leave it unmarked) is worth nothing
+    if the failure path only works in-process.
+    """
+    pytest.importorskip("pyarrow.parquet")
+    cog_reader, mask_reader = _readers(_STEM)
+    missing = parse_cog_key("Copernicus_DSM_COG_10_N10_00_E010_00_DEM")
+    result = catalog.scan(
+        cog_reader, mask_reader, [missing, parse_cog_key(_STEM)], tmp_path,
+        rows_per_part=100, factor=8, workers=2, executor="process",
+    )
+    assert result.n_rows == 9 and result.n_anomalies == 1
+    assert "N10" in (tmp_path / catalog.ANOMALY_FILE).read_text()
+
+
+@pytest.mark.parametrize("workers", [None, 1])
+def test_scan_rejects_an_unknown_executor(tmp_path: Path, workers):
+    # Including with workers=None, where the count is resolved before the pool is
+    # built: a bad kind must not get a plausible worker count on its way to failing.
+    cog_reader, mask_reader = _readers(_STEM)
+    with pytest.raises(ValueError, match="unknown executor"):
+        catalog.scan(
+            cog_reader, mask_reader, [parse_cog_key(_STEM)], tmp_path,
+            factor=8, workers=workers, executor="fork-bomb",  # type: ignore[arg-type]
+        )
+
+
+def test_default_workers_scales_processes_with_cores_and_caps_threads():
+    # C1's error was assuming 16 threads scale linearly; the thread count is now
+    # pinned at the measured GIL knee instead, and only processes track the box.
+    assert catalog.default_workers("thread") <= catalog.THREAD_GIL_KNEE
+    assert 1 <= catalog.default_workers("process") <= catalog.MAX_DEFAULT_WORKERS
+    assert catalog.default_workers("process") >= catalog.default_workers("thread")
+    with pytest.raises(ValueError, match="unknown executor"):
+        catalog.default_workers("fork-bomb")  # type: ignore[arg-type]
+
+
 # --- which COGs a run scores --------------------------------------------------
 
 

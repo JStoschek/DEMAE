@@ -534,6 +534,84 @@ def test_raw_slopes_would_reclassify_a_cell_so_the_arctan_stays():
     assert metrics._LANDFORM_LOOKUP[3, 0] == metrics.GEOMORPHON_CLASSES.index("shoulder")
 
 
+# --- texture: the NaN-free median fast path is bit-exact, and has to be --------
+#
+# `_median_filter` ran `nanmedian` over every cell's 3x3 neighbourhood. Most
+# windows carry no ocean fill at all, and on those the NaN machinery is pure
+# overhead: `median` of an odd run of finite values is the middle element by
+# partition, which is the same element `nanmedian` returns. Taking that branch is
+# ~3x on the filter and made texture the #2 cost of the Phase-C pass (#38). Same
+# bar as the arctan hoist: identity, not closeness, because ADR-0004 froze
+# `texture` and the catalog's values feed every downstream tier.
+
+
+def _median_filter_via_nanmedian(a, size):
+    """The pre-change `_median_filter`: nanmedian on every cell, NaN or not."""
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    pad = size // 2
+    padded = np.pad(a, pad, mode="edge")
+    windows = sliding_window_view(padded, (size, size)).reshape(*a.shape, size * size)
+    out = np.full(a.shape, np.nan)
+    real = np.isfinite(a)
+    if real.any():
+        out[real] = np.nanmedian(windows[real], axis=-1)
+    return out
+
+
+def _median_filter_cases():
+    """Windows spanning what the branch turns on: no fill (the fast path), some
+    fill, all fill, and a single surviving land cell."""
+    rng = np.random.default_rng(20260721)
+    terrain = sum(
+        surfaces.sinusoid((48, 48), pixel_size=PX, wavelength_m=wl) * (wl / 240.0)
+        for wl in (960.0, 240.0, 120.0)
+    ) + rng.normal(0.0, 0.4, (48, 48))
+    coast = terrain.copy()
+    coast[:, :20] = np.nan
+    lone = np.full((16, 16), np.nan)
+    lone[8, 8] = 42.0
+    return {
+        "terrain_no_fill": terrain,
+        "coastal_some_fill": coast,
+        "all_fill": np.full((16, 16), np.nan),
+        "one_land_cell": lone,
+        "flat": np.zeros((16, 16)) + 300.0,
+    }
+
+
+_MEDIAN_CASES = _median_filter_cases()
+
+
+@pytest.mark.parametrize("case", sorted(_MEDIAN_CASES))
+def test_median_filter_is_identical_with_and_without_the_fast_path(case):
+    a = _MEDIAN_CASES[case]
+    got = metrics._median_filter(a, metrics.TEXTURE_MEDIAN_PX)
+    want = _median_filter_via_nanmedian(a, metrics.TEXTURE_MEDIAN_PX)
+    assert np.array_equal(got, want, equal_nan=True)
+
+
+def test_median_equals_nanmedian_on_a_finite_odd_neighbourhood():
+    # The property the fast path rests on, asserted rather than assumed: over an
+    # odd, all-finite run, both reduce to the same middle element -- no averaging,
+    # no reordering, so no rounding can separate them. If a numpy build ever broke
+    # it, this fails here rather than silently in a frozen catalog column.
+    rng = np.random.default_rng(11)
+    for scale in (1e-6, 1.0, 1e3, 1e8):
+        s = rng.normal(0.0, scale, (4096, metrics.TEXTURE_MEDIAN_PX**2))
+        assert np.array_equal(np.median(s, axis=-1), np.nanmedian(s, axis=-1))
+
+
+def test_texture_is_unchanged_on_a_window_with_no_ocean_fill():
+    # The end-to-end statement of the same thing, at the metric the catalog stores.
+    z = surfaces.sinusoid((64, 64), pixel_size=PX, wavelength_m=120.0)
+    a = np.asarray(z, dtype=np.float64)
+    land = metrics.land_mask(a)
+    departure = _median_filter_via_nanmedian(metrics._masked_land(a), 3) - a
+    want = float((np.abs(departure[land]) > metrics.TEXTURE_THRESHOLD_M).mean())
+    assert metrics.texture(z, PX) == want
+
+
 # --- TPI-proxy: the reserve metric --------------------------------------------
 
 

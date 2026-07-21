@@ -169,11 +169,40 @@ class MaskCache:
     and written atomically; every later window/overview read opens the local file.
     ``fetch`` is injectable (defaults to anonymous S3), which is what lets the whole
     read path run with zero network in tests.
+
+    **The default fetch is built on first use, and never pickled** (#38). The cache
+    has to cross a process boundary — :func:`dataset.catalog.scan` scores on a
+    process pool — and :func:`s3_fetch` returns a closure, which pickle cannot take.
+    Deferring its construction is what makes the whole reader sendable, and it also
+    makes the boto3 client *per-process by construction*: macOS spawns rather than
+    forks, so a worker that inherited a parent's client would be relying on luck.
+    An injected fetch is left alone — it is the caller's object, and the test stubs
+    that ride this seam pickle fine.
     """
 
-    def __init__(self, cache_dir: Path | str, fetch: Fetch) -> None:
+    def __init__(
+        self,
+        cache_dir: Path | str,
+        fetch: Fetch | None = None,
+        bucket: str = config.COPERNICUS_GLO30_BUCKET,
+    ) -> None:
         self.cache_dir = Path(cache_dir)
-        self._fetch = fetch
+        self.bucket = bucket
+        self._fetch = fetch  # injected; None -> the lazy anonymous-S3 default
+        self._default_fetch: Fetch | None = None  # built on first use, never pickled
+
+    def _resolve_fetch(self) -> Fetch:
+        """The fetch to use, building the anonymous-S3 default on first call."""
+        if self._fetch is not None:
+            return self._fetch
+        if self._default_fetch is None:
+            self._default_fetch = s3_fetch(self.bucket)
+        return self._default_fetch
+
+    def __getstate__(self) -> dict[str, object]:
+        # Drop the built-on-demand S3 closure: unpicklable, and a worker must build
+        # its own client anyway. An injected fetch travels with the object.
+        return {**self.__dict__, "_default_fetch": None}
 
     def path(self, dem_stem: str, layer: Layer) -> Path:
         """Local path a mask caches to (whether or not it is present yet)."""
@@ -190,7 +219,7 @@ class MaskCache:
         dest = self.path(dem_stem, layer)
         if dest.exists():
             return dest
-        data = self._fetch(mask_key(dem_stem, layer))
+        data = self._resolve_fetch()(mask_key(dem_stem, layer))
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
         try:
@@ -226,7 +255,9 @@ class RasterioMaskReader:
     Each mask is localized whole on first touch (:class:`MaskCache`) and every read
     opens the cached file with rasterio. ``fetch`` is injectable for tests; it
     defaults to anonymous S3 (:func:`s3_fetch`) and is only constructed on first
-    use, so importing this module never requires boto3.
+    use, so importing this module never requires boto3 — and so this reader is
+    **picklable**, which is what lets :func:`dataset.catalog.scan` hand one to a
+    worker process (see :class:`MaskCache`).
     """
 
     def __init__(
@@ -236,7 +267,7 @@ class RasterioMaskReader:
         fetch: Fetch | None = None,
     ) -> None:
         self.bucket = bucket
-        self.cache = MaskCache(cache_dir, fetch or s3_fetch(bucket))
+        self.cache = MaskCache(cache_dir, fetch, bucket=bucket)
 
     def read_overview(self, cog: CogRef, layer: Layer, factor: int) -> np.ndarray:
         """Read the whole mask decimated to its ×``factor`` overview, as uint8.

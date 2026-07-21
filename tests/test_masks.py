@@ -11,6 +11,7 @@ real read path without touching S3.
 from __future__ import annotations
 
 import os
+import pickle
 
 import numpy as np
 import pytest
@@ -243,6 +244,46 @@ def test_rasterio_reader_propagates_absence(tmp_path):
     reader = masks.RasterioMaskReader(cache_dir=tmp_path, fetch=_CountingFetch({}))
     with pytest.raises(masks.MaskNotFound):
         reader.read_windows(parse_cog_key(STEM), "EDM", [(0, 0)], config.TILE_PX)
+
+
+# --- Picklable: the reader has to cross a process boundary (#38) --------------
+
+
+def test_default_reader_pickles_and_keeps_its_bucket_and_cache_dir(tmp_path):
+    """A default (live-S3) reader must survive a trip to a worker process.
+
+    :func:`~dataset.catalog.scan` scores on a process pool, so every argument it
+    hands a worker is pickled. The default ``s3_fetch`` closure is not picklable, so
+    it is built on first use rather than in ``__init__`` — which is also what makes
+    each spawned worker build its own boto3 client instead of inheriting one.
+    """
+    reader = masks.RasterioMaskReader(cache_dir=tmp_path)
+    revived = pickle.loads(pickle.dumps(reader))
+    assert revived.bucket == reader.bucket
+    assert revived.cache.cache_dir == tmp_path
+
+
+def test_pickling_a_used_reader_does_not_carry_its_s3_client(tmp_path):
+    """Even after the default fetch has been built, the reader still pickles.
+
+    Constructing it lazily would be no help if the built closure then stuck to the
+    instance: a reader that scored one COG in the parent would stop being sendable.
+    """
+    reader = masks.RasterioMaskReader(cache_dir=tmp_path)
+    built = reader.cache._resolve_fetch()  # what a first read would trigger
+    assert built is not None
+    revived = pickle.loads(pickle.dumps(reader))
+    assert revived.cache._default_fetch is None  # rebuilt in the worker, not shipped
+
+
+def test_pickling_preserves_an_injected_fetch(tmp_path):
+    """An injected (picklable) fetch travels — only the lazy default is dropped."""
+    key = masks.mask_key(STEM, "FLM")
+    reader = masks.RasterioMaskReader(
+        cache_dir=tmp_path, fetch=_CountingFetch({key: b"raster-bytes"})
+    )
+    revived = pickle.loads(pickle.dumps(reader))
+    assert revived.cache.ensure(STEM, "FLM").read_bytes() == b"raster-bytes"
 
 
 # --- Opt-in live smoke (mirrors test_tiling) ----------------------------------
