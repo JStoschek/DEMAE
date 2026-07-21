@@ -20,7 +20,7 @@ import numpy as np
 from . import config
 
 
-# --- Ocean screen (ADR-0001 §3) -----------------------------------------------
+# --- Zero-fill screen (ADR-0001 §3, Amendment 2) ------------------------------
 
 
 def zero_fraction(window: np.ndarray) -> float:
@@ -28,12 +28,20 @@ def zero_fraction(window: np.ndarray) -> float:
     return float(np.mean(window == config.OCEAN_FILL_VALUE))
 
 
-def is_ocean(window: np.ndarray) -> bool:
-    """Whether a window is mostly-ocean and should be dropped (§3).
+def is_zero_fill(window: np.ndarray) -> bool:
+    """Whether a window is mostly zero-fill and should be dropped (§3).
 
     True iff the exact-zero fraction reaches :data:`config.LAND_ZERO_FRAC_DROP`
     (0.75). Coastlines (well under 75% sea) are kept; genuine sub-sea-level land
-    is negative, not zero, so it is never mistaken for ocean.
+    is negative, not zero, so it is never mistaken for fill.
+
+    **Not named ``is_ocean``** (ADR-0001 §3 Amendment 2, issue #34). A *pixel*
+    value of ``0.0`` really is Copernicus's ocean fill — ``WBM == 1`` was measured
+    to be a strict subset of exact-zero, 0 counter-examples in 144.5 M pixels. But
+    a *window* that is 75% zeros is not necessarily ocean: Copernicus paints
+    sea-level rivers and lakes (WBM 2/3) to exactly ``0.0`` too, so this predicate
+    fires on Bangladesh delta and Scheldt polder water. It screens zero-fill, and
+    the catalog books its attrition under ``zero_fill`` — not ``ocean``.
     """
     return zero_fraction(window) >= config.LAND_ZERO_FRAC_DROP
 

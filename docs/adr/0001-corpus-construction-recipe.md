@@ -7,6 +7,9 @@
 - **Inputs:** reconnaissance findings in [`docs/research/copernicus-glo30-recon.md`](../research/copernicus-glo30-recon.md)
 - **Amended by:** Gate A3, 2026-07-19 ([issue #21](https://github.com/JStoschek/DEMAE/issues/21)) — the one-read
   property of §4 is spent; see [Amendments](#amendments)
+- **Amended by:** Phase C2, 2026-07-20 ([issue #34](https://github.com/JStoschek/DEMAE/issues/34)) — §3's
+  exact-zero test is **confirmed** against a per-pixel cross-check and its leak trigger closed;
+  the coastline stratum it keeps is **narrowed** to sea-touching windows; see [Amendments](#amendments)
 - **Superseded by:** [ADR-0004](0004-frozen-metric-vector.md), 2026-07-20 (Gate B,
   [issue #28](https://github.com/JStoschek/DEMAE/issues/28)) — §4–5's single-axis TRI
   stratification *metric basis* is replaced by the frozen 6-metric vector. The
@@ -56,7 +59,11 @@ almost never exactly `0.0`, and sub-sea-level land is negative). A window is dro
 coastlines** (the plan wants shoreline structure oversampled). Fully-ocean and
 withheld-country cells are already absent prefixes (free). No external coastline polygon —
 stays value-based and channel-free; revisit only if the exact-zero trick proves leaky
-(e.g. large salt-flats digitized to exactly 0). Exact-zero pixels are **excluded from the
+(e.g. large salt-flats digitized to exactly 0).
+*(Trigger fired and closed 2026-07-20 — Amendment 2: the trick is **not** leaky (11 px in
+144.5 M; Salar de Uyuni scores exact-zero 0.0000), and the "keeping coastlines" clause is
+narrowed — a kept coastline window must also be sea-touching.)*
+Exact-zero pixels are **excluded from the
 normalization statistics** (§8). Inland lakes (flat but non-zero) are legitimately kept.
 
 ### 4. Ruggedness stratification — TRI on the ×8 overview, quantile quintiles
@@ -165,6 +172,50 @@ is **one architectural decision plus four free riders**, not five independent me
 C1's job; a hybrid worth pricing there is restricting full-res reads to tiles ≥50° (slope passes
 below 50° at ρ 0.95–0.96), at the price of a scoring-path seam at the boundary. The revised cost
 model belongs with that work — this ADR only records that scoring is no longer one read per tile.
+
+### Amendment 2 (2026-07-20) — C2 confirms the exact-zero test and narrows the coastline stratum
+
+- **Source:** [issue #34](https://github.com/JStoschek/DEMAE/issues/34), decided HITL against a
+  per-pixel cross-check ([`docs/research/ocean-gate-crosscheck.md`](../research/ocean-gate-crosscheck.md));
+  Phase-C map ([#32](https://github.com/JStoschek/DEMAE/issues/32)). ADR-0004 parked this question
+  for Phase C rather than deciding it on Phase-B evidence.
+- **What it supersedes:** nothing in §3's *rule* — the gate is unchanged. It closes §3's own
+  revisit trigger, narrows §3's "keeping coastlines" clause, and renames the window-level
+  predicate. The original decision text above is left as written.
+
+**Verdict — `WBM == 1` does not supersede the exact-zero test; it cannot.** Measured per pixel
+over 2,880 windows / 144,506,880 px on 14 adversarially-chosen tiles (polders, deltas, salt flat,
+fjords, atoll, inland seas at +176/−28/−430 m, ice-sheet control): **`WBM == 1` is a strict subset
+of `elevation == 0.0`, with 0 counter-examples.** Copernicus paints the ocean fill and the ocean
+mask from the same act, so WBM catches nothing the zero-test misses and can only ever drop *less*
+(583 windows vs 590 at the 0.75 threshold; only-WBM = 0). The gate stays `exact_zero_frac ≥ 0.75`.
+
+**§3's leak trigger is fired and closed.** Exactly-zero pixels WBM calls not-water: **11 of
+144,506,880 (7.6 × 10⁻⁸)** — and none are salt flat. **Salar de Uyuni scores `exact_zero_frac`
+0.0000 across all 256 of its windows.** Sub-sea-level land is negative, not zero, as §3 assumed.
+This ADR should not be re-litigated on the leak question again.
+
+**What *is* narrowed — the coastline stratum.** The 2.13 M pixels where the tests disagree are all
+WBM 2/3: river and lake surfaces Copernicus flattened to exactly `0.0` because they sit at sea
+level. So a high-zero-fraction window is not necessarily coastal. In the candidate band
+(`exact_zero_frac ∈ [0.05, 0.75)`), 141 of 245 windows contain **no ocean pixel at all** — flat
+delta water, median `land_std` **2.23 m** against **69.99 m** for the sea-touching 104. §3's
+"keeping coastlines" therefore now requires **`wbm1_frac > 0`**; elevation alone provably cannot
+make this call, and `wbm1_frac` is stored raw by C3 regardless, so the discriminator is free.
+Band *values* remain [#36](https://github.com/JStoschek/DEMAE/issues/36)'s to lock.
+
+**Vocabulary.** `stratify.is_ocean` → `is_zero_fill`; drop reason `"ocean"` → `"zero_fill"`.
+`config.OCEAN_FILL_VALUE` keeps its name — this measurement is precisely what confirms `0.0` *is*
+the ocean fill. The distinction: a **pixel** of `0.0` is ocean fill; a **window** that is 75%
+zeros is not necessarily ocean.
+
+**Coverage consequence: none.** 590 windows dropped before and after — the rule did not move.
+
+**Not settled here.** Threshold *values* (including the coastline band edges) are C4
+([#36](https://github.com/JStoschek/DEMAE/issues/36)). One incidental finding is handed to it:
+WBM classifies the **Salar de Uyuni salt flat as water** despite it being genuine terrain at
+3,656 m, so the default `wbm_water > 0.30` cap would drop 141 of its 256 windows — a terrain
+family C4's attrition analysis must check it is not hollowing out.
 
 ## Alternatives considered
 

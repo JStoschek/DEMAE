@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import config
-from .stratify import is_ocean  # ocean screen owned by stratify; used here at full res
+from .stratify import is_zero_fill  # zero-fill screen owned by stratify; used here at full res
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,8 @@ def prepare_tile(window: np.ndarray) -> tuple[PreparedTile | None, str]:
     """Prepare a full-res window for storage, or reject it.
 
     Returns ``(PreparedTile, "ok")`` on success, or ``(None, reason)`` where
-    reason is one of ``"ocean"`` (>=75% exact-zero at full res, ADR-0001 §3),
+    reason is one of ``"zero_fill"`` (>=75% exact-zero at full res, ADR-0001 §3;
+    renamed from ``"ocean"`` by Amendment 2 — it also catches sea-level river/lake),
     ``"no_land"`` (no land pixels to compute stats from), or ``"degenerate"``
     (land-std < 3 m, ADR-0002 §2's tightened epsilon).
 
@@ -74,8 +75,8 @@ def prepare_tile(window: np.ndarray) -> tuple[PreparedTile | None, str]:
     """
     raw_i16 = to_int16(plausibility_clip(window))
 
-    if is_ocean(raw_i16):
-        return None, "ocean"
+    if is_zero_fill(raw_i16):
+        return None, "zero_fill"
 
     mask = land_mask(raw_i16)
     land_frac = float(mask.mean())

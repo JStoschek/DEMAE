@@ -297,7 +297,7 @@ def _score_one(
             ov_w=ov.ov_w,
         )
         region = ov.array[o_r0:o_r1, o_c0:o_c1]
-        if stratify.is_ocean(region):  # coarse pre-screen on the overview
+        if stratify.is_zero_fill(region):  # coarse pre-screen on the overview
             continue
         tri = stratify.window_tri(tri_map, o_r0=o_r0, o_c0=o_c0, o_r1=o_r1, o_c1=o_c1)
         lon, lat = window_center_lonlat(

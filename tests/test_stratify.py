@@ -16,14 +16,14 @@ def test_zero_fraction():
     assert stratify.zero_fraction(a) == pytest.approx(0.5)
 
 
-def test_is_ocean_threshold():
+def test_is_zero_fill_threshold():
     # exactly at the 0.75 threshold -> dropped
     a = np.zeros((4, 4), dtype=np.float32)
     a[0] = 5.0  # 4/16 land -> 0.75 zero-fraction
     assert stratify.zero_fraction(a) == pytest.approx(0.75)
-    assert stratify.is_ocean(a) is True
+    assert stratify.is_zero_fill(a) is True
     a[1] = 5.0  # now 0.5 zero-fraction -> kept (coastline)
-    assert stratify.is_ocean(a) is False
+    assert stratify.is_zero_fill(a) is False
 
 
 # --- TRI (Riley, ADR-0001 §4) -------------------------------------------------

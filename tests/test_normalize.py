@@ -69,12 +69,12 @@ def test_prepare_tile_drops_degenerate_flat():
     assert reason == "degenerate"
 
 
-def test_prepare_tile_drops_mostly_ocean():
+def test_prepare_tile_drops_mostly_zero_fill():
     win = np.zeros((config.TILE_PX, config.TILE_PX), dtype=np.float32)
-    win[:40] = 100.0  # ~18% land -> >75% ocean
+    win[:40] = 100.0  # ~18% land -> >75% zero-fill
     tile, reason = normalize.prepare_tile(win)
     assert tile is None
-    assert reason == "ocean"
+    assert reason == "zero_fill"
 
 
 def test_prepare_tile_keeps_coastline():

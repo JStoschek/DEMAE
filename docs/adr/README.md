@@ -9,7 +9,7 @@ existing ADR, surface it rather than silently overriding.
 
 | ADR | Decision | Status |
 |---|---|---|
-| [0001](0001-corpus-construction-recipe.md) | Corpus-construction recipe (Phase 0) | Accepted — §4 amended by Gate A3; §4–5 metric basis superseded by [0004](0004-frozen-metric-vector.md) |
+| [0001](0001-corpus-construction-recipe.md) | Corpus-construction recipe (Phase 0) | Accepted — §4 amended by Gate A3; §3 amended by Phase C2; §4–5 metric basis superseded by [0004](0004-frozen-metric-vector.md) |
 | [0002](0002-storage-format-and-manifest.md) | Storage format and manifest | Accepted |
 | [0003](0003-dataloader-design.md) | Dataloader design | Accepted |
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
