@@ -447,6 +447,42 @@ def test_read_catalog_returns_one_table_over_every_part(tmp_path: Path):
     assert table.column_names == list(catalog.COLUMNS)
 
 
+# --- which COGs a run scores --------------------------------------------------
+
+
+def _frame() -> list:
+    # Two bands' worth of cells, so a prefix and a spread draw can disagree.
+    from dataset.geometry import format_cog_stem
+
+    return [
+        parse_cog_key(format_cog_stem(lon, lat))
+        for lat in (0, 5, 55, 60, 75)
+        for lon in range(0, 20, 5)
+    ]
+
+
+def test_select_cogs_defaults_to_the_whole_frame():
+    frame = _frame()
+    assert catalog.select_cogs(frame) == frame
+
+
+def test_limit_takes_a_prefix_but_sample_spreads_across_bands():
+    frame = _frame()
+    prefix = catalog.select_cogs(frame, limit=5)
+    assert prefix == frame[:5]
+    assert len({catalog.lat_band(c.origin_lat + 0.5) for c in prefix}) == 1  # one band
+    spread = catalog.select_cogs(frame, sample=5)
+    assert len({catalog.lat_band(c.origin_lat + 0.5) for c in spread}) > 1
+
+
+def test_sample_wins_over_limit_when_both_are_given():
+    # Asking for a spread draw and silently getting a prefix is the failure worth
+    # ruling out — it would make a dry run's distributions meaningless.
+    frame = _frame()
+    both = catalog.select_cogs(frame, limit=5, sample=5)
+    assert both == catalog.select_cogs(frame, sample=5)
+
+
 def test_scan_writes_meta_with_the_scored_vector_and_resolutions(tmp_path: Path):
     pytest.importorskip("pyarrow.parquet")
     cog_reader, mask_reader = _readers(_STEM)

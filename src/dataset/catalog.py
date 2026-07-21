@@ -851,6 +851,38 @@ def _load_frame(frame_cache: Path | None) -> list[CogRef]:
     return refs
 
 
+def select_cogs(
+    refs: Sequence[CogRef],
+    *,
+    limit: int | None = None,
+    sample: int | None = None,
+    seed: int = config.RANDOM_SEED,
+) -> list[CogRef]:
+    """Which COGs to score: all of them, a prefix, or a geographically spread draw.
+
+    The full pass takes the frame as it stands. The two narrowing options are not
+    interchangeable, and picking the wrong one quietly wastes the run:
+
+    - ``limit`` takes a **prefix**, which is the bucket's key order — the first few
+      hundred stems are all one corner of equatorial Africa. That is right for a
+      smoke check (does the live path work at all?) and useless for anything that
+      looks at a distribution.
+    - ``sample`` draws through :func:`dataset.sampling.sample_cogs`, spread across
+      latitude bands and 10° geo-cells, so a few hundred COGs actually resemble the
+      corpus. That is what a dry run before the full pass wants.
+
+    ``sample`` wins if both are given, since asking for a spread draw and getting a
+    prefix is the failure worth ruling out.
+    """
+    from .sampling import sample_cogs
+
+    if sample is not None:
+        return sample_cogs(refs, sample, allocation="proportional", seed=seed)
+    if limit is not None:
+        return list(refs[:limit])
+    return list(refs)
+
+
 def _tqdm(total: int, desc: str):
     try:
         from tqdm import tqdm
@@ -864,8 +896,9 @@ def main(argv: list[str] | None = None) -> int:
     """``python -m dataset.catalog`` — run the global scoring pass.
 
     Re-running the same command after an interruption resumes: finished COGs are
-    skipped and only the tail is scored. ``--limit-cogs`` runs a short prefix, which
-    is how the live path is smoke-checked before committing to the full pass.
+    skipped and only the tail is scored. ``--limit-cogs`` runs a short prefix (the
+    live-path smoke check) and ``--sample-cogs`` a band-spread draw (the dry run whose
+    distributions mean something) — see :func:`select_cogs`.
     """
     import argparse
     import logging
@@ -881,7 +914,14 @@ def main(argv: list[str] | None = None) -> int:
         "catalog (Phase C, issue #35). Resumable: re-run to continue.",
     )
     p.add_argument("--out-dir", type=Path, default=Path("data/catalog"))
-    p.add_argument("--limit-cogs", type=int, default=None, help="score only the first N COGs")
+    p.add_argument("--limit-cogs", type=int, default=None,
+                   help="score only the first N COGs in bucket order — a smoke check, "
+                        "not a representative sample (the prefix is one corner of Africa)")
+    p.add_argument("--sample-cogs", type=int, default=None,
+                   help="score a band/geo-cell-spread draw of N COGs; use this, not "
+                        "--limit-cogs, for a dry run whose distributions mean something")
+    p.add_argument("--seed", type=int, default=config.RANDOM_SEED,
+                   help="seed for --sample-cogs")
     p.add_argument("--workers", type=int, default=16, help="parallel whole-COG reads")
     p.add_argument("--factor", type=int, default=OVERVIEW_FACTOR, help="overview decimation")
     p.add_argument("--rows-per-part", type=int, default=500_000,
@@ -892,10 +932,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--snapshot-date", default=None)
     args = p.parse_args(argv)
 
-    refs = _load_frame(args.frame_cache)
-    if args.limit_cogs is not None:
-        refs = refs[: args.limit_cogs]
-    log.info("frame: %d COGs -> %s", len(refs), args.out_dir)
+    frame = _load_frame(args.frame_cache)
+    refs = select_cogs(
+        frame, limit=args.limit_cogs, sample=args.sample_cogs, seed=args.seed
+    )
+    log.info("frame: %d COGs, scoring %d -> %s", len(frame), len(refs), args.out_dir)
 
     from .build import _today, git_sha
     from .masks import RasterioMaskReader
