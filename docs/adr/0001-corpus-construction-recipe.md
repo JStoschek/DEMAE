@@ -1,11 +1,17 @@
 # ADR 0001 — Corpus-construction recipe (Phase 0)
 
-- **Status:** Accepted — **partly superseded** (see [Amendments](#amendments))
+- **Status:** Accepted — **partly superseded** (§4's one-read property amended by Gate A3,
+  see [Amendments](#amendments); §4–5's metric basis superseded by [ADR-0004](0004-frozen-metric-vector.md))
 - **Date:** 2026-07-13
 - **Context ticket:** "Decide the corpus-construction recipe" (GitHub issue #4), Phase-0 wayfinder map (#1)
 - **Inputs:** reconnaissance findings in [`docs/research/copernicus-glo30-recon.md`](../research/copernicus-glo30-recon.md)
 - **Amended by:** Gate A3, 2026-07-19 ([issue #21](https://github.com/JStoschek/DEMAE/issues/21)) — the one-read
   property of §4 is spent; see [Amendments](#amendments)
+- **Superseded by:** [ADR-0004](0004-frozen-metric-vector.md), 2026-07-20 (Gate B,
+  [issue #28](https://github.com/JStoschek/DEMAE/issues/28)) — §4–5's single-axis TRI
+  stratification *metric basis* is replaced by the frozen 6-metric vector. The
+  allocation design §5 built on the strata (quotas, geo round-robin) is redrawn by
+  Phase D, not by ADR-0004.
 
 ## Context
 
@@ -55,6 +61,10 @@ normalization statistics** (§8). Inland lakes (flat but non-zero) are legitimat
 
 ### 4. Ruggedness stratification — TRI on the ×8 overview, quantile quintiles
 
+*(Superseded 2026-07-20 by [ADR-0004](0004-frozen-metric-vector.md): the single TRI
+ruggedness axis is replaced wholesale by the frozen 6-metric vector — measured against
+a Spearman correlation matrix, not chosen a priori.)*
+
 The ruggedness metric is **TRI (Riley: mean absolute elevation difference to the 8
 neighbours)**, computed on the **×8 overview** and aggregated per window. TRI is preferred
 over plain elevation-std because it flags genuine *roughness* (dunes, drainage texture,
@@ -67,6 +77,12 @@ ruggedness score for all of that tile's windows.**
 scoring time, so scoring is no longer one read per tile.)*
 
 ### 5. Quotas & geographic spread — equal per stratum, 10° geo-cell round-robin
+
+*(Partly superseded 2026-07-20 by [ADR-0004](0004-frozen-metric-vector.md): the
+single-axis TRI quintile strata this section allocates over are gone — replaced by the
+frozen 6-metric k-means vector. The **allocation design** here (quota-per-stratum, the
+10° geo-cell round-robin, the per-tile window cap) is not decided by ADR-0004 either;
+it is redrawn by Phase D, which is charted as its own effort.)*
 
 Target distribution is **equal quota per stratum** (~10k each → 50k). Because the natural
 distribution is flat-dominated, uniform-across-strata automatically oversamples rugged

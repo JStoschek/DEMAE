@@ -33,15 +33,25 @@ GitHub issue #1.
 - **Window** — a 224×224 pixel region read from a COG before it becomes a tile.
 - **Land mask** — dropping ocean / zero-elevation areas so the model doesn't waste
   capacity reconstructing flat sea.
-- **TRI** — Terrain Ruggedness Index; a cheap per-window ruggedness score used to
-  **stratify** sampling so rugged terrain is oversampled (a terrain-diverse corpus
-  beats a geographically uniform one).
+- **TRI** — Terrain Ruggedness Index; a cheap per-window ruggedness score. Phase 0
+  ([ADR-0001](docs/adr/0001-corpus-construction-recipe.md) §4) used it as the *single*
+  stratification axis; **[ADR-0004](docs/adr/0004-frozen-metric-vector.md) supersedes
+  that** — stratification now runs on the frozen **metric vector** (below), not TRI.
+- **Metric vector** — the frozen 6-metric per-window descriptor the corpus stratifies
+  on: `{slope_mean, local_relief, texture, elevation_relief_ratio, mean_elevation,
+  geomorphon_entropy}` (log-transform `slope_mean`, `local_relief`). Chosen by
+  measurement — a Spearman correlation prune over a 15,000-window pilot frame — and
+  frozen at Gate B ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)). A terrain-diverse
+  corpus beats a geographically uniform one; the vector is how "diverse" is measured.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.
-- **Manifest** — the per-tile index (id, source COG, lon/lat + region, TRI/stratum,
-  mean+std). **Region is recorded** so a geographic hold-out split is possible in
-  Phase 2 (the split itself is not a Phase-0 decision).
+- **Manifest** — the per-tile index (id, source COG, lon/lat + region, stratum,
+  mean+std). The stratum's metric basis was the single TRI axis in
+  [ADR-0001](docs/adr/0001-corpus-construction-recipe.md); it is now the **metric
+  vector** ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)), and the final manifest
+  schema follows Phase D's allocation design. **Region is recorded** so a geographic
+  hold-out split is possible in Phase 2 (the split itself is not a Phase-0 decision).
 - **Shard / storage format** — how normalized tiles are persisted for the Phase-1
   dataloader; chosen for streaming-read throughput (the plan's #1 risk: I/O
   starving the GPU).
