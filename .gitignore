@@ -30,3 +30,4 @@ prototypes/
 
 # OS
 .DS_Store
+notebooks/out/

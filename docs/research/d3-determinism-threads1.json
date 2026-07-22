@@ -1,0 +1,20 @@
+[
+  {
+    "method": "lloyd",
+    "same_seed_identical": true,
+    "same_seed_jaccard": 1.0,
+    "cross_seed_jaccard": 0.03305785123966942
+  },
+  {
+    "method": "minibatch",
+    "same_seed_identical": true,
+    "same_seed_jaccard": 1.0,
+    "cross_seed_jaccard": 0.011122345803842264
+  },
+  {
+    "method": "subsampled",
+    "same_seed_identical": true,
+    "same_seed_jaccard": 1.0,
+    "cross_seed_jaccard": 0.006036217303822937
+  }
+]
