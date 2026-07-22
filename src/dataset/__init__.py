@@ -18,6 +18,7 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0003). Stage map
 - :mod:`dataset.calibration`— overview-vs-full-res metric ρ, Gate A3 (#20)
 - :mod:`dataset.pilot`      — the 15k-window pilot scoring frame, Phase B1 (#24)
 - :mod:`dataset.catalog`    — global scoring pass -> raw candidate catalog (#35)
+- :mod:`dataset.gates`      — the locked quality gates as filter columns (#37)
 - :mod:`dataset.normalize`  — clip, land-only stats, degenerate drop, int16 (§4)
 - :mod:`dataset.shards`     — sharded int16 memmap storage (§5b)
 - :mod:`dataset.manifest`   — Parquet index + corpus_meta.json fingerprint (§5a)

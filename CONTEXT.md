@@ -51,6 +51,18 @@ GitHub issue #1.
   and materialized. Every fraction is stored raw: **quality gates are filter columns
   over the catalog, never drops during scoring**, so a threshold can be re-tuned
   without touching S3.
+- **Quality gates** — the predicates over the candidate catalog's stored fractions: four
+  that **drop** (`zero_fill`, `degenerate`, `water`, `edited`) and two that only **tag**
+  (`water_affected`, the `coastline` stratum). Thresholds locked by measurement in
+  [`gate-attrition.md`](docs/research/gate-attrition.md); applied by `dataset.gates` as
+  **boolean columns appended to the frame** — a *gated catalog* is the same rows plus a
+  `keep` column, never a smaller frame. Re-running the gates after a threshold moves
+  costs seconds; re-scoring would cost a six-hour global pass.
+- **`masks_missing`** — the guard beside those gates: a window whose EDM/FLM/WBM
+  fractions could not be read has NaN there, and `NaN > 0.30` is false, so it would
+  clear the water and edited caps *unevaluated*. Such windows are flagged and excluded
+  from `keep` — unknown quality is not passing quality. Zero windows in the shipped
+  catalog; it exists so a future scoring run cannot seed the frame silently.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.

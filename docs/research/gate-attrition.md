@@ -244,6 +244,13 @@ none are the atoll and open-water COGs above.
 - **C5 ([#37](https://github.com/JStoschek/DEMAE/issues/37))** implements these five
   predicates as filter columns over the stored catalog and ships the summary notebook.
   All fractions remain stored; **no window is destructively removed.**
+  **Done — every count in this document reproduces exactly over the shipped frame**
+  ([`c5-catalog-summary.md`](c5-catalog-summary.md)), from a separate code path. C5
+  added one guard this analysis did not need: `keep` also excludes windows whose mask
+  fractions are NaN (`masks_missing`), because `NaN > 0.30` is false and such a window
+  would clear the water and edited caps unevaluated. **Zero windows are in that state
+  here, so no number above changes** — but `keep` is now the complement of these four
+  gates *and* that guard, and a future frame with unread masks will differ.
 - **Phase D** inherits a 3,052,735-window sampling frame with `water_affected` on 159,011
   windows and a 40,815-window coastline stratum, and can revisit any threshold here from
   stored columns without re-scoring.
