@@ -18,6 +18,11 @@ dependencies = [
     "boto3>=1.35",          # anonymous bucket listing / STAC-adjacent discovery
     "pyarrow>=16",          # Parquet tile-manifest (ADR 0002)
     "tqdm>=4.66",           # build-CLI progress bars over the long scan/materialize
+    # Phase-D stratifier (#41): fits the k=20 stratum centroids. Pinned to a minor
+    # series — sklearn does not guarantee KMeans output across minors, and the shipped
+    # centroids artifact records the exact version it was fit with. Only `fit_centroids`
+    # imports it; the reproducible read/assign path is pure NumPy.
+    "scikit-learn>=1.9,<1.10",
 ]
 
 # The corpus build CLI (smoke-gated); equivalent to `python -m dataset.build`.
