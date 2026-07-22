@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "metrics": [
+    "slope_mean",
+    "local_relief",
+    "texture",
+    "elevation_relief_ratio",
+    "mean_elevation",
+    "geomorphon_entropy"
+  ],
+  "log_metrics": [
+    "slope_mean",
+    "local_relief"
+  ],
+  "standardization": "z-score (standardize, not whiten \u2014 ADR-0004)",
+  "params": {
+    "slope_mean": {
+      "mean": 1.6203281386701074,
+      "std": 0.8065771329559069
+    },
+    "local_relief": {
+      "mean": 4.755537556548716,
+      "std": 1.1894424202266238
+    },
+    "texture": {
+      "mean": 0.1457903220932799,
+      "std": 0.1372055483741585
+    },
+    "elevation_relief_ratio": {
+      "mean": 0.42923661259058576,
+      "std": 0.13014570672341036
+    },
+    "mean_elevation": {
+      "mean": 815.1408969337266,
+      "std": 937.032319559746
+    },
+    "geomorphon_entropy": {
+      "mean": 2.3629840684105896,
+      "std": 0.5631190442636077
+    }
+  },
+  "frame": {
+    "n_kept": 3052735,
+    "gate_thresholds": {
+      "zero_fill_min": 0.75,
+      "degenerate_land_std_m": 3.0,
+      "water_drop_max": 0.3,
+      "water_affected_min": 0.05,
+      "edited_max": 0.25
+    },
+    "catalog_code_version": "ad46e96"
+  }
+}
