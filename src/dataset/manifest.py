@@ -1,10 +1,19 @@
-"""Tile manifest (Parquet) + corpus card (``corpus_meta.json``), ADR-0002 §3.
+"""Tile manifest (Parquet) + corpus card (``corpus_meta.json``), ADR-0002 §3
+(schema v2 addendum, Phase E / issue #48).
 
 A single typed Parquet file indexes every tile — the loader loads it whole and
 joins to the shards by ``(shard_id, row_index)``. A JSON sidecar holds the
 corpus-level constants, the ADR-0003 corpus-wide land ``mean``/``std`` (so the
 loader's ``global`` normalization mode works), and a ``dataset_version``
 fingerprint that pins this exact build for reproducibility and the model card.
+
+Schema v2 (issue #48) redraws the TRI-era row for the metric-vector corpus: it
+drops ``tri`` (nothing computes it since #44 retired the TRI path), renames
+``stratum`` → ``stratum_id`` (the k=20 k-means label #44 shipped, not a
+ruggedness quintile), and **denormalizes** the frozen metric vector, the
+mask/water fractions, and the selection ``provenance`` straight from the gated
+catalog and the Phase-D selection list. The manifest is thus self-contained: a
+corpus consumer or the model card needs no second file. See ADR-0002 §3a.
 """
 
 from __future__ import annotations
@@ -19,7 +28,10 @@ import pyarrow.parquet as pq
 
 from . import config
 
-# Typed per-row schema (ADR-0002 §3). Order here defines column order on disk.
+# Typed per-row schema (ADR-0002 §3, v2 addendum §3a). Order here defines column
+# order on disk. Source of each column is noted: materialization computes it from
+# the full-res read, "catalog" copies it from ``data/catalog_gated/`` by window id,
+# "selection" copies it from the Phase-D selection list.
 MANIFEST_SCHEMA = pa.schema(
     [
         ("tile_id", pa.string()),
@@ -32,20 +44,38 @@ MANIFEST_SCHEMA = pa.schema(
         ("lat", pa.float64()),
         ("lat_band", pa.string()),
         ("geocell_id", pa.string()),
-        ("tri", pa.float64()),
-        ("stratum", pa.int32()),
-        ("mean", pa.float64()),
+        ("mean", pa.float64()),  # per-tile land stats — computed at full res
         ("std", pa.float64()),
         ("land_frac", pa.float64()),
+        ("stratum_id", pa.int32()),  # selection: k=20 k-means label (was `stratum`)
+        ("provenance", pa.string()),  # selection: {base, floor:coastline} (#42)
+        # Frozen metric vector (ADR-0004), raw values copied from the catalog —
+        # the exact numbers the sampler clustered on, so E2.1a compares like-for-like.
+        ("slope_mean", pa.float64()),
+        ("local_relief", pa.float64()),
+        ("texture", pa.float64()),
+        ("elevation_relief_ratio", pa.float64()),
+        ("mean_elevation", pa.float64()),
+        ("geomorphon_entropy", pa.float64()),
+        # Mask/water facts, copied from the catalog (gates are columns, not drops).
+        ("edm_edited_frac", pa.float64()),
+        ("flm_fill_frac", pa.float64()),
+        ("wbm_water_frac", pa.float64()),
+        ("water_affected", pa.bool_()),
+        ("coastline", pa.bool_()),
         ("content_hash", pa.uint64()),
-        ("split", pa.string()),  # null in Phase 0; Phase-2 fills the hold-out
+        ("split", pa.string()),  # null this tier; Phase-2 fills the geographic hold-out
     ]
 )
 
 
 @dataclass(frozen=True)
 class TileRecord:
-    """One manifest row — the full provenance + storage join for a tile."""
+    """One manifest row — the full provenance + storage join for a tile.
+
+    Field order mirrors ``MANIFEST_SCHEMA`` (v2, issue #48). ``split`` keeps its
+    default so it stays optional; every other field is required.
+    """
 
     tile_id: str
     shard_id: int
@@ -57,11 +87,22 @@ class TileRecord:
     lat: float
     lat_band: str
     geocell_id: str
-    tri: float
-    stratum: int
     mean: float
     std: float
     land_frac: float
+    stratum_id: int
+    provenance: str
+    slope_mean: float
+    local_relief: float
+    texture: float
+    elevation_relief_ratio: float
+    mean_elevation: float
+    geomorphon_entropy: float
+    edm_edited_frac: float
+    flm_fill_frac: float
+    wbm_water_frac: float
+    water_affected: bool
+    coastline: bool
     content_hash: int
     split: str | None = None
 
@@ -100,8 +141,24 @@ def dataset_version(rows: list[TileRecord], build_params: dict) -> str:
     return h.hexdigest()
 
 
-def build_params() -> dict:
-    """The recipe parameters that define a corpus build (feed the fingerprint)."""
+def build_params(
+    *,
+    selection_list_md5: str,
+    catalog_version: str,
+    centroids_md5: str,
+    scaler_md5: str,
+) -> dict:
+    """The recipe parameters that define a corpus build (feed the fingerprint).
+
+    The **seed is no longer the contract** (#43/#44): the persisted Phase-D
+    selection list is. So the fingerprint pins the selection-list md5 — which alone
+    fixes *which* windows, their ``stratum_id`` and their ``provenance``, since all
+    three columns are copied from it — plus the ``catalog_version`` the denormalized
+    metric/mask columns were copied from (nothing else in the fingerprint covers
+    those). ``centroids_md5`` / ``scaler_md5`` are redundant on the hash (the
+    selection list already pins the labels) but are recorded so ``corpus_meta.json``
+    documents the full Phase-D provenance chain for the model card.
+    """
     return {
         "schema_version": config.MANIFEST_SCHEMA_VERSION,
         "tile_px": config.TILE_PX,
@@ -110,7 +167,10 @@ def build_params() -> dict:
         "degenerate_std_eps": config.DEGENERATE_STD_EPS_M,
         "land_zero_frac_drop": config.LAND_ZERO_FRAC_DROP,
         "geocell_size_deg": config.GEOCELL_SIZE_DEG,
-        "seed": config.RANDOM_SEED,
+        "selection_list_md5": selection_list_md5,
+        "catalog_version": catalog_version,
+        "centroids_md5": centroids_md5,
+        "scaler_md5": scaler_md5,
     }
 
 
@@ -123,21 +183,31 @@ def write_corpus_meta(
     snapshot_date: str,
     build_timestamp: str,
     code_version: str,
+    selection_list_md5: str,
+    catalog_version: str,
+    centroids_md5: str,
+    scaler_md5: str,
 ) -> dict:
     """Write ``corpus_meta.json`` — the corpus card + reproducibility fingerprint.
 
     Returns the meta dict as written (handy for logging). ``global_mean`` /
     ``global_std`` are the corpus-wide land-pixel stats the pipeline accumulates,
-    consumed by the loader's ``global`` normalization mode (ADR-0003 §3).
+    consumed by the loader's ``global`` normalization mode (ADR-0003 §3). The four
+    Phase-D fingerprints feed ``build_params`` (see its docstring) and so ride into
+    both the ``dataset_version`` hash and the documented provenance chain.
     """
-    params = build_params()
+    params = build_params(
+        selection_list_md5=selection_list_md5,
+        catalog_version=catalog_version,
+        centroids_md5=centroids_md5,
+        scaler_md5=scaler_md5,
+    )
     meta = {
         "normalization": config.NORMALIZATION,
         "tile_px": config.TILE_PX,
         "storage_dtype": "int16",
         "clip_bounds": [config.CLIP_MIN_M, config.CLIP_MAX_M],
         "degenerate_std_eps": config.DEGENERATE_STD_EPS_M,
-        "seed": config.RANDOM_SEED,
         "n_tiles": len(rows),
         "global_mean": global_mean,
         "global_std": global_std,

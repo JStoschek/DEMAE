@@ -84,4 +84,4 @@ MASK_CACHE_DIR: Final = "data/mask_cache"
 
 # --- Reproducibility (ADR 0001 §Consequences, ADR 0002 §3) --------------------
 RANDOM_SEED: Final = 0xDE_A_E  # fixed seed for all tie-breaking / round-robin
-MANIFEST_SCHEMA_VERSION: Final = 1
+MANIFEST_SCHEMA_VERSION: Final = 2  # v2: metric-vector schema (issue #48, ADR-0002 §3a)

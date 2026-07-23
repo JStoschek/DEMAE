@@ -22,13 +22,34 @@ def _row(i, *, cog="Copernicus_DSM_COG_10_N45_00_E006_00_DEM", chash=None):
         lat=45.5,
         lat_band="0-50",
         geocell_id="+000_+040",
-        tri=float(i),
-        stratum=i % 5,
         mean=1000.0 + i,
         std=50.0,
         land_frac=1.0,
+        stratum_id=i % 20,
+        provenance="base",
+        slope_mean=0.12 + i,
+        local_relief=30.0 + i,
+        texture=0.5,
+        elevation_relief_ratio=0.4,
+        mean_elevation=1000.0 + i,
+        geomorphon_entropy=1.8,
+        edm_edited_frac=0.0,
+        flm_fill_frac=0.0,
+        wbm_water_frac=0.0,
+        water_affected=False,
+        coastline=False,
         content_hash=(chash if chash is not None else 111 * (i + 1)),
     )
+
+
+# The Phase-D provenance fingerprints a driver supplies to build_params /
+# write_corpus_meta — stand-in values for the schema-level tests.
+_PROV = dict(
+    selection_list_md5="3936840619" + "0" * 22,
+    catalog_version="cat-abc123",
+    centroids_md5="c" * 32,
+    scaler_md5="5" * 32,
+)
 
 
 def test_make_tile_id_is_deterministic():
@@ -48,7 +69,9 @@ def test_manifest_round_trips_with_typed_schema(tmp_path):
     # schema types are pinned per ADR-0002 §3
     assert table.schema.field("content_hash").type == "uint64"
     assert table.schema.field("shard_id").type == "int32"
-    assert table.schema.field("stratum").type == "int32"
+    assert table.schema.field("stratum_id").type == "int32"
+    assert table.schema.field("provenance").type == "string"
+    assert table.schema.field("coastline").type == "bool"
     assert table.schema.field("split").type == "string"
 
     back = table.to_pylist()
@@ -63,9 +86,17 @@ def test_manifest_has_every_adr_field(tmp_path):
     names = set(pq.read_table(path).schema.names)
     assert names == {
         "tile_id", "shard_id", "row_index", "source_cog", "win_row0", "win_col0",
-        "lon", "lat", "lat_band", "geocell_id", "tri", "stratum", "mean", "std",
-        "land_frac", "content_hash", "split",
+        "lon", "lat", "lat_band", "geocell_id", "mean", "std", "land_frac",
+        "stratum_id", "provenance",
+        "slope_mean", "local_relief", "texture", "elevation_relief_ratio",
+        "mean_elevation", "geomorphon_entropy",
+        "edm_edited_frac", "flm_fill_frac", "wbm_water_frac",
+        "water_affected", "coastline",
+        "content_hash", "split",
     }
+    # v2 dropped `tri` and renamed `stratum` -> `stratum_id` (issue #48)
+    assert "tri" not in names
+    assert "stratum" not in names
 
 
 def test_dataset_version_is_order_independent(tmp_path):
@@ -97,6 +128,7 @@ def test_corpus_meta_records_card_and_global_stats(tmp_path):
         snapshot_date="2026-07",
         build_timestamp="2026-07-14T00:00:00Z",
         code_version="abc123",
+        **_PROV,
     )
     meta = json.loads(path.read_text())
     assert meta["normalization"] == config.NORMALIZATION
@@ -104,8 +136,11 @@ def test_corpus_meta_records_card_and_global_stats(tmp_path):
     assert meta["storage_dtype"] == "int16"
     assert meta["clip_bounds"] == [config.CLIP_MIN_M, config.CLIP_MAX_M]
     assert meta["degenerate_std_eps"] == config.DEGENERATE_STD_EPS_M
-    assert meta["seed"] == config.RANDOM_SEED
     assert meta["n_tiles"] == 5
+    # v2: the seed is no longer the contract — the selection-list md5 is (#43/#44/#48)
+    assert "seed" not in meta
+    assert meta["build_params"]["selection_list_md5"] == _PROV["selection_list_md5"]
+    assert "seed" not in meta["build_params"]
     # ADR-0003 handoff: corpus-wide land μ/σ for the global-normalization mode
     assert meta["global_mean"] == pytest.approx(812.3)
     assert meta["global_std"] == pytest.approx(623.1)

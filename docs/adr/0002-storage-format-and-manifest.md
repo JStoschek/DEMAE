@@ -110,3 +110,66 @@ the model card.
 - **Storing normalized values** — rejected; would foreclose the normalization ablation.
 - **Storing an explicit mask** — deferred; exactly derivable as `raw == 0` today.
 - **SQLite / CSV manifest** — rejected in favour of Parquet.
+
+---
+
+## Addendum §3a — Metric-vector manifest schema (Phase E)
+
+- **Status:** Accepted
+- **Date:** 2026-07-23
+- **Context ticket:** "Redraw the manifest schema for the metric-vector corpus" (GitHub issue #48), Phase-E wayfinder map (#46)
+- **Amends:** §3 (per-row manifest schema) only. §1–2 (sharded int16 memmap storage) are untouched. `MANIFEST_SCHEMA_VERSION` bumps **1 → 2**.
+
+### Why §3 had to move
+
+§3 fixed the per-row schema in the **TRI era**. Phase D retired that path wholesale (#44): selection now runs on the **frozen 6-metric vector** (ADR-0004) clustered into **k = 20 k-means strata** (#41), and the selection is a committed list (#44), not a seeded quintile scheme. So two v1 columns had become lies — `tri` (a float nothing computes any more) and `stratum` (declared as a *ruggedness quintile 0–4*, but the live label is a k=20 id). This addendum records the honest v2 schema. The original §3 stays above as the historical TRI-era record.
+
+### The redrawn schema (v2)
+
+Per-row columns, in on-disk order. "Source" is where the driver gets each value: **materialization** computes it from the full-res read; **catalog** copies it from `data/catalog_gated/` by window id; **selection** copies it from the Phase-D selection list (`artifacts/phase_d/selection_debug_50k.csv`).
+
+| column | type | source | note |
+|---|---|---|---|
+| `tile_id` | str | materialization | `{cog_stem}_{row0}_{col0}` |
+| `shard_id`, `row_index` | int32 | materialization | storage join |
+| `source_cog` | str | catalog | provenance |
+| `win_row0`, `win_col0` | int32 | window id | window origin |
+| `lon`, `lat` | float64 | catalog | window-centre |
+| `lat_band` | str | catalog | resolution band |
+| `geocell_id` | str | catalog | 10° cell |
+| `mean`, `std`, `land_frac` | float64 | materialization | per-tile land stats (full-res) |
+| `stratum_id` | int32 | **selection** | k=20 label — **renamed** from `stratum` |
+| `provenance` | str | **selection** | `{base, floor:coastline}` (#42), copied unchanged |
+| `slope_mean` | float64 | catalog | frozen metric (raw, untransformed) |
+| `local_relief` | float64 | catalog | frozen metric |
+| `texture` | float64 | catalog | frozen metric |
+| `elevation_relief_ratio` | float64 | catalog | frozen metric |
+| `mean_elevation` | float64 | catalog | frozen metric |
+| `geomorphon_entropy` | float64 | catalog | frozen metric |
+| `edm_edited_frac` | float64 | catalog | edited-pixel fraction |
+| `flm_fill_frac` | float64 | catalog | fill-mask fraction |
+| `wbm_water_frac` | float64 | catalog | aggregate water fraction |
+| `water_affected` | bool | catalog | any water in window |
+| `coastline` | bool | catalog | coastline window |
+| `content_hash` | uint64 | materialization | integrity / near-dup |
+| `split` | str? | reserved | **stays declared-and-null** this tier; Phase-2 fills the geographic hold-out |
+
+**Dropped:** `tri`. It is not withheld data (which the map keeps as a column); it is a dead concept that will never be repopulated, so a null column would be a fossil. **Renamed:** `stratum` → `stratum_id` — reusing the name in place with a changed meaning is how a schema quietly lies; the new name is the one #44 already ships upstream. **Copied-column names are the catalog's verbatim** (`edm_edited_frac`, `flm_fill_frac`, `wbm_water_frac`), not the plan's `edm_frac`/`flm_frac`/`wbm_frac` shorthand, so the manifest lines up column-for-column with its source.
+
+### Denormalize, not join
+
+Every added column already exists per-window in the gated catalog, joinable by window id. The manifest **denormalizes** them — copies the values in — rather than carrying a join key. Rationale: the catalog is a 4.4M-row **sampling frame that outlives this tier** (Phase F reuses it), while the manifest describes **this 50k build**; a corpus consumer or the model card should read one self-contained file, not be forced to possess and keep-in-sync a giant candidate frame to interpret a 50k corpus. This also matches how §3 already treated `mean`/`std`/`land_frac`/`lat_band`/`geocell_id` — per-window facts denormalized in. Size is a non-issue (a few MB either way at 50k). The 6 metric values are the **raw catalog values** (ADR-0004's `ln(x+1)` transforms are k-means-only), so E2.1a compares corpus-vs-pool like-for-like.
+
+### The fingerprint pins the selection, not the seed
+
+`build_params()` (which feeds `dataset_version` and is embedded verbatim in `corpus_meta.json`) **drops the bare `seed`** — #43/#44 established the seed is *not* the contract, the persisted selection list is — and gains four Phase-D fingerprints:
+
+- `selection_list_md5` — the core pin: one hash fixes *which* windows, their `stratum_id`, and their `provenance`, since all three columns are copied from that file.
+- `catalog_version` — pins the catalog the denormalized metric/mask columns were copied from; nothing else in the fingerprint covers those (the tile `content_hash` only covers raw elevation bytes).
+- `centroids_md5`, `scaler_md5` — redundant on the hash (the selection list already pins the labels), recorded for a self-documenting Phase-D provenance chain in the model card.
+
+### Consequences
+
+- **Loader:** the `stratum` → `stratum_id` rename touches the loader — it reads that column and re-exposes it in the training sample. That is a two-line rename (`src/dataset/loader.py`), not a read-path redesign; the sample key is likewise `stratum_id`.
+- **Self-contained corpus:** the manifest + `corpus_meta.json` now fully describe the build with no dependency on the catalog at consumption time.
+- **`split` reserved:** kept declared, typed `string`, nullable, written null for the whole 50k tier — an honest forward hook (Phase 2 will fill it), unlike the dropped `tri`.

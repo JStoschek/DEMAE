@@ -75,11 +75,22 @@ def corpus(tmp_path):
                         lat=lat,
                         lat_band=band,
                         geocell_id=gc,
-                        tri=0.0,
-                        stratum=j % 5,
                         mean=tile.mean,
                         std=tile.std,
                         land_frac=tile.land_frac,
+                        stratum_id=j % 20,
+                        provenance="base",
+                        slope_mean=0.1,
+                        local_relief=30.0,
+                        texture=0.5,
+                        elevation_relief_ratio=0.4,
+                        mean_elevation=float(base),
+                        geomorphon_entropy=1.8,
+                        edm_edited_frac=0.0,
+                        flm_fill_frac=0.0,
+                        wbm_water_frac=0.0,
+                        water_affected=False,
+                        coastline=False,
                         content_hash=ref.content_hash,
                     )
                 )
@@ -94,6 +105,10 @@ def corpus(tmp_path):
         snapshot_date="test",
         build_timestamp="2026-07-14T00:00:00Z",
         code_version="test",
+        selection_list_md5="test-selection-md5",
+        catalog_version="test-catalog",
+        centroids_md5="test-centroids-md5",
+        scaler_md5="test-scaler-md5",
     )
     return tmp_path
 
@@ -111,13 +126,13 @@ def test_sample_schema(corpus):
 
     ds = loader.TileDataset(corpus)
     s = ds[0]
-    assert set(s) == {"image", "land_mask", "mean", "std", "tile_id", "stratum"}
+    assert set(s) == {"image", "land_mask", "mean", "std", "tile_id", "stratum_id"}
     assert s["image"].shape == (1, 224, 224)  # C=1 channel-ready
     assert s["image"].dtype == torch.float32
     assert s["land_mask"].shape == (224, 224)
     assert s["land_mask"].dtype == torch.bool
     assert isinstance(s["tile_id"], str)
-    assert isinstance(s["stratum"], int)
+    assert isinstance(s["stratum_id"], int)
 
 
 def test_per_tile_normalization_zero_centers_land(corpus):

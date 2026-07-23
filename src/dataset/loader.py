@@ -98,7 +98,7 @@ def _dataset_class():
             self._row_index = table.column("row_index").to_numpy()
             self._mean = table.column("mean").to_numpy()
             self._std = table.column("std").to_numpy()
-            self._stratum = table.column("stratum").to_numpy()
+            self._stratum = table.column("stratum_id").to_numpy()  # v2 rename (#48)
             self._tile_id = table.column("tile_id").to_pylist()
 
             import json
@@ -142,7 +142,7 @@ def _dataset_class():
                 "mean": torch.tensor(mean, dtype=torch.float32),
                 "std": torch.tensor(std, dtype=torch.float32),
                 "tile_id": self._tile_id[i],
-                "stratum": int(self._stratum[i]),
+                "stratum_id": int(self._stratum[i]),
             }
 
     _DATASET_CLASS = _TileDataset
