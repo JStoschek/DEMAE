@@ -1,0 +1,200 @@
+{
+  "artifact": "Gate E pre-registered pass/fail bar",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/47",
+  "map": "https://github.com/JStoschek/DEMAE/issues/46",
+  "purpose": "Pins Gate E's pass/fail criteria BEFORE the E2 report (#52) or gallery (#53) exist, so the review (#54) cannot rationalize whatever the numbers turn out to be. The E2 notebook imports this file; it does not define thresholds inline.",
+  "committed_before": "The corpus, the E2 report (#52), and the gallery (#53). Any change to a threshold here after those exist must be a separate, dated commit that justifies itself.",
+
+  "failure_classes": {
+    "defect": "The corpus does not faithfully implement its own committed inputs (selection list, n_h table, centroids). The design is UNTESTED because the artifact is wrong. Consequence: fix code, re-run E1/E2, STAY IN THIS MAP. Not a Gate E verdict.",
+    "finding": "The corpus faithfully implements the design, and the DESIGN is revealed wrong. Consequence: record the verdict, STOP this map, open a fresh map with the implicated knob (map Destination + Out-of-scope)."
+  },
+
+  "attrition_contract_branch": {
+    "note": "Several count criteria have two variants keyed on issue #50 (the materialization attrition contract), which was open when this bar was written. #50's answer does not set thresholds; it selects which pre-committed branch is live. The notebook reads the live contract from corpus_meta.json.",
+    "branches": ["backfill_to_budget", "accept_shortfall"],
+    "live_contract_source": "corpus_meta.json:attrition_contract",
+    "cross_reference": "https://github.com/JStoschek/DEMAE/issues/50"
+  },
+
+  "committed_inputs": {
+    "selection_list": "artifacts/phase_d/selection_debug_50k.csv",
+    "selection_md5": "3936840619b20e03a2e4f6e40b966b18",
+    "selection_rows": 50000,
+    "provenance_counts": {"base": 49330, "floor:coastline": 670},
+    "allocation_table": "docs/research/d2-allocation-nh.json",
+    "centroids": "artifacts/phase_d/centroids.json",
+    "scaler": "artifacts/phase_d/scaler.json",
+    "gated_catalog": "data/catalog_gated (4386720 rows; keep=3052735; dropped-present=1333985)",
+    "k": 20,
+    "budget": 50000,
+    "frozen_metric_vector": ["slope_mean", "local_relief", "texture", "elevation_relief_ratio", "mean_elevation", "geomorphon_entropy"],
+    "gate_thresholds": {
+      "zero_fill_min": 0.75,
+      "degenerate_land_std_m": 3.0,
+      "water_drop_max": 0.30,
+      "water_affected_min": 0.05,
+      "edited_max": 0.25
+    }
+  },
+
+  "criteria": {
+
+    "E2.1a_metric_fidelity": {
+      "gates": true,
+      "class": "defect",
+      "test": "For every materialized window, the manifest's frozen-metric values equal the catalog's values for the same window_id.",
+      "tolerance": "exact under the manifest's declared storage dtype; the cast (if the manifest stores float32 vs the catalog's float64) is documented in the #48 schema, and equality is checked after that documented cast",
+      "dtype_owner": "https://github.com/JStoschek/DEMAE/issues/48",
+      "implicated_knob": null,
+      "rationale": "This is the only part of E2.1 that carries Phase E information: did E1 write the rows it was told to write. A mismatch is a mis-join/mis-order/recompute bug, not a knob."
+    },
+
+    "E2.1b_drop_selectivity": {
+      "gates": true,
+      "class": "defect",
+      "branch": {
+        "backfill_to_budget": {
+          "test": "materialized set == selected set by construction; nothing to test beyond E2.2b.",
+          "active": false
+        },
+        "accept_shortfall": {
+          "test": "The dropped windows are metric-indistinguishable from retained windows: per-metric Wasserstein-1 distance between dropped and retained (within the frozen vector) below the pre-registered bound.",
+          "threshold": "SET BLIND when #50 lands on accept_shortfall — pending #50's 'measure first' result. Random attrition is harmless; terrain-correlated attrition is bias.",
+          "active": true
+        }
+      },
+      "implicated_knob": null,
+      "rationale": "Under backfill this is tautological. Under shortfall the question is not how many dropped (E2.2) but whether the drops were metric-selective."
+    },
+
+    "E2.1c_pool_ecdf": {
+      "gates": false,
+      "class": "published",
+      "test": "Per-metric ECDF overlay, corpus vs 3,052,735-row kept pool, with Wasserstein-1 distances printed as descriptive labels. Second overlay weights each tile by N_h/n_h (should approximately recover the pool).",
+      "explicitly_never_a_gate": "The corpus is deliberately terrain-diverse, NOT pool-representative (Neyman grants the rarest stratum a 1.8x per-row premium, #42; FSCS spreads within-stratum). 'Matches the pool' is the WRONG success criterion. Published to give the E3 honesty note a number instead of an adjective. No threshold attached."
+    },
+
+    "E2.2a_selection_integrity": {
+      "gates": true,
+      "class": "defect",
+      "test": "The selection list AS THE DRIVER LOADED IT matches Phase D's commit.",
+      "checks": {
+        "md5": "3936840619b20e03a2e4f6e40b966b18",
+        "total": 50000,
+        "per_stratum_counts": "equal to every n_h row in d2-allocation-nh.json",
+        "provenance": {"base": 49330, "floor:coastline": 670}
+      },
+      "tolerance": "zero",
+      "implicated_knob": null,
+      "rationale": "Catches the dull failure nobody plans for: a stale file or rows dropped on parse. Independent of every other decision; costs milliseconds."
+    },
+
+    "E2.2b_materialization_counts": {
+      "gates": true,
+      "class": "defect",
+      "branch": {
+        "backfill_to_budget": {"test": "realized per-stratum counts == n_h exactly; total == 50000", "tolerance": "zero"},
+        "accept_shortfall": {"test": "realized <= selected for every stratum; realized > selected anywhere is an immediate defect (duplication); then E2.2c applies"}
+      },
+      "implicated_knob": null
+    },
+
+    "E2.2c_thin_stratum": {
+      "gates": true,
+      "class": "finding",
+      "test": "Detects the plan's 'a stratum is empty' condition, made reachable. 'Empty' is unreachable (smallest n_h=734; rarest N_h=32229, 64x the floor).",
+      "conditions": {
+        "absolute": "every realized n_h >= 500",
+        "relative": "a stratum trips if BOTH its drop rate >= 3x the corpus-wide drop rate AND it loses >= 2% of its allocation"
+      },
+      "number_provenance": {
+        "500": "reuses #42's max(500, 1%*budget) floor, retained as a non-binding clamp documented structurally inert (smallest Neyman share 1.47% > 1%). If attrition pushes a stratum under 500, that inert clamp becomes retroactively binding — the event worth naming.",
+        "3x_and_2pct": "judgement calls, not derivations. Defensible against #50's near-zero attrition expectation (C1's always-full-res scoring means the catalog's land_std/exact_zero_frac were computed on the same array E1 reads). Conjunction required: a pure ratio detonates on small denominators; the 2% floor (15 windows for the smallest stratum) stops noise from firing."
+      },
+      "implicated_knob": "allocation"
+    },
+
+    "E2.2d_coastal_floor": {
+      "gates": true,
+      "branch": {
+        "backfill_to_budget": {
+          "class": "defect",
+          "test": "realized coastal count == 670 exactly",
+          "tolerance": "zero",
+          "rationale": "A miss means the backfill rule failed."
+        },
+        "accept_shortfall": {
+          "class": "finding",
+          "test": "realized_coastal / realized_total >= 0.01337 (the frame rate, not the count)",
+          "rationale": "670 is a RATE wearing a count's clothes: #42 derived it as coastline's within-frame rate (40,815/3,052,735 = 1.337%; 670/50,000 = 1.340%). If the denominator shrinks, honoring the count would OVER-represent coast; honoring the rate is correct. The realized count is reported in the corpus card as itself, never rounded up to 670, never described as 'met'. A breach means enforce-by-construction at selection does not survive materialization — a design change (select coastal with margin), hence a Finding.",
+          "exposure_note": "Coastline windows are by construction high-zero-fraction — precisely the population most exposed to normalize.py's zero-fill re-screen, so this criterion has real teeth."
+        }
+      },
+      "implicated_knob": "allocation (coastal floor sub-knob)"
+    },
+
+    "E2.3_coverage": {
+      "gates": false,
+      "class": "published",
+      "test": "Per-geo-cell count map + table. Diagnostic: shows WHERE the corpus landed, and is the figure behind the E3 note on deliberate geo-non-uniformity.",
+      "explicitly_never_a_gate": "Any geographic pass condition smuggles geo-uniformity back in, fighting Neyman. A floor-per-cell would force tiles into terrain-redundant cells. A 50k draw over 15,834 COGs (mean 3.16 windows/COG) cannot touch all cells; 'coverage floor' has no reachable value. The 47 hollow cells (#36) are a kept-frame fact, not a corpus prediction.",
+      "guard": {
+        "gates": true,
+        "class": "defect",
+        "test": "no single COG exceeds 64 windows in the materialized corpus",
+        "number_provenance": "reuses #42's retired ADR-0001-era per-COG cap of 64 (retired as inert at debug tier: ~2 windows/COG). As a tripwire it never fires on a healthy corpus (measured max 44, p99 16, mean 3.16); it only fires if materialization concentrated windows in a way selection never intended (broken round-robin, looping COG read, collapsed stratum).",
+        "implicated_knob": null
+      }
+    },
+
+    "E2.4_gallery_coherence": {
+      "gates": true,
+      "class": "finding",
+      "form": "human protocol, not code — see docs/research/e2-gallery-protocol.md",
+      "test": "Per stratum, reviewer marks coherent / mixed / incoherent (do the 12 tiles read as variations on one terrain theme?).",
+      "fail_condition": "any stratum marked incoherent, OR >= 3 strata marked mixed",
+      "disavowed": "Distinguishability (can you tell stratum A from B?) is NOT the gate. #41 found the descriptor space is a continuum, not clumps; adjacent strata blending is expected. A correct k=20 partition of a continuum would fail a distinguishability gate.",
+      "naming_prompt": "Reviewer writes a terrain-family label per stratum. Recorded, not gated — some strata won't have a clean folk name and that's fine. Seeds E3 and ADR-0005 stratum descriptions; feeds the coherence call.",
+      "falsification": "The strata are falsified when the terrain partition is not visually recoverable — a stratum whose members share no terrain theme (incoherent), or enough mixed strata that the partition reads as noise. NOT when neighbours resemble each other.",
+      "implicated_knob": "k (strata)",
+      "fallback": "plan risk #2 — the published Iwahashi 40-cluster global product as an external stratum label (a fresh map, not a repair here)"
+    },
+
+    "E2.5_gate_attrition_bias": {
+      "gates": true,
+      "class": "finding",
+      "build_method": "retroactive centroid assignment — the 1,333,985 dropped windows are still in the catalog (#37: gates are columns) with full metrics but no stratum_id (k-means was fit on survivors only). Score each dropped window against the committed centroids.json + scaler.json to give it the stratum it WOULD have joined, then tabulate drops per (gate x stratum).",
+      "set_blind": "This Phase-C half of the table is computable TODAY from committed artifacts (catalog x centroids), so it contains no Phase E information. Its threshold is therefore set BLIND, on principle, and the table is NOT computed until #52 runs. Peeking first would be rationalization, not pre-registration.",
+      "test": "For each (gate x stratum) pair, fire if BOTH: the gate's within-stratum drop rate >= 3x that same gate's corpus-wide drop rate, AND that gate removes >= 10% of the stratum's would-be (pre-gate) membership.",
+      "number_provenance": {
+        "shape": "conjunction, same as E2.2c: 3x catches concentration, the absolute floor insists the bite is substantial",
+        "10pct_not_2pct": "thinness (E2.2c) is about starvation, where 2% matters; HOLLOWING is a claim about a gate taking a big bite of a terrain family. #36 showed EDM can take >50% of an extreme band, so 10% is where 'hollowed' is honestly the right word.",
+        "baseline": "#36 checked per-geo-cell and per-band and cleared risk #3 ('families and bands all survive'), but could not check per-STRATUM (strata didn't exist yet). E2.5 is the first per-stratum look; the pre-registered expectation is even attrition, so a firing is a genuine surprise."
+      },
+      "implicated_knob": "WBM water cap OR EDM/FLM cap (whichever gate fired)",
+      "graduates_fog": "A firing graduates the map's 'per-stratum quality-gate loosening' fog (Not yet specified) into a fresh map targeting the specific (gate, stratum). Does NOT re-open the global thresholds (Out of scope). If even, the fog 'may graduate into nothing' — recorded here.",
+      "materialization_column": "The published table also shows #50 materialization drops as an additional column beside the Phase-C gates (one place for both attritions, per #50 item 4), but only the Phase-C gate-bias question carries the 3x/10% gate. The materialization-attrition count effect is covered by E2.2c and its metric-selectivity by E2.1b."
+    }
+  },
+
+  "finding_payload_schema": {
+    "note": "Every Finding carries exactly these four fields, emitted mechanically by #52 so the handoff to a fresh map is usable. A Finding names the knob; it does NOT prescribe the new value — that is the fresh map's call.",
+    "fields": {
+      "implicated_knob": "named from the plan §215-228 knob table verbatim (the criterion's pre-assigned knob above). If a criterion can't name a knob from the table, it is a Defect, not a Finding.",
+      "measured_miss": "the statistic and the threshold it crossed, as numbers (e.g. 'stratum 13: EDM within-stratum drop 34%, corpus-wide 6%, ratio 5.7x, absolute loss 22%')",
+      "evidence_pointer": "committed figure/table + notebook cell by path (the manifest Parquet + report under docs/research/ — the corpus shards are gitignored)",
+      "class": "Defect or Finding restated; a Defect payload additionally names the suspected code path"
+    }
+  },
+
+  "verdict_rollup": {
+    "note": "Pre-registered aggregation rule. Emitted by #54 into the E2 report and posted as the resolution comment on the map (#46). This ticket pins the SHAPE; #54 fills the form.",
+    "state_machine": [
+      {"if": "any Defect open", "verdict": "INCOMPLETE", "consequence": "fix, re-run E1/E2, STAY IN MAP; not a Gate E verdict. Finding-level criteria are reported but marked not-yet-adjudicated (cannot judge the design from a corpus known to be mis-built)."},
+      {"elif": "any Finding fired", "verdict": "FAIL", "consequence": "record verdict + payloads, STOP, fresh map. No partial credit — the analyses test different failure modes; one firing is one real design flaw."},
+      {"else": "Defect-clean and zero Findings", "verdict": "PASS", "consequence": "E3 honesty notes (#55) and ADR-0005 (#56) proceed."}
+    ],
+    "rationale": "Leaf thresholds are hard to fudge once they're numbers in a committed file; 'on balance it's basically fine' is easy to fudge — unless the rule that turns leaves into a verdict was itself written before the leaves had values."
+  }
+}
