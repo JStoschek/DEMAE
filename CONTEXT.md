@@ -66,12 +66,36 @@ GitHub issue #1.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.
-- **Manifest** — the per-tile index (id, source COG, lon/lat + region, stratum,
-  mean+std). The stratum's metric basis was the single TRI axis in
+- **Manifest** — the per-tile index: one row per tile **actually on disk**, holding the
+  storage join (`shard_id`, `row_index`), the per-tile land `mean`/`std`, the geography,
+  the `stratum_id` and `provenance` copied from the selection list, and the frozen metric
+  vector and mask fractions **denormalized in** from the gated catalog. The stratum's
+  metric basis was the single TRI axis in
   [ADR-0001](docs/adr/0001-corpus-construction-recipe.md); it is now the **metric
-  vector** ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)), and the final manifest
-  schema follows Phase D's allocation design. **Region is recorded** so a geographic
-  hold-out split is possible in Phase 2 (the split itself is not a Phase-0 decision).
+  vector** ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)), and the v2 schema
+  ([ADR-0002 §3a](docs/adr/0002-storage-format-and-manifest.md)) follows Phase D's
+  allocation design — the column is `stratum_id` (a k=20 label), not the TRI-era
+  `stratum` (a ruggedness quintile), and `tri` is gone. Denormalizing makes the manifest
+  **self-contained**: reading the corpus needs no second file. **Region is recorded** so a
+  geographic hold-out split is possible in Phase 2 (the split itself is not a Phase-0
+  decision).
+- **Materialization** — the pass that turns the selection list into the corpus: read each
+  selected window at full resolution, screen it, store it as int16, index it. Run by
+  `dataset.materialize` (Phase E1), which is the only stage that reads full-res pixels in
+  bulk. Distinct from **scoring** (`dataset.catalog`), which measures every window in the
+  world but stores none.
+- **Attrition contract** — what happens when a *selected* window fails at full res.
+  Settled as **`accept_shortfall`**: the failure is recorded and **never backfilled**, so
+  the corpus is "50,000 selected, N materialized" rather than 50,000 by construction.
+  Backfilling was rejected because it would write window ids absent from the committed
+  selection list — and that list, not the seed, is the determinism contract. The string
+  is recorded in `corpus_meta.json` because Gate E's pre-registered bar branches on it.
+- **Materialization ledger** — one row per **selected** window (all 50,000) recording what
+  became of it: `ok`, or the cause it was dropped (`zero_fill`, `no_land`, `degenerate`,
+  `read_error`). The manifest holds the survivors; the ledger holds the account. It is
+  **committed** because, unlike the shards and the manifest, it cannot be re-derived from
+  committed inputs — knowing which windows failed requires the full-res read. Its
+  `status == 'ok'` set is exactly the manifest's tile set, by asserted invariant.
 - **Shard / storage format** — how normalized tiles are persisted for the Phase-1
   dataloader; chosen for streaming-read throughput (the plan's #1 risk: I/O
   starving the GPU).

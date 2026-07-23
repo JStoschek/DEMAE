@@ -13,7 +13,16 @@ dist/
 .ipynb_checkpoints/
 
 # Data — the corpus and any cached COGs are large and reproducible; never commit
-data/
+# `data/*` rather than `data/`: git cannot re-include anything under an excluded
+# *directory*, and the corpus index below has to be re-included (issue #51).
+data/*
+# The corpus's shards are ~5 GB and rebuildable from the committed selection list,
+# but the manifest and the corpus card *describe* the build — they are what the model
+# card, the E2 report and the Gate-E review read, so they ship.
+!data/corpus_50k/
+data/corpus_50k/*
+!data/corpus_50k/manifest.parquet
+!data/corpus_50k/corpus_meta.json
 tiles/
 shards/
 *.tif
