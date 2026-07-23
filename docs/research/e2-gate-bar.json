@@ -14,7 +14,13 @@
     "note": "Several count criteria have two variants keyed on issue #50 (the materialization attrition contract), which was open when this bar was written. #50's answer does not set thresholds; it selects which pre-committed branch is live. The notebook reads the live contract from corpus_meta.json.",
     "branches": ["backfill_to_budget", "accept_shortfall"],
     "live_contract_source": "corpus_meta.json:attrition_contract",
-    "cross_reference": "https://github.com/JStoschek/DEMAE/issues/50"
+    "cross_reference": "https://github.com/JStoschek/DEMAE/issues/50",
+    "resolved": {
+      "date": "2026-07-23",
+      "live_branch": "accept_shortfall",
+      "ticket": "https://github.com/JStoschek/DEMAE/issues/50",
+      "note": "#50 selected accept_shortfall: a window that fails at full res is recorded, never backfilled. The committed selection list stays the contract, so the corpus is '50,000 selected, N materialized'. Backfill was rejected because it would write window_ids absent from selection_debug_50k.csv (md5 3936840619...), and would require designing a within-stratum runner-up rule with geo-cell fall-through (#43) plus a new determinism surface. The re-screens in normalize.py are KEPT (ADR-0002 unamended); attrition is screen drops plus read failures. Per-window causes live in artifacts/phase_e/materialization_ledger.parquet."
+    }
   },
 
   "committed_inputs": {
@@ -60,7 +66,17 @@
         },
         "accept_shortfall": {
           "test": "The dropped windows are metric-indistinguishable from retained windows: per-metric Wasserstein-1 distance between dropped and retained (within the frozen vector) below the pre-registered bound.",
-          "threshold": "SET BLIND when #50 lands on accept_shortfall — pending #50's 'measure first' result. Random attrition is harmless; terrain-correlated attrition is bias.",
+          "threshold": {
+            "form": "A RULE, not a number. Pinned 2026-07-23 by #50, before the corpus, the E2 report or the gallery exist. Random attrition is harmless; terrain-correlated attrition is bias.",
+            "why_a_rule": "#50 chose accept_shortfall WITHOUT a pre-measurement (its 'measure first' clause was retired: the measurement existed to choose backfill-vs-shortfall, and the chosen branch is robust to any magnitude). So there is no observed attrition to calibrate a number against — and calibrating one against the real drops would be exactly the peeking this file forbids. A rule keyed only on the drop COUNT is blind by construction.",
+            "statistic": "per-metric Wasserstein-1 distance between the dropped set (size D) and the retained set, over the 6 frozen metrics",
+            "null_model": "Attrition is random with respect to terrain. Draw a random size-D subset from the 50,000 SELECTED windows' committed catalog metrics, compute W1 against its complement, per frozen metric; repeat to build the null. D is the realized drop count read off the materialization ledger.",
+            "fire_if": "any one of the 6 metrics' observed W1 exceeds the 99th percentile of its own null distribution",
+            "permutations": 10000,
+            "seed": "fixed and recorded in the E2 notebook. At n=10000 the 99th-percentile quantile is smooth, so the verdict does not turn on the seed; the seed is for byte-reproduction of the printed number, not for the pass/fail call.",
+            "blindness": "The rule depends only on HOW MANY windows dropped, never on WHICH. It needs no corpus read — the null runs entirely off the committed gated catalog — so the threshold materializes at report time without anyone having seen the drops.",
+            "set_by": "https://github.com/JStoschek/DEMAE/issues/50"
+          },
           "active": true
         }
       },
