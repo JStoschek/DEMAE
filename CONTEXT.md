@@ -96,6 +96,25 @@ GitHub issue #1.
   **committed** because, unlike the shards and the manifest, it cannot be re-derived from
   committed inputs — knowing which windows failed requires the full-res read. Its
   `status == 'ok'` set is exactly the manifest's tile set, by asserted invariant.
+- **Pre-registered bar** — Gate E's pass/fail criteria, committed to
+  [`e2-gate-bar.json`](docs/research/e2-gate-bar.json) *before* the corpus, the E2 report or
+  the gallery existed, so the review cannot rationalize whatever the numbers turn out to be.
+  Two failure classes, pinned per criterion: a **Defect** (the corpus does not implement its
+  own committed inputs — fix, re-run, stay in the map) versus a **Finding** (the corpus is
+  faithful and the *design* is wrong — record, stop, fresh map on the implicated knob).
+  `dataset.validate` carries each registered number as a module constant beside the bar
+  phrase it was registered in, and **refuses to load a bar whose prose no longer states
+  it** — so a threshold cannot move in the committed file without the report failing
+  loudly. Choosing a denominator, population, or tolerance *after* seeing which choice
+  fires is the peeking the whole arrangement exists to prevent; where such a choice is
+  genuinely open, the alternative is published as a sensitivity, never as a second verdict.
+- **Would-be stratum** — the stratum a *gate-dropped* window would have joined, obtained by
+  scoring it against the committed `centroids.json` + `scaler.json`. k-means was fit on
+  survivors only, so dropped rows carry full metrics and no `stratum_id`; retroactive
+  assignment is what makes a per-(gate × stratum) attrition table possible at all (E2.5).
+  Exact for kept rows too, since `centroids.assign` is the same pure argmin the sampler
+  labelled them with. A window with a NaN metric — no land to measure — has no would-be
+  stratum and is counted outside the table rather than imputed into a terrain family.
 - **Shard / storage format** — how normalized tiles are persisted for the Phase-1
   dataloader; chosen for streaming-read throughput (the plan's #1 risk: I/O
   starving the GPU).

@@ -27,6 +27,7 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0004). Stage map
 - :mod:`dataset.shards`     — sharded int16 memmap storage (§5b)
 - :mod:`dataset.manifest`   — Parquet index + corpus_meta.json fingerprint (§5a)
 - :mod:`dataset.materialize`— the driver: selection list -> shards + manifest + ledger (#51)
+- :mod:`dataset.validate`   — Gate E's pre-registered criteria as executable rules (#52)
 - :mod:`dataset.concurrency`— the bounded, order-preserving parallel-read primitive (#38)
 - :mod:`dataset.provenance` — git SHA + snapshot date stamped into every artifact
 - :mod:`dataset.loader`     — Phase-1 torch read path (imports torch lazily)
