@@ -49,10 +49,17 @@ selection list; not yet built). The ADR-0001 TRI-quintile build CLI it replaces
 uv run jupyter lab notebooks/visualize_corpus.ipynb
 ```
 
-[`notebooks/visualize_corpus.ipynb`](notebooks/visualize_corpus.ipynb) renders
-sampled terrain tiles, the stratification distribution, and before/after per-tile
-normalization. (It predates the ADR-0004 metric basis and the retirement of the
-TRI-quintile build path, and is pending a refresh to the current pipeline.)
+[`notebooks/visualize_corpus.ipynb`](notebooks/visualize_corpus.ipynb) renders the
+drawn selection: the k=20 stratum centroids in raw metric units, per-stratum occupancy
+against the Neyman allocation, the selection list (geo-cell spread, windows per COG,
+where the 50k land on the globe), and before/after per-tile normalization through
+`dataset.loader`.
+
+It runs top-to-bottom on a fresh clone with **no network and no corpus**: the strata and
+the selection come from the committed artifacts (`artifacts/phase_d/`,
+`docs/research/d4-selection.json`), and the read-path figures come from a seeded 9-tile
+shard fixture the notebook builds itself — the end-to-end materialize is Phase E and is
+not built yet. Point `CORPUS_DIR` at a materialized corpus to render that instead.
 
 ## Reproduce on a rented box
 
