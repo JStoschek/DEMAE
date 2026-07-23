@@ -57,6 +57,7 @@ from .geometry import (
     CogRef,
     grid_windows,
     lat_band,
+    make_window_id,
     pixel_spacing_m,
     window_center_lonlat,
 )
@@ -255,8 +256,8 @@ class WindowRow:
 
     @property
     def window_id(self) -> str:
-        """A stable id for this window: ``<stem>:<row0>:<col0>``."""
-        return f"{self.stem}:{self.win_row0}:{self.win_col0}"
+        """A stable id for this window: ``<stem>:<row0>:<col0>`` (see `geometry`)."""
+        return make_window_id(self.stem, self.win_row0, self.win_col0)
 
 
 # --- Per-COG scoring (the parallel read unit) ---------------------------------

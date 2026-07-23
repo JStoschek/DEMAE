@@ -35,6 +35,31 @@ def test_land_stats_ignore_ocean_pixels():
     assert std == pytest.approx(np.std([10.0, 20.0, 30.0]))
 
 
+def test_land_moments_are_additive_and_recover_the_pooled_mean_and_std():
+    """The corpus-wide μ/σ accumulator: three numbers that sum across tiles."""
+    a = np.array([[0, 10], [20, 30]], dtype=np.int16)
+    b = np.array([[40, 0], [0, 60]], dtype=np.int16)
+
+    s, sq, n = normalize.land_moments(a)
+    assert (s, sq, n) == (60.0, 10**2 + 20**2 + 30**2, 3)
+
+    # summing the parts must equal measuring the whole
+    s2, sq2, n2 = normalize.land_moments(b)
+    land = np.concatenate([a[a != 0], b[b != 0]]).astype(np.float64)
+    total = n + n2
+    assert total == land.size
+    mean = (s + s2) / total
+    assert mean == pytest.approx(land.mean())
+    assert np.sqrt((sq + sq2) / total - mean**2) == pytest.approx(land.std())
+
+
+def test_land_moments_uses_the_same_land_mask_as_land_stats():
+    a = np.array([[0, 10], [20, 30]], dtype=np.int16)
+    s, _, n = normalize.land_moments(a)
+    mean, _ = normalize.land_stats(a.astype(np.float32), normalize.land_mask(a))
+    assert s / n == pytest.approx(mean)
+
+
 def test_to_int16_rounds_to_nearest_metre():
     a = np.array([1.4, 1.6, -2.5, 8999.9], dtype=np.float32)
     i16 = normalize.to_int16(a)

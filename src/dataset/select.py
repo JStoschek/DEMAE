@@ -66,6 +66,7 @@ from typing import Any, Final, NamedTuple
 import numpy as np
 
 from . import catalog, centroids as centroids_mod, config, frame as frame_mod
+from .geometry import window_id_stem
 from .sampling import _shuffle_key
 
 # --- The two-value provenance vocabulary (#42 §4) -----------------------------
@@ -99,7 +100,7 @@ FLOOR_CLAMP_FRAC: Final = 0.01
 #: Where the shipped debug-tier selection list lives. Committed — ``data/`` is gitignored
 #: and this file *is* the determinism contract, re-loaded by Phase E1 rather than
 #: regenerated. CSV, sorted, so a re-run diffs byte-for-byte in git.
-SELECTION_PATH: Final = Path("artifacts/phase_d/selection_debug_50k.csv")
+SELECTION_PATH: Final = Path(config.SELECTION_PATH)
 
 #: Lloyd (full batch), matching the centroid fit and #43's pricing — MiniBatch is the
 #: named fallback only if a Phase-F budget ever makes Lloyd's cost bite (it does not
@@ -514,7 +515,7 @@ class Selection:
 
     def cog_stems(self) -> np.ndarray:
         """The source COG stem of each selected window (``window_id`` is ``stem:row:col``)."""
-        return np.array([w.rsplit(":", 2)[0] for w in self.window_id], dtype=object)
+        return np.array([window_id_stem(w) for w in self.window_id], dtype=object)
 
     def per_cog_distribution(self) -> dict[str, Any]:
         """Realized windows-per-COG distribution — the metric #42 requires at every tier.

@@ -75,6 +75,12 @@ ROWS_PER_SHARD: Final = SHARD_TARGET_BYTES // _TILE_BYTES  # ~14,946
 # (#42). The three TRI-era constants that lived here — N_STRATA, PER_STRATUM_QUOTA,
 # PER_TILE_WINDOW_CAP — went with dataset.stratify.
 
+# --- Phase-D handoff (issue #44) ----------------------------------------------
+# The committed selection list: the 50,000 windows the debug tier materializes, and
+# *the* determinism contract — not the seed (#43/#44). `dataset.select` writes it and
+# `dataset.materialize` reads it, so the path is named once here rather than in both.
+SELECTION_PATH: Final = "artifacts/phase_d/selection_debug_50k.csv"
+
 # --- Materialization attrition (issue #50) ------------------------------------
 # What happens when a *selected* window fails at full res. `accept_shortfall`: it is
 # recorded in the materialization ledger and never backfilled, so the corpus is

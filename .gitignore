@@ -14,8 +14,11 @@ dist/
 
 # Data — the corpus and any cached COGs are large and reproducible; never commit
 # `data/*` rather than `data/`: git cannot re-include anything under an excluded
-# *directory*, and the corpus index below has to be re-included (issue #51).
+# *directory*, and the corpus index below has to be re-included (issue #51). Note the
+# side effect — a pattern containing a slash is anchored to this file's directory,
+# where bare `data/` matched at any depth, so `notebooks/data/` needs its own line.
 data/*
+notebooks/data/
 # The corpus's shards are ~5 GB and rebuildable from the committed selection list,
 # but the manifest and the corpus card *describe* the build — they are what the model
 # card, the E2 report and the Gate-E review read, so they ship.

@@ -338,6 +338,24 @@ def test_result_reports_the_counts_the_ticket_asks_for(build):
     assert sum(result.per_stratum.values()) == result.n_tiles
     assert result.shard_bytes > 0
     assert result.n_cogs == len(_STEMS)
+    # every number the ticket's closing line asks for reaches the printed report
+    printed = "\n".join(result.summary_lines())
+    for stratum_id, count in result.per_stratum.items():
+        assert f"{stratum_id}:{count}" in printed
+    assert f"{result.n_shards} shard" in printed
+    assert "s/COG" in printed  # the unit E1's projection is stated in
+
+
+def test_wall_clock_accumulates_across_a_resumed_run(build):
+    """The ticket compares wall clock against E1's projection; a resumed run that
+    reported only its final leg would flatter the comparison."""
+    with pytest.raises(KeyboardInterrupt):
+        _run(build, reader=_DyingReader(build.reader, after=2), checkpoint_every=1)
+    first = json.loads((build.out_dir / "build_state.json").read_text())["elapsed_s"]
+    assert first > 0
+
+    result = _run(build)
+    assert result.wall_s > first
 
 
 # --- Read failures ------------------------------------------------------------
@@ -387,6 +405,56 @@ def test_a_permanent_read_failure_is_booked_with_its_cause(build):
     # the failed COG's windows leave the corpus, on top of the fixture's screen drops
     assert result.status_counts["read_error"] == 3
     assert result.n_tiles == result.status_counts["ok"] == len(build.rows) - 3 - 2
+
+
+def test_a_read_error_cog_is_retryable_on_a_later_run(build):
+    """``accept_shortfall`` forbids backfilling a *different* window — it does not ask
+    us to abandon a selected one to a transient blip. So the failure is booked, and
+    the COG that produced it stays re-runnable."""
+    reader = _FlakyReader(build.reader, [_STEMS[0]])
+    first = _run(build, reader=reader, read_attempts=1)
+    assert first.status_counts["read_error"] == 3
+
+    healed = _run(build, retry_read_errors=True)
+    assert healed.status_counts.get("read_error", 0) == 0
+    assert healed.n_cogs == 1  # only the failed COG is re-read
+    ids = [r["window_id"] for r in _ledger(build.ledger)]
+    assert len(ids) == len(set(ids)) == len(build.rows)
+    assert healed.n_tiles == len(_manifest(build.out_dir))
+
+
+def test_retry_is_opt_in(build):
+    _run(build, reader=_FlakyReader(build.reader, [_STEMS[0]]), read_attempts=1)
+    again = _run(build)
+    assert again.n_cogs == 0
+    assert again.status_counts["read_error"] == 3
+
+
+def test_a_healed_corpus_still_matches_the_ledger(build):
+    _run(build, reader=_FlakyReader(build.reader, [_STEMS[0]]), read_attempts=1)
+    result = _run(build, retry_read_errors=True)
+    ok = {r["window_id"] for r in _ledger(build.ledger) if r["status"] == "ok"}
+    assert ok == {materialize.window_id_of(r) for r in _manifest(build.out_dir)}
+    assert result.n_tiles == len(ok)
+
+
+def test_the_ledger_is_sorted_so_a_retry_run_reproduces_it(build, tmp_path):
+    """The manifest's row order is the shard's and cannot move; the ledger's can, so
+    it is sorted — a corpus healed by a retry ships the same ledger as a clean one."""
+    clean = _run(build, out_dir=tmp_path / "c", ledger=tmp_path / "c.parquet")
+
+    _run(
+        build,
+        reader=_FlakyReader(build.reader, [_STEMS[0]]),
+        read_attempts=1,
+        out_dir=tmp_path / "h",
+        ledger=tmp_path / "h.parquet",
+    )
+    healed = _run(build, out_dir=tmp_path / "h", ledger=tmp_path / "h.parquet",
+                  retry_read_errors=True)
+
+    assert _ledger(tmp_path / "c.parquet") == _ledger(tmp_path / "h.parquet")
+    assert healed.n_tiles == clean.n_tiles
 
 
 def test_detail_is_null_for_everything_but_a_read_error(build):

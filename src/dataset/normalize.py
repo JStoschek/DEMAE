@@ -49,6 +49,22 @@ def land_stats(a: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
     return float(land.mean()), float(land.std())
 
 
+def land_moments(a: np.ndarray) -> tuple[float, float, int]:
+    """Land-pixel ``(sum, sum of squares, count)`` — the corpus-wide μ/σ accumulator.
+
+    ADR-0003's ``global`` normalization mode needs one mean and one std over *every*
+    land pixel in the corpus, and a second pass over 5 GB to get two floats would be
+    absurd. These three numbers are additive, so the driver accumulates them per tile
+    as it writes and divides once at the end.
+
+    It lives beside :func:`land_stats` rather than in the driver because both answer
+    "what do the land pixels say", and both must agree on which pixels those are —
+    :func:`land_mask`'s, not a second inlined ``!= 0``.
+    """
+    land = a[land_mask(a)].astype(np.float64)
+    return float(land.sum()), float(np.square(land).sum()), int(land.size)
+
+
 def to_int16(a: np.ndarray) -> np.ndarray:
     """Round to the nearest metre and cast to int16 (the storage dtype).
 
@@ -103,6 +119,7 @@ __all__ = [
     "plausibility_clip",
     "land_mask",
     "land_stats",
+    "land_moments",
     "to_int16",
     "prepare_tile",
 ]

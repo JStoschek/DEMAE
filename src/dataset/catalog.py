@@ -114,18 +114,33 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 if TYPE_CHECKING:  # pyarrow is imported lazily — only the writer needs it
-    from concurrent.futures import Executor
-
     import pyarrow as pa
 
 from . import config
 from .calibration import _window_slices
-from .geometry import CogRef, grid_windows, lat_band, pixel_spacing_m, window_center_lonlat
+# Re-exported, not merely used: the worker-count constants were *measured* on this
+# pass (#38) and callers — the throughput notebook, the tests — name them here.
+from .concurrency import (
+    MAX_DEFAULT_WORKERS as MAX_DEFAULT_WORKERS,
+    THREAD_GIL_KNEE as THREAD_GIL_KNEE,
+    WORKERS_PER_CORE as WORKERS_PER_CORE,
+    ExecutorKind as ExecutorKind,
+    default_workers as default_workers,
+    make_executor as _make_executor,
+)
+from .geometry import (
+    CogRef,
+    grid_windows,
+    lat_band,
+    make_window_id,
+    pixel_spacing_m,
+    window_center_lonlat,
+)
 from .masks import MaskNotFound, MaskReader
 from .metrics import METRICS, land_mask
 from .normalize import land_stats
@@ -377,8 +392,8 @@ class CatalogRow:
 
     @property
     def window_id(self) -> str:
-        """A stable id for this window: ``<stem>:<row0>:<col0>``."""
-        return f"{self.stem}:{self.win_row0}:{self.win_col0}"
+        """A stable id for this window: ``<stem>:<row0>:<col0>`` (see `geometry`)."""
+        return make_window_id(self.stem, self.win_row0, self.win_col0)
 
 
 # --- Per-COG scoring (the parallel read unit) ---------------------------------
@@ -662,88 +677,11 @@ def _discard_orphan_parts(out_dir: Path, next_part: int) -> list[Path]:
 # --- The scan driver ----------------------------------------------------------
 
 
-#: How a :func:`scan` fans its per-COG work out. ``"process"`` is what the global
-#: pass runs on (#38); ``"thread"`` is the in-process path — see :func:`_make_executor`.
-ExecutorKind = Literal["thread", "process"]
-
-#: Mild oversubscription: a worker blocked on an S3 read leaves its core idle, and
-#: another worker's compute fills it. Measured, not assumed — see :func:`default_workers`.
-WORKERS_PER_CORE: Final = 2
-#: The top of the measured curve on the dev box, and where its memory stops being
-#: free: a worker peaks at 337 MB (measured RSS), so 16 is ~5.4 GB resident. A
-#: *default*, not a limit — an explicit ``workers=`` is taken at its word, and a
-#: bigger or same-region box should re-measure before raising it.
-MAX_DEFAULT_WORKERS: Final = 16
-#: Where thread scaling flattens: measured 2.56 → 2.27 → 2.37 s/COG at 4, 8 and 16
-#: threads, so 8 is the top and 16 is already the far side of it (issue #38).
-THREAD_GIL_KNEE: Final = 8
-
-
-def _check_executor(kind: str) -> ExecutorKind:
-    """Reject an unknown executor at the first gate rather than the last.
-
-    Both :func:`default_workers` and :func:`_make_executor` branch on the kind, and
-    :func:`scan` calls them in that order — so without this the bad value would get a
-    plausible worker count before anything complained.
-    """
-    if kind not in ("thread", "process"):
-        raise ValueError(f"unknown executor {kind!r}; expected 'thread' or 'process'")
-    return kind  # type: ignore[return-value]
-
-
-def default_workers(kind: ExecutorKind = "process") -> int:
-    """How many COGs to score in parallel — measured on this box, not assumed (#38).
-
-    C1's projection divided a *serial* per-COG cost by 16 workers, which assumed
-    linear thread scaling. Scoring is dominated by numpy neighbourhood compute under
-    the GIL, so the two executors want very different counts, and neither wants 16.
-    One sweep, 24 spread COGs per config on the dev box (8 logical cores), against a
-    measured serial baseline of 5.51 s/COG (``docs/research/c3-throughput.json``):
-
-    - **thread** — 2.56 @4, 2.27 @8, 2.37 @16. Best case **2.4x**, reached at 8 and
-      given back by 16. Extra threads past :data:`THREAD_GIL_KNEE` buy contention.
-    - **process** — 1.89 @4, 1.22 @6, 1.12 @8, 1.11 @12, 0.87 @16, 0.94 @20. Best
-      case **6.3x**, and it keeps improving *past* the core count because a worker
-      waiting on a COG read is not using one. It turns over at ~2.5x cores, hence
-      :data:`WORKERS_PER_CORE` capped at :data:`MAX_DEFAULT_WORKERS`.
-
-    The oversubscription is transport-dependent: this box is in the US and the bucket
-    is in ``eu-central-1``, so there is a lot of read latency to hide. A same-region
-    run has less, and its knee will sit nearer the core count — re-measure with
-    ``notebooks/c3_throughput.py`` rather than porting this number.
-
-    ``os.process_cpu_count()`` (3.13+) respects an affinity mask or a container CPU
-    limit; ``os.cpu_count()`` is the 3.12 fallback. Both count *logical* cores, so on
-    an asymmetric box (this dev machine: 6P + 2E) the E-cores are included — they
-    contribute, just less, and mild oversubscription absorbs the difference anyway.
-    """
-    cores = getattr(os, "process_cpu_count", os.cpu_count)() or 1
-    if _check_executor(kind) == "thread":
-        return min(THREAD_GIL_KNEE, cores)
-    return max(1, min(WORKERS_PER_CORE * cores, MAX_DEFAULT_WORKERS))
-
-
-def _make_executor(kind: ExecutorKind, workers: int) -> Executor:
-    """Build the pool ``scan`` fans across — the one place the two paths differ.
-
-    Processes are forced onto the **spawn** start method rather than taking the
-    platform default. macOS spawns anyway, but the production run is a rented Linux
-    box where the default is fork, and forking a parent that has already opened GDAL
-    handles and a boto3 client inherits both into a child that must not share them.
-    Spawning everywhere means the box that runs the pass behaves like the box the
-    pass was measured on.
-    """
-    if _check_executor(kind) == "thread":
-        from concurrent.futures import ThreadPoolExecutor
-
-        return ThreadPoolExecutor(max_workers=workers)
-
-    import multiprocessing
-    from concurrent.futures import ProcessPoolExecutor
-
-    return ProcessPoolExecutor(
-        max_workers=workers, mp_context=multiprocessing.get_context("spawn")
-    )
+# How this pass fans its per-COG work out, and how wide, both live in
+# `dataset.concurrency` — they are pure scheduling, shared with the Phase-E read pass,
+# and owe nothing to how a corpus is scored. `ExecutorKind`, `default_workers` and the
+# worker-count constants are imported at the top of this module and re-exported, because
+# the measurements behind them were taken on *this* pass (#38) and callers name them here.
 
 
 @dataclass(frozen=True)

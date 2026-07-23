@@ -10,9 +10,10 @@ corpus is stratified.
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from concurrent.futures import Executor, Future
-from typing import Callable, Iterable, Iterator, TypeVar
+from typing import Callable, Final, Iterable, Iterator, Literal, TypeVar
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -52,3 +53,90 @@ def ordered_futures(
         nxt = next(it, None)
         if nxt is not None:
             pending.append((nxt, ex.submit(fn, nxt)))
+
+
+# --- Which pool, and how wide (#38, and re-measured for the read pass by #49) ------
+
+#: How a pass fans its per-COG work out. Both live-read stages take it as an argument:
+#: ``"process"`` is what each one actually runs on, ``"thread"`` is the in-process path
+#: a caller with an injected, unpicklable reader needs — see :func:`make_executor`.
+ExecutorKind = Literal["thread", "process"]
+
+#: Mild oversubscription: a worker blocked on an S3 read leaves its core idle, and
+#: another worker's compute fills it. Measured, not assumed — see :func:`default_workers`.
+WORKERS_PER_CORE: Final = 2
+#: The top of the measured curve on the dev box, and where its memory stops being
+#: free: a worker peaks at 337 MB (measured RSS), so 16 is ~5.4 GB resident. A
+#: *default*, not a limit — an explicit ``workers=`` is taken at its word, and a
+#: bigger or same-region box should re-measure before raising it.
+MAX_DEFAULT_WORKERS: Final = 16
+#: Where thread scaling flattens: measured 2.56 → 2.27 → 2.37 s/COG at 4, 8 and 16
+#: threads, so 8 is the top and 16 is already the far side of it (issue #38).
+THREAD_GIL_KNEE: Final = 8
+
+
+def _check_executor(kind: str) -> ExecutorKind:
+    """Reject an unknown executor at the first gate rather than the last.
+
+    Both :func:`default_workers` and :func:`make_executor` branch on the kind, and
+    :func:`scan` calls them in that order — so without this the bad value would get a
+    plausible worker count before anything complained.
+    """
+    if kind not in ("thread", "process"):
+        raise ValueError(f"unknown executor {kind!r}; expected 'thread' or 'process'")
+    return kind  # type: ignore[return-value]
+
+
+def default_workers(kind: ExecutorKind = "process") -> int:
+    """How many COGs to score in parallel — measured on this box, not assumed (#38).
+
+    C1's projection divided a *serial* per-COG cost by 16 workers, which assumed
+    linear thread scaling. Scoring is dominated by numpy neighbourhood compute under
+    the GIL, so the two executors want very different counts, and neither wants 16.
+    One sweep, 24 spread COGs per config on the dev box (8 logical cores), against a
+    measured serial baseline of 5.51 s/COG (``docs/research/c3-throughput.json``):
+
+    - **thread** — 2.56 @4, 2.27 @8, 2.37 @16. Best case **2.4x**, reached at 8 and
+      given back by 16. Extra threads past :data:`THREAD_GIL_KNEE` buy contention.
+    - **process** — 1.89 @4, 1.22 @6, 1.12 @8, 1.11 @12, 0.87 @16, 0.94 @20. Best
+      case **6.3x**, and it keeps improving *past* the core count because a worker
+      waiting on a COG read is not using one. It turns over at ~2.5x cores, hence
+      :data:`WORKERS_PER_CORE` capped at :data:`MAX_DEFAULT_WORKERS`.
+
+    The oversubscription is transport-dependent: this box is in the US and the bucket
+    is in ``eu-central-1``, so there is a lot of read latency to hide. A same-region
+    run has less, and its knee will sit nearer the core count — re-measure with
+    ``notebooks/c3_throughput.py`` rather than porting this number.
+
+    ``os.process_cpu_count()`` (3.13+) respects an affinity mask or a container CPU
+    limit; ``os.cpu_count()`` is the 3.12 fallback. Both count *logical* cores, so on
+    an asymmetric box (this dev machine: 6P + 2E) the E-cores are included — they
+    contribute, just less, and mild oversubscription absorbs the difference anyway.
+    """
+    cores = getattr(os, "process_cpu_count", os.cpu_count)() or 1
+    if _check_executor(kind) == "thread":
+        return min(THREAD_GIL_KNEE, cores)
+    return max(1, min(WORKERS_PER_CORE * cores, MAX_DEFAULT_WORKERS))
+
+
+def make_executor(kind: ExecutorKind, workers: int) -> Executor:
+    """Build the pool a caller fans across — the one place the two paths differ.
+
+    Processes are forced onto the **spawn** start method rather than taking the
+    platform default. macOS spawns anyway, but the production run is a rented Linux
+    box where the default is fork, and forking a parent that has already opened GDAL
+    handles and a boto3 client inherits both into a child that must not share them.
+    Spawning everywhere means the box that runs the pass behaves like the box the
+    pass was measured on.
+    """
+    if _check_executor(kind) == "thread":
+        from concurrent.futures import ThreadPoolExecutor
+
+        return ThreadPoolExecutor(max_workers=workers)
+
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    return ProcessPoolExecutor(
+        max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+    )

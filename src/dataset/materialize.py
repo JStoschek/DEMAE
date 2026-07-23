@@ -56,16 +56,17 @@ from typing import Any, Callable, Final, Sequence
 import numpy as np
 
 from . import config, manifest, normalize
-from .catalog import FROZEN_METRICS, META_FILE, PARTS_DIR, ExecutorKind
-from .catalog import default_workers as _default_workers
-from .geometry import parse_cog_key
+from .catalog import FROZEN_METRICS, META_FILE, PARTS_DIR
+from .concurrency import ExecutorKind, default_workers, make_executor
+from .geometry import make_window_id, parse_cog_key, parse_window_id
 from .shards import ShardState, ShardWriter
 from .tiling import CogReader
 
 # --- Committed paths ----------------------------------------------------------
 
-#: Phase D's committed selection list — the determinism contract (#44).
-SELECTION_PATH: Final = Path("artifacts/phase_d/selection_debug_50k.csv")
+#: Phase D's committed selection list — the determinism contract (#44). The literal
+#: lives in `config` so this stage and `dataset.select`, which writes it, cannot drift.
+SELECTION_PATH: Final = Path(config.SELECTION_PATH)
 #: The Phase-D provenance chain the corpus card records (#48 / ADR-0002 §3a).
 CENTROIDS_PATH: Final = Path("artifacts/phase_d/centroids.json")
 SCALER_PATH: Final = Path("artifacts/phase_d/scaler.json")
@@ -122,9 +123,10 @@ MAX_CONSECUTIVE_READ_ERRORS: Final = 50
 class ReadOutage(RuntimeError):
     """Too many consecutive COGs failed — the transport is down, not the corpus.
 
-    Raised *before* the failures are committed, so a resumed run re-reads them rather
-    than inheriting a ledger full of permanent ``read_error`` rows written during a
-    dropped network connection.
+    Raised before *this* streak is committed, so at most the failures a checkpoint
+    happened to catch mid-streak survive the abort — and those stay retryable, which
+    is what :data:`BuildState.read_error_cogs` is for. Without the breaker a dropped
+    connection would book all 15,834 COGs dead in a tight loop.
     """
 
 
@@ -153,17 +155,6 @@ class CogJob:
     @property
     def origins(self) -> list[tuple[int, int]]:
         return [(w.win_row0, w.win_col0) for w in self.windows]
-
-
-def parse_window_id(window_id: str) -> tuple[str, int, int]:
-    """``"<stem>:<row0>:<col0>"`` -> ``(stem, row0, col0)``."""
-    stem, row0, col0 = window_id.rsplit(":", 2)
-    return stem, int(row0), int(col0)
-
-
-def make_window_id(stem: str, win_row0: int, win_col0: int) -> str:
-    """The catalog's window id for a window — the ledger's key and the join key."""
-    return f"{stem}:{win_row0}:{win_col0}"
 
 
 def window_id_of(manifest_row: dict) -> str:
@@ -347,7 +338,7 @@ def read_cog(
         if prepared is None:
             out.append(WindowOutcome(window_id=selected.window_id, status=reason))
             continue
-        land = prepared.raw_i16[prepared.raw_i16 != config.OCEAN_FILL_VALUE].astype(np.float64)
+        land_sum, land_sqsum, land_count = normalize.land_moments(prepared.raw_i16)
         out.append(
             WindowOutcome(
                 window_id=selected.window_id,
@@ -356,9 +347,9 @@ def read_cog(
                 mean=prepared.mean,
                 std=prepared.std,
                 land_frac=prepared.land_frac,
-                land_sum=float(land.sum()),
-                land_sqsum=float(np.square(land).sum()),
-                land_count=int(land.size),
+                land_sum=land_sum,
+                land_sqsum=land_sqsum,
+                land_count=land_count,
             )
         )
     return out
@@ -427,11 +418,20 @@ class BuildState:
     ``n_cogs_done`` is an *index into the job list*, not a set of stems, and that is
     only sound because completion is a strict prefix: :func:`ordered_futures` consumes
     COGs in input order and every COG reaches a terminal state when it is consumed
-    (``read_error`` is terminal under ``accept_shortfall``), so there is never a hole
-    behind the frontier. ``selection_md5`` and ``n_cogs_total`` guard the assumption —
-    a job list that changed underneath the state makes the index meaningless, so the
-    resume refuses instead of writing a corpus that is half one selection and half
-    another.
+    (``read_error`` included), so there is never a hole behind the frontier.
+    ``selection_md5`` and ``n_cogs_total`` guard the assumption — a job list that
+    changed underneath the state makes the index meaningless, so the resume refuses
+    instead of writing a corpus that is half one selection and half another.
+
+    ``read_error_cogs`` is the exception the frontier cannot express: the job indices
+    of COGs that were booked failed. They sit *behind* the frontier, so a plain resume
+    steps over them, and ``--retry-read-errors`` is what brings them back. Keeping them
+    named is the difference between "this window failed" and "this window is lost":
+    ``accept_shortfall`` (#50) forbids backfilling a *different* window, and says
+    nothing about re-reading the one that was selected.
+
+    ``elapsed_s`` accumulates across invocations so the wall clock a resumed build
+    reports is the pass's, not its last leg's.
     """
 
     selection_md5: str = ""
@@ -442,6 +442,8 @@ class BuildState:
     land_sum: float = 0.0
     land_sqsum: float = 0.0
     land_count: int = 0
+    read_error_cogs: tuple[int, ...] = ()
+    elapsed_s: float = 0.0
     complete: bool = False
 
     def as_dict(self) -> dict:
@@ -455,6 +457,8 @@ class BuildState:
             "land_sum": self.land_sum,
             "land_sqsum": self.land_sqsum,
             "land_count": self.land_count,
+            "read_error_cogs": sorted(self.read_error_cogs),
+            "elapsed_s": self.elapsed_s,
             "complete": self.complete,
         }
 
@@ -469,6 +473,8 @@ class BuildState:
             land_sum=float(d["land_sum"]),
             land_sqsum=float(d["land_sqsum"]),
             land_count=int(d["land_count"]),
+            read_error_cogs=tuple(d.get("read_error_cogs", ())),
+            elapsed_s=float(d.get("elapsed_s", 0.0)),
             complete=bool(d["complete"]),
         )
 
@@ -573,6 +579,7 @@ class BuildResult:
     n_tiles: int  # rows in the manifest = tiles on disk
     n_cogs: int  # COGs read by *this* invocation
     n_skipped: int  # COGs a previous invocation had already finished
+    n_cogs_total: int  # COGs the selection list groups into
     status_counts: dict[str, int]
     per_stratum: dict[int, int]
     provenance_counts: dict[str, int]
@@ -594,6 +601,11 @@ class BuildResult:
     @property
     def n_dropped(self) -> int:
         return self.n_selected - self.n_tiles
+
+    @property
+    def s_per_cog(self) -> float:
+        """Wall clock per COG — directly comparable to E1's measured 0.24 s at process:16."""
+        return self.wall_s / max(1, self.n_cogs_total)
 
     @property
     def n_attempted(self) -> int:
@@ -625,12 +637,19 @@ class BuildResult:
             f"  strata: {len(self.per_stratum)} occupied, "
             f"min {min(self.per_stratum.values()) if self.per_stratum else 0:,}, "
             f"max {max(self.per_stratum.values()) if self.per_stratum else 0:,}",
+            # Printed, not just returned: the ticket asks the *report* to carry the
+            # per-stratum counts, and 20 of them fit on two lines.
+            "  n_h realized: "
+            + " ".join(f"{h}:{n}" for h, n in sorted(self.per_stratum.items())),
             "  provenance: "
             + ", ".join(f"{k} {v:,}" for k, v in sorted(self.provenance_counts.items())),
             f"  storage: {self.n_shards} shard(s), {self.shard_bytes / 1e9:.2f} GB",
             f"  land mean/std: {self.global_mean:.2f} / {self.global_std:.2f} m",
-            f"  wall clock: {self.wall_s / 3600:.2f} h "
-            f"({self.n_cogs:,} COGs read, {self.n_skipped:,} resumed past)",
+            # s/COG, because that is the unit E1's projection is stated in and it is
+            # budget-independent — a tier-specific "hours" figure would not compare.
+            f"  wall clock: {self.wall_s / 3600:.2f} h = {self.s_per_cog:.3f} s/COG "
+            f"over {self.n_cogs_total:,} COGs "
+            f"({self.n_cogs:,} read this run, {self.n_skipped:,} resumed past)",
             *(
                 [f"  dataset_version: {self.dataset_version}"]
                 if self.dataset_version
@@ -640,30 +659,6 @@ class BuildResult:
 
 
 # --- The driver ---------------------------------------------------------------
-
-
-def _make_executor(kind: ExecutorKind, workers: int):
-    """Build the pool — spawn-forced processes, mirroring :func:`dataset.catalog.scan`.
-
-    E1 measured the choice rather than assuming it: processes reach 6.61x against
-    serial where threads cap at 2.76x, because ``rasterio.open()`` is effectively
-    GIL-serialized and the open is ~30% of a COG's cost at 3.16 windows/COG. Forcing
-    **spawn** everywhere keeps the rented Linux box (where fork is the default, and
-    would inherit already-open GDAL handles) behaving like the box E1 measured on.
-    """
-    if kind == "thread":
-        from concurrent.futures import ThreadPoolExecutor
-
-        return ThreadPoolExecutor(max_workers=workers)
-    if kind != "process":
-        raise ValueError(f"unknown executor {kind!r}; expected 'thread' or 'process'")
-
-    import multiprocessing
-    from concurrent.futures import ProcessPoolExecutor
-
-    return ProcessPoolExecutor(
-        max_workers=workers, mp_context=multiprocessing.get_context("spawn")
-    )
 
 
 def _tile_record(
@@ -738,6 +733,7 @@ def _assert_ledger_matches_manifest(
     """#50's invariant: ``status == 'ok'`` in the ledger *is* the manifest, exactly."""
     ok = {r["window_id"] for r in ledger_rows if r["status"] == "ok"}
     written = {make_window_id(r.source_cog, r.win_row0, r.win_col0) for r in records}
+    # (composed via the same geometry helper `window_id_of` uses — one definition)
     if ok != written:
         raise AssertionError(
             "ledger/manifest disagree: "
@@ -792,6 +788,7 @@ def run(
     retry_backoff_s: float = RETRY_BACKOFF_S,
     max_consecutive_read_errors: int = MAX_CONSECUTIVE_READ_ERRORS,
     limit_cogs: int | None = None,
+    retry_read_errors: bool = False,
     restart: bool = False,
     code_version: str = "unknown",
     snapshot_date: str = "unknown",
@@ -813,12 +810,19 @@ def run(
     ``limit_cogs`` runs a prefix of the job list — the live-path smoke check. It leaves
     the build **incomplete**: no ``corpus_meta.json`` is written, because a partial
     corpus has no honest corpus-wide mean/std and no honest ``dataset_version``.
+
+    ``retry_read_errors`` re-reads the COGs a previous run booked ``read_error`` and
+    replaces their ledger rows. It is opt-in because the two cases are different
+    claims: a COG that is genuinely gone should stay booked (that is
+    ``accept_shortfall``), while one that lost a race with the network should not be
+    written off silently. The operator reads the ledger's ``detail`` column and decides.
     """
     from functools import partial
 
     from .concurrency import ordered_futures
 
     started = time.perf_counter()
+    elapsed_at_start = 0.0  # replaced from the state below; a resume keeps accumulating
     out_dir = Path(out_dir)
     ledger_path = Path(ledger_path)
     shard_dir = out_dir / SHARDS_DIR
@@ -854,6 +858,7 @@ def run(
         if restart:
             _clear_build(out_dir, ledger_path)
 
+    elapsed_at_start = state.elapsed_s
     records = _read_manifest_records(manifest_path, state.shards.total_rows)
     ledger_rows = (
         read_ledger(ledger_path)[: state.n_windows_done]
@@ -866,26 +871,47 @@ def run(
             f"{state.n_windows_done} — the ledger is behind its own checkpoint"
         )
 
-    todo = jobs[state.n_cogs_done :]
-    if limit_cogs is not None:
-        todo = todo[:limit_cogs]
-    n_skipped = state.n_cogs_done
-    n_done = 0
+    # Work is (job index, job) pairs so a retried COG — which sits *behind* the
+    # frontier — can be told apart from one in front of it, and so neither the frontier
+    # nor the outstanding-failure set has to be inferred from position alone.
+    retry_indices: list[int] = []
+    if retry_read_errors and state.read_error_cogs:
+        retry_indices = sorted(state.read_error_cogs)
+        retried_ids = {w.window_id for i in retry_indices for w in jobs[i].windows}
+        # Their old ledger rows go, or the re-read would book each window twice.
+        ledger_rows = [r for r in ledger_rows if r["window_id"] not in retried_ids]
 
-    # Built whenever the corpus is unfinished — not only when there is work left. A run
-    # that died after its last COG but before finalizing has an empty `todo` and still
-    # owns a shard that has to be closed.
+    frontier = jobs[state.n_cogs_done :]
+    if limit_cogs is not None:
+        frontier = frontier[:limit_cogs]
+    todo_pairs = [(i, jobs[i]) for i in retry_indices] + [
+        (state.n_cogs_done + k, job) for k, job in enumerate(frontier)
+    ]
+    todo = [job for _, job in todo_pairs]
+    n_skipped = state.n_cogs_done - len(retry_indices)
+    n_done = 0
+    outstanding_errors = set(state.read_error_cogs) - set(retry_indices)
+
+    # Built whenever there is work *or* the corpus is unfinished — a run that died after
+    # its last COG but before finalizing has an empty `todo` and still owns a shard that
+    # has to be closed. `sealed()` covers the other direction: a retry into a build that
+    # already finalized cannot append to its truncated trailing shard, so it starts a
+    # fresh one rather than reopening that.
     writer = (
-        None
-        if state.complete
-        else ShardWriter(shard_dir, rows_per_shard=rows_per_shard, resume=state.shards)
+        ShardWriter(
+            shard_dir,
+            rows_per_shard=rows_per_shard,
+            resume=state.shards.sealed() if state.complete else state.shards,
+        )
+        if todo or not state.complete
+        else None
     )
 
     if todo:
         side = CatalogSideTable.load(
             catalog_dir, [w.window_id for j in todo for w in j.windows]
         )
-        workers = _default_workers(executor) if workers is None else workers
+        workers = default_workers(executor) if workers is None else workers
         selected_by_id = {w.window_id: w for j in todo for w in j.windows}
         bar = progress(len(todo), "materialize") if progress else None
         consecutive_failures = 0
@@ -895,21 +921,28 @@ def run(
             """The one commit point. State is written **last** — see the module docstring."""
             assert writer is not None
             state.shards = writer.checkpoint()
-            state.n_cogs_done = n_skipped + n_done
+            state.n_cogs_done = frontier_done
             state.n_windows_done = len(ledger_rows)
+            state.read_error_cogs = tuple(sorted(outstanding_errors))
+            state.elapsed_s = elapsed_at_start + (time.perf_counter() - started)
             write_ledger(ledger_rows, ledger_path)
             _write_manifest_atomic(records, manifest_path)
             _write_json_atomic(out_dir / STATE_FILE, state.as_dict())
 
         work = partial(read_cog, cog_reader or _live_reader(), config.TILE_PX,
                        read_attempts, retry_backoff_s)
+        frontier_done = state.n_cogs_done
         try:
-            with _make_executor(executor, workers) as ex:
-                for job, fut in ordered_futures(
-                    ex=ex, fn=work, items=todo, in_flight=max(1, workers * 2)
+            with make_executor(executor, workers) as ex:
+                for k, (job, fut) in enumerate(
+                    ordered_futures(ex=ex, fn=work, items=todo, in_flight=max(1, workers * 2))
                 ):
+                    # ordered_futures yields in input order, so the k-th result is the
+                    # k-th pair — which is where its job index comes from.
+                    job_index = todo_pairs[k][0]
                     outcomes = fut.result()
                     if all(o.status == "read_error" for o in outcomes):
+                        outstanding_errors.add(job_index)
                         consecutive_failures += 1
                         if consecutive_failures >= max_consecutive_read_errors:
                             raise ReadOutage(
@@ -919,6 +952,7 @@ def run(
                                 "re-run to resume."
                             )
                     else:
+                        outstanding_errors.discard(job_index)
                         consecutive_failures = 0
 
                     for outcome in outcomes:
@@ -943,6 +977,8 @@ def run(
                         )
                     n_done += 1
                     since_checkpoint += 1
+                    # Retried COGs are behind the frontier and must not push it.
+                    frontier_done = max(frontier_done, job_index + 1)
                     if bar:
                         bar.update(1)
                     if since_checkpoint >= checkpoint_every:
@@ -962,9 +998,10 @@ def run(
 
     if complete:
         _assert_ledger_matches_manifest(ledger_rows, records)
-        if state.complete and meta_path.exists():
+        if state.complete and meta_path.exists() and n_done == 0:
             # Nothing changed, so nothing is rewritten — a no-op re-run must not
-            # restamp a committed artifact with a fresh build timestamp.
+            # restamp a committed artifact with a fresh build timestamp. A retry that
+            # actually re-read something does fall through and re-finalize.
             version = json.loads(meta_path.read_text())["dataset_version"]
         else:
             _finalize(out_dir, ledger_path, records, ledger_rows, state, writer=writer)
@@ -991,6 +1028,7 @@ def run(
         n_tiles=len(records),
         n_cogs=n_done,
         n_skipped=n_skipped,
+        n_cogs_total=len(jobs),
         status_counts=dict(status_counts),
         per_stratum=dict(sorted(Counter(r["stratum_id"] for r in ok_rows).items())),
         provenance_counts=dict(sorted(Counter(r["provenance"] for r in ok_rows).items())),
@@ -999,7 +1037,7 @@ def run(
         global_mean=global_mean,
         global_std=global_std,
         dataset_version=version,
-        wall_s=time.perf_counter() - started,
+        wall_s=elapsed_at_start + (time.perf_counter() - started),
     )
 
 
@@ -1052,12 +1090,12 @@ def _finalize(
     """
     if writer is not None:
         writer.close()
-        state.shards = ShardState(
-            shard_id=max(len(writer.shard_row_counts) - 1, 0),
-            shard_row=writer.shard_row_counts[-1] if writer.shard_row_counts else 0,
-            shard_row_counts=tuple(writer.shard_row_counts[:-1]),
-        )
+        state.shards = writer.final_state()
     state.complete = True
+    # Sorted only here, at the last write. The manifest's row order *is* the shard's
+    # and cannot move, but the ledger's is free — so sorting it makes a corpus healed
+    # by --retry-read-errors ship the same ledger as one built in a single clean pass.
+    ledger_rows.sort(key=lambda r: r["window_id"])
     write_ledger(ledger_rows, ledger_path)
     _write_manifest_atomic(records, out_dir / MANIFEST_FILE)
     _write_json_atomic(out_dir / STATE_FILE, state.as_dict())
@@ -1107,6 +1145,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit-cogs", type=int, default=None,
                    help="read only the first N COGs of the job list — the live-path "
                         "smoke check; leaves the build incomplete (no corpus card)")
+    p.add_argument("--retry-read-errors", action="store_true",
+                   help="re-read the COGs a previous run booked read_error and replace "
+                        "their ledger rows; opt-in, because a COG that is genuinely "
+                        "gone should stay booked (accept_shortfall, #50)")
     p.add_argument("--restart", action="store_true",
                    help="discard any previous attempt in --out-dir and start over")
     p.add_argument("--snapshot-date", default=None)
@@ -1114,7 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from .provenance import git_sha, today
 
-    workers = args.workers if args.workers is not None else _default_workers(args.executor)
+    workers = args.workers if args.workers is not None else default_workers(args.executor)
     jobs = load_selection(args.selection)
     log.info(
         "selection: %s windows over %s COGs -> %s (%d %s workers)",
@@ -1135,6 +1177,7 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_every=args.checkpoint_every,
         read_attempts=args.read_attempts,
         limit_cogs=args.limit_cogs,
+        retry_read_errors=args.retry_read_errors,
         restart=args.restart,
         code_version=git_sha(),
         snapshot_date=args.snapshot_date or today(),
@@ -1150,6 +1193,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  card:     {result.meta_path}")
     else:
         print("  INCOMPLETE — re-run to resume (no corpus card written)")
+    if result.status_counts.get("read_error"):
+        print(
+            f"  NOTE: {result.status_counts['read_error']:,} window(s) failed to read. "
+            "Check the ledger's `detail` column; re-run with --retry-read-errors to "
+            "re-read those COGs, or leave them booked."
+        )
     return 0
 
 

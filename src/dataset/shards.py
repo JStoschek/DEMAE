@@ -80,6 +80,22 @@ class ShardState:
         """Tiles durably written across every shard — the manifest's expected length."""
         return sum(self.shard_row_counts) + self.shard_row
 
+    def sealed(self) -> "ShardState":
+        """This state with the current shard treated as finished — start the next one.
+
+        What a writer needs when it must append to a corpus whose trailing shard is no
+        longer appendable: :meth:`ShardWriter.close` truncated it to its real length, so
+        the only honest place for new tiles is a fresh shard. (The driver reaches for
+        this when ``--retry-read-errors`` re-reads into a build that already finalized.)
+        """
+        if self.shard_row == 0:
+            return self
+        return ShardState(
+            shard_id=self.shard_id + 1,
+            shard_row=0,
+            shard_row_counts=(*self.shard_row_counts, self.shard_row),
+        )
+
     def as_dict(self) -> dict:
         """JSON-safe form — the driver stores this in its progress record."""
         return {
@@ -248,6 +264,21 @@ class ShardWriter:
             shard_id=max(self._shard_id, 0),
             shard_row=self._row,
             shard_row_counts=tuple(self.shard_row_counts),
+        )
+
+    def final_state(self) -> ShardState:
+        """The watermark of a **closed** writer — every shard finished, nothing pending.
+
+        The arithmetic differs from :meth:`checkpoint`'s (there is no open shard, so the
+        last count *is* the trailing row position) and it lives here rather than in the
+        caller because ``shard_row_counts`` is the writer's own bookkeeping.
+        ``total_rows`` reads as the manifest's length either way.
+        """
+        counts = self.shard_row_counts
+        return ShardState(
+            shard_id=max(len(counts) - 1, 0),
+            shard_row=counts[-1] if counts else 0,
+            shard_row_counts=tuple(counts[:-1]),
         )
 
     def close(self) -> None:

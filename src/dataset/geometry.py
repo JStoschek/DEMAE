@@ -87,6 +87,32 @@ def cog_at(lon: float, lat: float) -> CogRef:
     )
 
 
+def make_window_id(stem: str, win_row0: int, win_col0: int) -> str:
+    """The id of one window: ``"<cog stem>:<row0>:<col0>"``.
+
+    This is the project's **join key** — the catalog keys its 4.4M rows on it, the
+    selection list is a list of them, and the materialization ledger books one row per
+    id. It lives here, beside the rest of the pure key math, because four modules were
+    each spelling the f-string themselves and a join key with four definitions is a
+    join key waiting to drift.
+    """
+    return f"{stem}:{win_row0}:{win_col0}"
+
+
+def parse_window_id(window_id: str) -> tuple[str, int, int]:
+    """Inverse of :func:`make_window_id` -> ``(stem, win_row0, win_col0)``.
+
+    Split from the right, so a stem containing a colon could not confuse it.
+    """
+    stem, row0, col0 = window_id.rsplit(":", 2)
+    return stem, int(row0), int(col0)
+
+
+def window_id_stem(window_id: str) -> str:
+    """Just the source COG stem of a window id — the grouping key for batched reads."""
+    return window_id.rsplit(":", 2)[0]
+
+
 def lat_band(lat: float) -> str:
     """Resolution band label for a latitude (poleward-symmetric, recon §6).
 
