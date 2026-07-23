@@ -5,8 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dataset import loader, pipeline
-from dataset.tiling import SyntheticCogReader
+from dataset import loader, manifest, normalize, shards
 
 
 # --- Normalizer strategies (no torch needed) ----------------------------------
@@ -42,22 +41,59 @@ def test_make_normalizer_selects_and_validates():
 
 @pytest.fixture
 def corpus(tmp_path):
+    """A tiny materialized corpus (shards + manifest + meta), built straight from the
+    ADR-0002 storage primitives — the loader read path needs a corpus on disk, not the
+    retired TRI selection pipeline that used to produce one."""
     rng = np.random.default_rng(0)
-    tiles = {
-        "Copernicus_DSM_COG_10_N45_00_E006_00_DEM": (
-            1500 + rng.normal(0, 200, size=(672, 672))
-        ).astype(np.float32),
-        "Copernicus_DSM_COG_10_S01_00_E036_00_DEM": (
-            800 + rng.normal(0, 120, size=(672, 672))
-        ).astype(np.float32),
-    }
-    pipeline.run_pipeline(
-        SyntheticCogReader(tiles),
-        tmp_path,
-        per_stratum_quota=6,
+    specs = [
+        ("Copernicus_DSM_COG_10_N45_00_E006_00_DEM", 1500.0, 6.5, 45.5, "0-50", "+000_+040"),
+        ("Copernicus_DSM_COG_10_S01_00_E036_00_DEM", 800.0, 36.5, -0.5, "0-50", "+030_+000"),
+    ]
+    rows: list[manifest.TileRecord] = []
+    gsum = gsumsq = gcount = 0.0
+    with shards.ShardWriter(tmp_path / "shards") as writer:
+        for stem, base, lon, lat, band, gc in specs:
+            for j in range(6):
+                win = (base + rng.normal(0, 200, size=(224, 224))).astype(np.float32)
+                tile, reason = normalize.prepare_tile(win)
+                assert tile is not None, reason
+                ref = writer.add(tile.raw_i16)
+                vals = tile.raw_i16[normalize.land_mask(tile.raw_i16)].astype(np.float64)
+                gsum += float(vals.sum())
+                gsumsq += float(np.square(vals).sum())
+                gcount += vals.size
+                r0 = j * 224
+                rows.append(
+                    manifest.TileRecord(
+                        tile_id=manifest.make_tile_id(stem, r0, 0),
+                        shard_id=ref.shard_id,
+                        row_index=ref.row_index,
+                        source_cog=f"{stem}/{stem}.tif",
+                        win_row0=r0,
+                        win_col0=0,
+                        lon=lon,
+                        lat=lat,
+                        lat_band=band,
+                        geocell_id=gc,
+                        tri=0.0,
+                        stratum=j % 5,
+                        mean=tile.mean,
+                        std=tile.std,
+                        land_frac=tile.land_frac,
+                        content_hash=ref.content_hash,
+                    )
+                )
+    gmean = gsum / gcount
+    gstd = float(np.sqrt(max(gsumsq / gcount - gmean * gmean, 0.0)))
+    manifest.write_manifest(rows, tmp_path / "manifest.parquet")
+    manifest.write_corpus_meta(
+        tmp_path / "corpus_meta.json",
+        rows=rows,
+        global_mean=gmean,
+        global_std=gstd,
         snapshot_date="test",
-        code_version="test",
         build_timestamp="2026-07-14T00:00:00Z",
+        code_version="test",
     )
     return tmp_path
 

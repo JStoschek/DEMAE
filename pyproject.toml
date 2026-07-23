@@ -25,10 +25,6 @@ dependencies = [
     "scikit-learn>=1.9,<1.10",
 ]
 
-# The corpus build CLI (smoke-gated); equivalent to `python -m dataset.build`.
-[project.scripts]
-demae-build = "dataset.build:main"
-
 [dependency-groups]
 # Dev-only; kept out of the runtime pipeline so the reproducible core stays lean.
 dev = [

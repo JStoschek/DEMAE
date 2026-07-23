@@ -12,9 +12,11 @@
 # apt-get gdal is required.
 #
 #   Build:   docker build -t demae-etl .
-#   Sample:  docker run --rm -v "$PWD/data:/data" demae-etl --source synthetic --out-dir /data/sample
-#   Live:    docker run --rm -v "$PWD/data:/data" demae-etl --source live --out-dir /data/corpus
-#   Probe:   docker run --rm --entrypoint python demae-etl -m dataset.throughput  # cloud-burst verdict
+#   Scan:    docker run --rm -v "$PWD/data:/data" demae-etl -m dataset.catalog   # the live-read stage
+#   Select:  docker run --rm -v "$PWD/data:/data" demae-etl -m dataset.select    # draw the selection list
+# The transatlantic-read stage the same-region box exists for is the global scoring
+# pass (dataset.catalog); the fit/select stages read its committed artifacts and
+# touch no COG. The end-to-end full-res materialize is Phase E (not yet built).
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
@@ -40,7 +42,8 @@ COPY src ./src
 COPY README.md ./
 RUN uv sync --frozen --no-dev
 
-# The build CLI is the reproducible "run the pipeline" surface: it smoke-gates a
-# tiny tier end-to-end, then ships the full debug corpus. Mount a volume at /data.
-ENTRYPOINT ["python", "-m", "dataset.build"]
-CMD ["--source", "live", "--out-dir", "/data/corpus"]
+# Each pipeline stage is a `python -m dataset.<stage>` entry point; pass the module
+# you want to run as the command (default: the global scoring pass, the live-read
+# stage the same-region box exists for). Mount a volume at /data.
+ENTRYPOINT ["python"]
+CMD ["-m", "dataset.catalog"]

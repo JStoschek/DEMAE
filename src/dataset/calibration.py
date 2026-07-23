@@ -39,8 +39,8 @@ to give every band equal power, the poles included.
 
 The read path mirrors :mod:`dataset.prevalence`: a pure, unit-tested core (Spearman,
 window/box extraction, the ρ table) and a thin live driver (:func:`main`) that fans
-~100 whole-COG reads across a thread pool, exactly the parallel reads
-:mod:`dataset.build` already uses.
+~100 whole-COG reads across a thread pool — the same I/O-bound parallel-read shape
+the rest of the pipeline uses.
 """
 
 from __future__ import annotations
@@ -455,9 +455,9 @@ def measure(
 
     Returns ``(scores, anomalies)``, ``scores`` flattened across all COGs. An anomaly
     is ``(stem, reason)`` for a COG that could not be read; it is surfaced and its
-    windows are left out rather than folded in as zeros. The thread pool mirrors
-    :func:`dataset.build.build_corpus`'s I/O fan-out — the reads are network-bound, so
-    the corpus is identical regardless of ``workers``.
+    windows are left out rather than folded in as zeros. The thread pool overlaps the
+    network-bound reads — the reads are I/O-bound, so the result is identical regardless
+    of ``workers``.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -698,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("scored %d windows from %d COGs, %d anomalies",
              len(scores), cogs_read, len(anomalies))
 
-    from .build import git_sha
+    from .provenance import git_sha
 
     report = build_report(
         scores,

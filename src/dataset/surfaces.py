@@ -7,9 +7,8 @@ an inclined plane's slope is its tilt at any aspect, and its hypsometric integra
 is 0.5 by symmetry; a plateau with a pit of area fraction ``f`` has an
 elevation-relief ratio of exactly ``1 - f``.
 
-Not to be confused with :mod:`dataset.synthetic`, which fabricates a
-Copernicus-shaped S3 bucket for zero-network pipeline tests. This module makes
-bare arrays and knows nothing about COGs.
+This module makes bare arrays and knows nothing about COGs — an analytic surface,
+not a Copernicus-shaped fixture.
 
 Every surface avoids the exact value ``0.0``, which the pipeline reserves for
 Copernicus's ocean fill (ADR-0001 §3) and every metric masks out. Callers that

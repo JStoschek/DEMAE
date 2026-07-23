@@ -77,7 +77,7 @@ projection divided a *serial* per-COG cost by 16 threads, and the dry run came i
 1.87 s/COG — a ~14 h job. The gap is not per-window cost, it is the GIL: scoring is
 ~98% numpy neighbourhood compute, and threads measured 2.4x against one process at
 best, however many more you add. Worker *processes* remove the ceiling, and
-:func:`~dataset.pipeline.ordered_futures` supplies the same bounded, ordered
+:func:`~dataset.concurrency.ordered_futures` supplies the same bounded, ordered
 scheduling either way, so the frame is identical and only the wall-clock moves. The
 measured scaling curve, the corrected corpus projection, and the bit-identity check
 against the pre-change catalog are in
@@ -131,7 +131,7 @@ from .metrics import METRICS, land_mask
 from .normalize import land_stats
 from .prevalence import EDITED_EDM_CODES, FLM_CODES_FILL, WBM_WATER_CODES
 from .sampling import geocell_of
-from .stratify import zero_fraction
+from .screen import zero_fraction
 from .tiling import CogReader
 
 # --- The frozen vector and its resolutions (ADR-0004 §1) ----------------------
@@ -222,7 +222,7 @@ def exact_zero_frac(window: np.ndarray) -> float:
     and the *gate* built on it is named ``zero_fill`` (ADR-0001 Amendment 2), because
     a 75%-zero window may be sea-level river or lake rather than ocean.
 
-    The arithmetic is :func:`dataset.stratify.zero_fraction`'s — that module owns the
+    The arithmetic is :func:`dataset.screen.zero_fraction`'s — that module owns the
     zero-fill screen and :mod:`dataset.normalize` already defers to it, so the catalog
     measures the gate's own input rather than a look-alike of it. All this adds is the
     empty-window NaN, which the screen never needs because it is only ever handed a
@@ -782,10 +782,10 @@ def scan(
     last completed flush rather than the start.
 
     **``executor`` picks the pool, and it is the difference between a 14-hour pass and
-    a practical one** (#38). This work is not network-bound the way
-    :mod:`dataset.build`'s materialization is: most of it is numpy neighbourhood
-    compute holding the GIL, so *threads* measured 2.4x against one process at best
-    and gave some of it back at 16 — a ceiling, not a slope. ``"process"`` gives each
+    a practical one** (#38). This work is not network-bound the way a full-res
+    materialize is: most of it is numpy neighbourhood compute holding the GIL, so
+    *threads* measured 2.4x against one process at best and gave some of it back at 16 —
+    a ceiling, not a slope. ``"process"`` gives each
     worker its own interpreter and reached 6.3x on the same draw; the global pass runs
     on it (:func:`main` defaults
     to it), and :func:`ordered_futures` provides the same bounded, ordered scheduling
@@ -815,7 +815,7 @@ def scan(
     """
     from concurrent.futures.process import BrokenProcessPool
 
-    from .pipeline import ordered_futures
+    from .concurrency import ordered_futures
 
     workers = default_workers(executor) if workers is None else workers
     out_dir = Path(out_dir)
@@ -1075,7 +1075,7 @@ def main(argv: list[str] | None = None) -> int:
         len(frame), len(refs), args.out_dir, workers, args.executor,
     )
 
-    from .build import _today, git_sha
+    from .provenance import git_sha, today
     from .masks import RasterioMaskReader
     from .tiling import RasterioCogReader
 
@@ -1089,7 +1089,7 @@ def main(argv: list[str] | None = None) -> int:
         workers=workers,
         executor=args.executor,
         code_version=git_sha(),
-        snapshot_date=args.snapshot_date or _today(),
+        snapshot_date=args.snapshot_date or today(),
         progress=_tqdm,
     )
 

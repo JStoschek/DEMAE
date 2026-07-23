@@ -18,33 +18,30 @@ uv run python -c "import rasterio; import dataset; print('ok')"
 Requires [`uv`](https://docs.astral.sh/uv/) (`brew install uv`). No system GDAL is
 needed — `rasterio` wheels bundle it.
 
-## Build a corpus
+## Build the corpus
 
-The pipeline is driven by one smoke-gated CLI (`python -m dataset.build`, aka
-`demae-build`): it runs a tiny tier end-to-end to validate the run, then ships the
-full corpus.
+The corpus is built by the ADR-0004 metric-basis pipeline, one stage per module —
+each a `python -m dataset.<stage>` entry point that reads the previous stage's
+committed artifact:
 
 ```bash
-# Reproduce a sample end-to-end with ZERO network (deterministic synthetic bucket):
-uv run python -m dataset.build --source synthetic      # -> data/sample/
-
-# Ship the ~50k-tile Phase-0 debug corpus from the live Copernicus bucket:
-uv run python -m dataset.build --source live           # -> data/corpus/ (8 read workers)
-
-# Before a live run, project throughput and get a local-vs-cloud-burst verdict:
-uv run python -m dataset.throughput
+uv run python -m dataset.catalog     # global x8-overview scoring pass -> data/catalog/
+uv run python -m dataset.gates       # apply the locked quality gates -> data/catalog_gated/
+uv run python -m dataset.frame       # fit + persist the standardization scaler (#40)
+uv run python -m dataset.centroids   # fit + persist the k=20 stratum centroids (#41)
+uv run python -m dataset.select      # allocate + FSCS -> artifacts/phase_d/selection_debug_50k.csv
 ```
 
-The COG reads dominate wall-clock and are I/O-bound, so the full build fans them
-across a thread pool (`--workers`, default 8 — matching the throughput probe's
-projection). The written corpus is **identical for any worker count** (reads are
-consumed in COG order), so parallelism is a pure speedup, never a recipe change;
-`--workers 1` is the sequential path. Live builds show a `tqdm` progress bar with
-a live ETA over both long stages (scoring every COG, materializing every tile).
+`dataset.select` is **budget-parameterized** (`--budget`, default 50,000): it re-loads
+the committed scaler and centroids and draws a deterministic selection list of
+`window_id, stratum_id, provenance`, so Phase F re-runs the same code at 200–500k against
+identical strata. The selection list *is* the determinism contract — two runs from the
+committed artifacts reproduce it byte-for-byte (`docs/research/d4-sampler.md`).
 
-Each build writes `manifest.parquet`, `corpus_meta.json` (with a `dataset_version`
-fingerprint), and int16 `shards/`. The corpus itself is gitignored — it's large
-and fully reproducible from the CLI + `uv.lock`.
+The **end-to-end materialize** — reading the selected windows at full resolution into
+int16 `shards/` + `manifest.parquet` + `corpus_meta.json` — is **Phase E** (consumes the
+selection list; not yet built). The ADR-0001 TRI-quintile build CLI it replaces
+(`dataset.build` / `dataset.pipeline`) was retired with the metric-basis sampler.
 
 ## Visualize
 
@@ -53,19 +50,20 @@ uv run jupyter lab notebooks/visualize_corpus.ipynb
 ```
 
 [`notebooks/visualize_corpus.ipynb`](notebooks/visualize_corpus.ipynb) renders
-sampled terrain tiles, the TRI/stratification distribution, and before/after
-per-tile normalization. It auto-builds the synthetic sample if no corpus exists,
-so it runs top-to-bottom with no network.
+sampled terrain tiles, the stratification distribution, and before/after per-tile
+normalization. (It predates the ADR-0004 metric basis and the retirement of the
+TRI-quintile build path, and is pending a refresh to the current pipeline.)
 
 ## Reproduce on a rented box
 
 The [`Dockerfile`](Dockerfile) pins the ETL environment (uv + Python 3.12 +
-rasterio wheels, everything else from `uv.lock`) so a live build reproduces on a
-same-region vast.ai box — the cloud-burst escape hatch for transatlantic COG reads.
+rasterio wheels, everything else from `uv.lock`) so the live-read stages reproduce on a
+same-region vast.ai box — the cloud-burst escape hatch for transatlantic COG reads. Each
+pipeline stage is a `python -m dataset.<stage>` command passed to the image.
 
 ```bash
 docker build -t demae-etl .
-docker run --rm -v "$PWD/data:/data" demae-etl --source synthetic --out-dir /data/sample
+docker run --rm -v "$PWD/data:/data" demae-etl -m dataset.catalog   # the global scoring pass
 ```
 
 ## Layout
@@ -76,15 +74,18 @@ src/dataset/      # the Phase-0 pipeline package (stage-per-module)
   discovery.py    # stage 1 — COG discovery
   geometry.py     # pure key / lat-band / geocell / window-grid math
   tiling.py       # stage 2 — 224x224 window reads (swappable CogReader)
-  stratify.py     # stage 3 — ocean screen, TRI, quantile strata, quota fill
+  screen.py       # the exact-zero land / zero-fill pixel screen (ADR-0001 §3)
+  catalog.py      # stage 3a — global metric scoring pass -> raw candidate catalog
+  gates.py        # stage 3b — the locked quality gates as filter columns
+  frame.py        # stage 3c — the stratification frame k-means fits + the scaler (#40)
+  centroids.py    # stage 3d — the k=20 stratum centroids (#41)
+  select.py       # stage 3e — allocate + FSCS + emit the selection list (#44)
   normalize.py    # stage 4 — clip, land-only stats, degenerate drop, int16
   manifest.py     # stage 5a — Parquet manifest + corpus_meta.json fingerprint
   shards.py       # stage 5b — sharded int16 memmap storage
   loader.py       # stage 6 — torch read path (imports torch lazily)
-  pipeline.py     # end-to-end orchestrator
-  throughput.py   # smoke-sample measurement + cloud-burst decision
-  synthetic.py    # deterministic zero-network sample bucket
-  build.py        # the smoke-gated corpus build CLI (python -m dataset.build)
+  concurrency.py  # the bounded, order-preserving parallel-read primitive (#38)
+  provenance.py   # git SHA + snapshot date stamped into every artifact
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records
 Dockerfile        # pinned ETL environment for a rented vast.ai box

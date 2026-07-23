@@ -1,0 +1,296 @@
+{
+  "budget": 50000,
+  "n_selected": 50000,
+  "k": 20,
+  "coast_floor": 670,
+  "floor_clamp": 500,
+  "floor_clamp_strata_below": 0,
+  "provenance_counts": {
+    "base": 49330,
+    "floor:coastline": 670
+  },
+  "per_cog": {
+    "n_windows": 50000,
+    "n_cogs": 15834,
+    "mean_per_cog": 3.1578,
+    "median_per_cog": 2,
+    "max_per_cog": 44,
+    "p99_per_cog": 16,
+    "histogram": {
+      "1": 5437,
+      "2": 3607,
+      "3": 2271,
+      "4": 1404,
+      "5": 918,
+      "6": 608,
+      "7": 410,
+      "8": 267,
+      "9": 209,
+      "10": 154,
+      "11": 115,
+      "12": 90,
+      "13": 80,
+      "14": 51,
+      "15": 39,
+      "16": 32,
+      "17": 21,
+      "18": 24,
+      "19": 22,
+      "20": 9,
+      "21": 19,
+      "22": 12,
+      "23": 3,
+      "24": 5,
+      "25": 6,
+      "26": 2,
+      "27": 1,
+      "28": 3,
+      "29": 2,
+      "30": 1,
+      "31": 1,
+      "32": 3,
+      "33": 1,
+      "34": 2,
+      "35": 1,
+      "36": 1,
+      "38": 2,
+      "44": 1
+    },
+    "densest_cogs": [
+      {
+        "stem": "Copernicus_DSM_COG_10_N29_00_E100_00_DEM",
+        "windows": 44
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S05_00_W081_00_DEM",
+        "windows": 38
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N39_00_E099_00_DEM",
+        "windows": 38
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S31_00_E030_00_DEM",
+        "windows": 36
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N20_00_W100_00_DEM",
+        "windows": 35
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S31_00_E019_00_DEM",
+        "windows": 34
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N40_00_E075_00_DEM",
+        "windows": 34
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N19_00_E110_00_DEM",
+        "windows": 33
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N19_00_W101_00_DEM",
+        "windows": 32
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N09_00_E077_00_DEM",
+        "windows": 32
+      }
+    ]
+  },
+  "allocation": [
+    {
+      "stratum_id": 0,
+      "N_h": 186950,
+      "sigma_h": 1.0787,
+      "coast_h": 1662,
+      "n_h": 3220,
+      "coastal": 27,
+      "base": 3193
+    },
+    {
+      "stratum_id": 1,
+      "N_h": 168835,
+      "sigma_h": 1.0413,
+      "coast_h": 3093,
+      "n_h": 2807,
+      "coastal": 51,
+      "base": 2756
+    },
+    {
+      "stratum_id": 2,
+      "N_h": 150898,
+      "sigma_h": 0.9612,
+      "coast_h": 1036,
+      "n_h": 2316,
+      "coastal": 17,
+      "base": 2299
+    },
+    {
+      "stratum_id": 3,
+      "N_h": 130184,
+      "sigma_h": 1.0512,
+      "coast_h": 841,
+      "n_h": 2185,
+      "coastal": 14,
+      "base": 2171
+    },
+    {
+      "stratum_id": 4,
+      "N_h": 232598,
+      "sigma_h": 0.9858,
+      "coast_h": 1426,
+      "n_h": 3662,
+      "coastal": 23,
+      "base": 3639
+    },
+    {
+      "stratum_id": 5,
+      "N_h": 118638,
+      "sigma_h": 1.051,
+      "coast_h": 449,
+      "n_h": 1991,
+      "coastal": 7,
+      "base": 1984
+    },
+    {
+      "stratum_id": 6,
+      "N_h": 32229,
+      "sigma_h": 1.4269,
+      "coast_h": 0,
+      "n_h": 734,
+      "coastal": 0,
+      "base": 734
+    },
+    {
+      "stratum_id": 7,
+      "N_h": 139429,
+      "sigma_h": 1.1698,
+      "coast_h": 0,
+      "n_h": 2604,
+      "coastal": 0,
+      "base": 2604
+    },
+    {
+      "stratum_id": 8,
+      "N_h": 292363,
+      "sigma_h": 0.7929,
+      "coast_h": 2344,
+      "n_h": 3701,
+      "coastal": 38,
+      "base": 3663
+    },
+    {
+      "stratum_id": 9,
+      "N_h": 166251,
+      "sigma_h": 1.0261,
+      "coast_h": 2306,
+      "n_h": 2724,
+      "coastal": 38,
+      "base": 2686
+    },
+    {
+      "stratum_id": 10,
+      "N_h": 148603,
+      "sigma_h": 1.1874,
+      "coast_h": 1340,
+      "n_h": 2817,
+      "coastal": 22,
+      "base": 2795
+    },
+    {
+      "stratum_id": 11,
+      "N_h": 50767,
+      "sigma_h": 1.2518,
+      "coast_h": 0,
+      "n_h": 1015,
+      "coastal": 0,
+      "base": 1015
+    },
+    {
+      "stratum_id": 12,
+      "N_h": 185487,
+      "sigma_h": 1.0815,
+      "coast_h": 5935,
+      "n_h": 3203,
+      "coastal": 97,
+      "base": 3106
+    },
+    {
+      "stratum_id": 13,
+      "N_h": 194931,
+      "sigma_h": 1.0678,
+      "coast_h": 3573,
+      "n_h": 3324,
+      "coastal": 59,
+      "base": 3265
+    },
+    {
+      "stratum_id": 14,
+      "N_h": 143914,
+      "sigma_h": 1.0737,
+      "coast_h": 4915,
+      "n_h": 2467,
+      "coastal": 81,
+      "base": 2386
+    },
+    {
+      "stratum_id": 15,
+      "N_h": 115886,
+      "sigma_h": 1.1335,
+      "coast_h": 4064,
+      "n_h": 2098,
+      "coastal": 67,
+      "base": 2031
+    },
+    {
+      "stratum_id": 16,
+      "N_h": 220981,
+      "sigma_h": 0.875,
+      "coast_h": 3816,
+      "n_h": 3087,
+      "coastal": 63,
+      "base": 3024
+    },
+    {
+      "stratum_id": 17,
+      "N_h": 105302,
+      "sigma_h": 1.0986,
+      "coast_h": 1095,
+      "n_h": 1847,
+      "coastal": 18,
+      "base": 1829
+    },
+    {
+      "stratum_id": 18,
+      "N_h": 215052,
+      "sigma_h": 0.9005,
+      "coast_h": 2920,
+      "n_h": 3092,
+      "coastal": 48,
+      "base": 3044
+    },
+    {
+      "stratum_id": 19,
+      "N_h": 53437,
+      "sigma_h": 1.2955,
+      "coast_h": 0,
+      "n_h": 1106,
+      "coastal": 0,
+      "base": 1106
+    }
+  ],
+  "frame_fingerprint": {
+    "n_kept": 3052735,
+    "gate_thresholds": {
+      "zero_fill_min": 0.75,
+      "degenerate_land_std_m": 3.0,
+      "water_drop_max": 0.3,
+      "water_affected_min": 0.05,
+      "edited_max": 0.25
+    },
+    "catalog_code_version": "ad46e96"
+  },
+  "determinism": "the persisted selection list is the contract; the sub-k-means fit is pinned single-threaded but not relied on for reproducibility (#43)"
+}

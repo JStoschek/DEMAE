@@ -23,7 +23,7 @@ def _row(i, *, cog="Copernicus_DSM_COG_10_N45_00_E006_00_DEM", chash=None):
         lat_band="0-50",
         geocell_id="+000_+040",
         tri=float(i),
-        stratum=i % config.N_STRATA,
+        stratum=i % 5,
         mean=1000.0 + i,
         std=50.0,
         land_frac=1.0,
@@ -104,7 +104,6 @@ def test_corpus_meta_records_card_and_global_stats(tmp_path):
     assert meta["storage_dtype"] == "int16"
     assert meta["clip_bounds"] == [config.CLIP_MIN_M, config.CLIP_MAX_M]
     assert meta["degenerate_std_eps"] == config.DEGENERATE_STD_EPS_M
-    assert meta["per_stratum_quota"] == config.PER_STRATUM_QUOTA
     assert meta["seed"] == config.RANDOM_SEED
     assert meta["n_tiles"] == 5
     # ADR-0003 handoff: corpus-wide land μ/σ for the global-normalization mode

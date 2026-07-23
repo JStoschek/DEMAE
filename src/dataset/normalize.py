@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import config
-from .stratify import is_zero_fill  # zero-fill screen owned by stratify; used here at full res
+from .screen import is_zero_fill  # zero-fill screen (ADR-0001 §3); re-applied here at full res
 
 
 @dataclass(frozen=True)

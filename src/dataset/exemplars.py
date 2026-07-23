@@ -467,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     log.info("scored %d exemplars, %d anomalies", len(rows), len(anomalies))
 
-    from .build import git_sha
+    from .provenance import git_sha
 
     report = build_report(
         rows,

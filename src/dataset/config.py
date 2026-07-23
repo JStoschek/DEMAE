@@ -34,11 +34,11 @@ INPUT_CHANNELS: Final = ("elevation",)
 OCEAN_FILL_VALUE: Final = 0.0
 LAND_ZERO_FRAC_DROP: Final = 0.75
 
-# --- Ruggedness stratification (ADR 0001 §4-5) --------------------------------
-# TRI (Riley) computed on the x8 overview; global candidate distribution cut at
-# quintiles into N_STRATA equal-quota strata.
+# --- Overview downsample factor (ADR 0001 §4) ---------------------------------
+# The x8 overview every window is scored on. Named for its TRI-era origin, but the
+# factor itself is live: the ADR-0004 metric pass (catalog), the pilot frame, and
+# the A3 calibration all still read their windows off the x8 overview.
 TRI_OVERVIEW_FACTOR: Final = 8
-N_STRATA: Final = 5
 
 # --- Geographic spread (ADR 0001 §5) ------------------------------------------
 GEOCELL_SIZE_DEG: Final = 10  # 10x10-degree lon/lat cell for round-robin spread
@@ -66,14 +66,14 @@ _TILE_BYTES: Final = TILE_PX * TILE_PX * 2  # int16 -> 2 bytes/px
 SHARD_TARGET_BYTES: Final = 1_500_000_000
 ROWS_PER_SHARD: Final = SHARD_TARGET_BYTES // _TILE_BYTES  # ~14,946
 
-# --- Corpus tiers & quotas (ADR 0001 §5; CONTEXT.md) --------------------------
-# Phase 0 ships the debug tier: equal quota per stratum -> ~50k total.
-DEBUG_CORPUS_TILES: Final = 50_000
-PER_STRATUM_QUOTA: Final = DEBUG_CORPUS_TILES // N_STRATA  # 10,000
-# Per-1-degree-tile window cap: the total windows any single COG may contribute
-# across the whole selection (ADR 0001 §5, "per-1-degree-tile window cap"). Left
-# generous; the round-robin geo spread is the primary anti-clustering lever.
-PER_TILE_WINDOW_CAP: Final = 64
+# --- Corpus tiers & quotas ----------------------------------------------------
+# The debug tier is 50,000 windows. Stratification, allocation and selection are
+# ADR-0004's metric-basis sampler (dataset.frame / dataset.centroids /
+# dataset.select), not ADR-0001's TRI quintiles: the budget is an argument to
+# dataset.select, the per-stratum quotas come from the committed Neyman table
+# (docs/research/d2-allocation-nh.json), and the per-COG cap was retired as inert
+# (#42). The three TRI-era constants that lived here — N_STRATA, PER_STRATUM_QUOTA,
+# PER_TILE_WINDOW_CAP — went with dataset.stratify.
 
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.

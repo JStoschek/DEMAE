@@ -706,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     tiles, anomalies = measure(reader, sample, workers=args.workers, progress=_tqdm)
     log.info("measured %d tiles, %d anomalies", len(tiles), len(anomalies))
 
-    from .build import git_sha
+    from .provenance import git_sha
 
     report = build_report(
         tiles, anomalies,

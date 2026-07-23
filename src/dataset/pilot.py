@@ -382,7 +382,7 @@ def measure(
     ``cogs`` is the priority-ordered :func:`~dataset.sampling.sample_cogs` draw — any
     prefix is band-spread — so reading it in order and stopping once the target is met
     keeps the frame geographically balanced while bounding I/O. Reads are batched
-    across a thread pool (network-bound, like :mod:`dataset.build`); within a batch
+    across a thread pool (network-bound); within a batch
     results are re-ordered back to priority order before accumulation, so the frame is
     deterministic regardless of which read finishes first. A COG that cannot be read
     (or whose mask is absent) is surfaced in ``anomalies`` and never folded in as
@@ -707,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("scored %d windows from %d COGs, %d anomalies",
              len(rows), cogs_read, len(anomalies))
 
-    from .build import git_sha
+    from .provenance import git_sha
 
     report = build_report(
         rows,
