@@ -30,6 +30,7 @@ uv run python -m dataset.gates       # apply the locked quality gates -> data/ca
 uv run python -m dataset.frame       # fit + persist the standardization scaler (#40)
 uv run python -m dataset.centroids   # fit + persist the k=20 stratum centroids (#41)
 uv run python -m dataset.select      # allocate + FSCS -> artifacts/phase_d/selection_debug_50k.csv
+uv run python -m dataset.materialize # full-res read of the selected windows -> data/corpus_50k/
 ```
 
 `dataset.select` is **budget-parameterized** (`--budget`, default 50,000): it re-loads
@@ -38,10 +39,36 @@ the committed scaler and centroids and draws a deterministic selection list of
 identical strata. The selection list *is* the determinism contract — two runs from the
 committed artifacts reproduce it byte-for-byte (`docs/research/d4-sampler.md`).
 
-The **end-to-end materialize** — reading the selected windows at full resolution into
-int16 `shards/` + `manifest.parquet` + `corpus_meta.json` — is **Phase E** (consumes the
-selection list; not yet built). The ADR-0001 TRI-quintile build CLI it replaces
-(`dataset.build` / `dataset.pipeline`) was retired with the metric-basis sampler.
+`dataset.materialize` is the **end-to-end build** (Phase E1) and replaces the retired
+ADR-0001 TRI-quintile CLI (`dataset.build` / `dataset.pipeline`). It groups the selection
+list by COG so one open serves all of that COG's windows, reads them at full resolution
+across 16 worker processes, and writes:
+
+| artifact | where | committed? |
+|---|---|---|
+| int16 shards | `data/corpus_50k/shards/` | no — ~5 GB, gitignored, rebuildable |
+| tile manifest (v2 schema) | `data/corpus_50k/manifest.parquet` | yes |
+| corpus card + fingerprint | `data/corpus_50k/corpus_meta.json` | yes |
+| materialization ledger | `artifacts/phase_e/materialization_ledger.parquet` | yes |
+
+The **ledger** carries one row per *selected* window with the cause of every drop
+(`ok / zero_fill / no_land / degenerate / read_error`). It is committed because, unlike
+the shards and the manifest, it cannot be re-derived from committed inputs — knowing
+which windows failed requires the full-res read. Under the `accept_shortfall` attrition
+contract (#50) a window that fails is recorded and **never backfilled**, so the corpus is
+"50,000 selected, N materialized" and the manifest has no null-`shard_id` rows.
+
+The pass is **resumable at COG granularity** — re-run the same command to continue from
+the last checkpoint, or pass `--restart` to discard the attempt. A checkpoint is the only
+commit: it flushes the open shard, rewrites the manifest and ledger, and writes
+`build_state.json` last, so a kill at any instant costs at most one checkpoint of work and
+can never double-book a window. `--limit-cogs N` runs a prefix as a live-path smoke check
+(it leaves the build incomplete and writes no corpus card).
+
+Two runs from the same committed inputs reproduce the manifest and the `dataset_version`
+fingerprint byte-for-byte, at any executor and worker count: `ordered_futures` yields COGs
+in input order while keeping the pool fed, and the shard writer stays serial in the parent
+(measured in [`e1-read-cost.md`](docs/research/e1-read-cost.md) §Determinism).
 
 ## Visualize
 
@@ -58,8 +85,8 @@ where the 50k land on the globe), and before/after per-tile normalization throug
 It runs top-to-bottom on a fresh clone with **no network and no corpus**: the strata and
 the selection come from the committed artifacts (`artifacts/phase_d/`,
 `docs/research/d4-selection.json`), and the read-path figures come from a seeded 9-tile
-shard fixture the notebook builds itself — the end-to-end materialize is Phase E and is
-not built yet. Point `CORPUS_DIR` at a materialized corpus to render that instead.
+shard fixture the notebook builds itself. Point `CORPUS_DIR` at a corpus built by
+`dataset.materialize` to render that instead.
 
 ## Reproduce on a rented box
 
@@ -89,7 +116,8 @@ src/dataset/      # the Phase-0 pipeline package (stage-per-module)
   select.py       # stage 3e — allocate + FSCS + emit the selection list (#44)
   normalize.py    # stage 4 — clip, land-only stats, degenerate drop, int16
   manifest.py     # stage 5a — Parquet manifest + corpus_meta.json fingerprint
-  shards.py       # stage 5b — sharded int16 memmap storage
+  shards.py       # stage 5b — sharded int16 memmap storage (resumable writer)
+  materialize.py  # stage 5 — the driver: selection list -> shards + manifest + ledger (#51)
   loader.py       # stage 6 — torch read path (imports torch lazily)
   concurrency.py  # the bounded, order-preserving parallel-read primitive (#38)
   provenance.py   # git SHA + snapshot date stamped into every artifact

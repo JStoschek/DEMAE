@@ -11,12 +11,21 @@
 # uv.lock via `uv sync --frozen`. rasterio's wheels carry their own GDAL, so no
 # apt-get gdal is required.
 #
-#   Build:   docker build -t demae-etl .
-#   Scan:    docker run --rm -v "$PWD/data:/data" demae-etl -m dataset.catalog   # the live-read stage
-#   Select:  docker run --rm -v "$PWD/data:/data" demae-etl -m dataset.select    # draw the selection list
-# The transatlantic-read stage the same-region box exists for is the global scoring
-# pass (dataset.catalog); the fit/select stages read its committed artifacts and
-# touch no COG. The end-to-end full-res materialize is Phase E (not yet built).
+# Every stage resolves its paths *relative to WORKDIR* (`data/...`, `artifacts/...`),
+# so both directories are bind-mounted under /app — `data` for the frames and the
+# corpus, `artifacts` for the committed Phase-D inputs and the Phase-E ledger:
+#
+#   docker build -t demae-etl .
+#   MOUNTS='-v '$PWD'/data:/app/data -v '$PWD'/artifacts:/app/artifacts'
+#   docker run --rm $MOUNTS demae-etl -m dataset.catalog       # global scoring pass
+#   docker run --rm $MOUNTS demae-etl -m dataset.select        # draw the selection list
+#   docker run --rm $MOUNTS demae-etl -m dataset.materialize   # full-res corpus build
+#
+# Two stages read transatlantically and are what the same-region box exists for: the
+# global scoring pass (dataset.catalog) and the full-res materialize
+# (dataset.materialize). The fit/select stages in between read committed artifacts and
+# touch no COG. Both live-read stages are resumable, so a container that dies mid-pass
+# is restarted with the same command rather than from zero.
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
@@ -43,7 +52,7 @@ COPY README.md ./
 RUN uv sync --frozen --no-dev
 
 # Each pipeline stage is a `python -m dataset.<stage>` entry point; pass the module
-# you want to run as the command (default: the global scoring pass, the live-read
-# stage the same-region box exists for). Mount a volume at /data.
+# you want to run as the command (default: the global scoring pass, the first of the
+# two live-read stages). Mount /app/data and /app/artifacts — see the header.
 ENTRYPOINT ["python"]
 CMD ["-m", "dataset.catalog"]

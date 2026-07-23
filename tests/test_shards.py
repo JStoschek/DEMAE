@@ -164,6 +164,16 @@ def test_resume_at_a_shard_boundary_starts_a_fresh_shard(tmp_path):
     assert w.shard_row_counts == [4, 1]
 
 
+def test_closing_a_resumed_writer_truncates_the_shard_it_inherited(tmp_path):
+    # The run that finishes a build may have nothing left to write — it must still
+    # finalize the shard the watermark points at, or padding rows ship as tiles.
+    state = _crash(tmp_path, 6)
+    w = shards.ShardWriter(tmp_path, rows_per_shard=4, resume=state)
+    w.close()
+    assert np.load(shards.shard_path(tmp_path, 1)).shape[0] == 2
+    assert w.shard_row_counts == [4, 2]
+
+
 def test_resume_from_nothing_is_a_fresh_writer(tmp_path):
     with shards.ShardWriter(tmp_path, rows_per_shard=4, resume=shards.ShardState()) as w:
         ref = w.add(_tile(0))

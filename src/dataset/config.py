@@ -75,6 +75,15 @@ ROWS_PER_SHARD: Final = SHARD_TARGET_BYTES // _TILE_BYTES  # ~14,946
 # (#42). The three TRI-era constants that lived here — N_STRATA, PER_STRATUM_QUOTA,
 # PER_TILE_WINDOW_CAP — went with dataset.stratify.
 
+# --- Materialization attrition (issue #50) ------------------------------------
+# What happens when a *selected* window fails at full res. `accept_shortfall`: it is
+# recorded in the materialization ledger and never backfilled, so the corpus is
+# "50,000 selected, N materialized". Backfill was rejected because it would write
+# window_ids absent from the committed selection list — and that list, not the seed,
+# is the determinism contract (#43/#44). The string rides into corpus_meta.json
+# because #47's Gate-E bar reads it to pick which pre-committed branch to evaluate.
+ATTRITION_CONTRACT: Final = "accept_shortfall"
+
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
 # The cache-locally-not-stream policy (and why it differs from the COG reads) is

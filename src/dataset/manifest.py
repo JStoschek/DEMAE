@@ -187,6 +187,7 @@ def write_corpus_meta(
     catalog_version: str,
     centroids_md5: str,
     scaler_md5: str,
+    attrition_contract: str = config.ATTRITION_CONTRACT,
 ) -> dict:
     """Write ``corpus_meta.json`` — the corpus card + reproducibility fingerprint.
 
@@ -195,6 +196,12 @@ def write_corpus_meta(
     consumed by the loader's ``global`` normalization mode (ADR-0003 §3). The four
     Phase-D fingerprints feed ``build_params`` (see its docstring) and so ride into
     both the ``dataset_version`` hash and the documented provenance chain.
+
+    ``attrition_contract`` (#50) is recorded **top-level and outside ``build_params``**,
+    deliberately: #47's Gate-E bar names ``corpus_meta.json:attrition_contract`` as the
+    live-contract source, and the fingerprint's contents were pinned by #48 before #50
+    resolved. It says what happened to selected windows that failed at full res — under
+    ``accept_shortfall``, ``n_tiles`` is a *realized* count, not the budget.
     """
     params = build_params(
         selection_list_md5=selection_list_md5,
@@ -208,6 +215,7 @@ def write_corpus_meta(
         "storage_dtype": "int16",
         "clip_bounds": [config.CLIP_MIN_M, config.CLIP_MAX_M],
         "degenerate_std_eps": config.DEGENERATE_STD_EPS_M,
+        "attrition_contract": attrition_contract,
         "n_tiles": len(rows),
         "global_mean": global_mean,
         "global_std": global_std,

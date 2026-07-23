@@ -251,6 +251,11 @@ class ShardWriter:
         )
 
     def close(self) -> None:
+        if self._mm is None and self._resume_row:
+            # A resumed writer handed no tiles still owns the shard its watermark
+            # points at — the run that finishes a build may have nothing left to write
+            # but must still truncate that shard, or its padding rows ship as tiles.
+            self._reopen()
         self._finalize_current()
 
     @property

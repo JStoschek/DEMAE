@@ -7,7 +7,7 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0004). Stage map
 (data flow, top to bottom):
 
     discovery -> tiling -> catalog -> gates -> frame -> centroids -> select
-              -> normalize -> manifest/shards -> loader
+              -> materialize (normalize + shards + manifest) -> loader
 
 - :mod:`dataset.discovery`  — list released COGs from the public bucket (§stage 1)
 - :mod:`dataset.geometry`   — pure key/lat-band/geocell/window-grid math
@@ -26,6 +26,7 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0004). Stage map
 - :mod:`dataset.normalize`  — clip, land-only stats, degenerate drop, int16 (§4)
 - :mod:`dataset.shards`     — sharded int16 memmap storage (§5b)
 - :mod:`dataset.manifest`   — Parquet index + corpus_meta.json fingerprint (§5a)
+- :mod:`dataset.materialize`— the driver: selection list -> shards + manifest + ledger (#51)
 - :mod:`dataset.concurrency`— the bounded, order-preserving parallel-read primitive (#38)
 - :mod:`dataset.provenance` — git SHA + snapshot date stamped into every artifact
 - :mod:`dataset.loader`     — Phase-1 torch read path (imports torch lazily)
