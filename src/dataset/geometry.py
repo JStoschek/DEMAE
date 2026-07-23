@@ -218,3 +218,41 @@ def pixel_spacing_m(
     dy = _M_PER_DEG_LAT / rows_per_degree
     dx = _M_PER_DEG_LAT * math.cos(math.radians(lat)) / cols_per_degree
     return dy, dx
+
+
+#: Rows spanning a degree — latitude is sampled at a constant 1" everywhere (recon §6).
+ROWS_PER_DEGREE: Final = 3600
+
+#: Columns spanning a degree, per :func:`lat_band` label — Copernicus's poleward column
+#: coarsening (recon §6's table: 1", 1.5", 2", 3", 5", 10").
+#:
+#: Every *production* reader takes these off the raster it already opened
+#: (:mod:`dataset.catalog`, :mod:`dataset.pilot`, :mod:`dataset.calibration` all read
+#: ``full_w``/``full_h``), which is why the table lived only in the recon doc until now.
+#: :mod:`dataset.gallery` is the first consumer with no raster in hand — it renders tiles
+#: out of the shards, long after the COG is closed — and a hillshade needs the true
+#: anisotropic spacing or it draws high-latitude terrain up to 1.55x too steep across.
+#: So the table lands here, beside :func:`lat_band` that keys it, rather than as a dict
+#: inside a rendering script where it would be a second, drifting source of truth.
+COLS_PER_DEGREE: Final = {
+    "0-50": 3600,
+    "50-60": 2400,
+    "60-70": 1800,
+    "70-80": 1200,
+    "80-85": 720,
+    "85-90": 360,
+}
+
+
+def band_pixel_spacing_m(lat: float) -> tuple[float, float]:
+    """Full-resolution ``(dy, dx)`` metres per pixel at ``lat``, from the band table.
+
+    :func:`pixel_spacing_m` for a caller who knows *where* a window is but no longer
+    has the raster that says how wide it was — the shard-backed reader's case. The band
+    is derived from ``lat`` itself via :func:`lat_band`, so the two can never disagree.
+    """
+    return pixel_spacing_m(
+        lat,
+        rows_per_degree=ROWS_PER_DEGREE,
+        cols_per_degree=COLS_PER_DEGREE[lat_band(lat)],
+    )

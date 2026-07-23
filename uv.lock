@@ -541,6 +541,7 @@ dev = [
     { name = "ipykernel" },
     { name = "jupyterlab" },
     { name = "matplotlib" },
+    { name = "pillow" },
     { name = "pytest" },
     { name = "torch" },
 ]
@@ -561,6 +562,7 @@ dev = [
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "jupyterlab", specifier = ">=4.2" },
     { name = "matplotlib", specifier = ">=3.9" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "torch", specifier = ">=2.2" },
 ]

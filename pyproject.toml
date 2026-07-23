@@ -30,6 +30,9 @@ dependencies = [
 dev = [
     "jupyterlab>=4.2",
     "matplotlib>=3.9",
+    # Arrives transitively under matplotlib, but the E2.4 gallery driver imports it
+    # directly to write the non-gating sheets as WebP, so it is declared directly too.
+    "pillow>=10.0",
     "ipykernel>=6.29",
     "pytest>=8.2",
     # Torch is only needed to exercise the Phase-1 read path (dataset.loader); the
