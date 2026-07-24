@@ -241,7 +241,11 @@ in A2–A3 proceeds in parallel without it.
    and the k knob; worst case, fall back to the Iwahashi 40-cluster global product as an
    external stratum label (published, downloadable).
 3. **Quality gates hollowing out steep-forest strata** — attrition-by-stratum table
-   (E2.5) catches it; loosen EDM cap per-stratum if needed.
+   (E2.5) catches it; loosen EDM cap per-stratum if needed. `[realized — edited limb
+   accepted]` The E2.5 table fired the `edited` gate on high-alpine stratum 19 (18.1%,
+   12.1×); the "if needed" test was applied and the answer is **not needed** — the gate
+   stands, per ADR-0006 (decision #60). The `degenerate`/flatness firings from the same
+   table (strata 2/5/7/17) are a separate, still-open question.
 4. **Overview scoring bias at high latitude** (anisotropic pixels + band discontinuities
    above 50°) — anisotropic dx/dy in A2 + lat-band column + A3 calibration sample
    includes high-lat tiles.

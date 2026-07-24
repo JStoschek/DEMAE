@@ -13,6 +13,8 @@ existing ADR, surface it rather than silently overriding.
 | [0002](0002-storage-format-and-manifest.md) | Storage format and manifest | Accepted |
 | [0003](0003-dataloader-design.md) | Dataloader design | Accepted |
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
+| 0005 | Stratum descriptions / corpus card (E3) | Reserved — [#56](https://github.com/JStoschek/DEMAE/issues/56), pending |
+| [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |
 
 ## Supersession
 

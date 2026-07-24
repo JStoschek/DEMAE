@@ -238,6 +238,15 @@ before deciding whether the cap stays retired at 500 k.
 
 ## 5. E2.5 — attrition by stratum *(Finding — **FIRED**)*
 
+> **Disposition (added 2026-07-24, after the fact).** The `edited` × stratum-19 pair
+> below was carried into the edit/fill-gate map ([#57](https://github.com/JStoschek/DEMAE/issues/57))
+> and **reviewed → accept** per [ADR-0006](../adr/0006-accept-edm-flm-hollowing-stratum19.md)
+> (decision [#60](https://github.com/JStoschek/DEMAE/issues/60)): the gate stands
+> unchanged and the hollowing is correct data-quality behaviour. The four `degenerate`
+> (flatness) pairs — strata 2, 5, 7, 17 — are **still open** and await their own effort;
+> nothing here dispositions them. This note does not alter the pre-registered scoring
+> below (that fed #54's verdict); it records what became of the firing.
+
 ![gate attrition per stratum](e2-gate-attrition.png)
 
 This is the table plan risk #3 has been waiting on since Phase C, and the one the map's
