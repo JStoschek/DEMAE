@@ -15,6 +15,13 @@
   stratification *metric basis* is replaced by the frozen 6-metric vector. The
   allocation design §5 built on the strata (quotas, geo round-robin) is redrawn by
   Phase D, not by ADR-0004.
+- **Superseded by:** [ADR-0005](0005-sampling-design.md), 2026-07-24 (Phase D / Gate E,
+  [issue #68](https://github.com/JStoschek/DEMAE/issues/68)) — the *remainder* of §4–5
+  that ADR-0004 left standing: the quintile strata construction, the equal-quota
+  allocation and its skew knob, and the per-1°-tile window cap. The **10° geo-cell
+  round-robin survives**, amended to fall through to the next-nearest window inside
+  FSCS; see [ADR-0005 §8](0005-sampling-design.md#8-what-this-supersedes-in-adr-0001-precisely)
+  for the clause-by-clause disposition.
 
 ## Context
 
@@ -71,6 +78,10 @@ normalization statistics** (§8). Inland lakes (flat but non-zero) are legitimat
 *(Superseded 2026-07-20 by [ADR-0004](0004-frozen-metric-vector.md): the single TRI
 ruggedness axis is replaced wholesale by the frozen 6-metric vector — measured against
 a Spearman correlation matrix, not chosen a priori.)*
+*(Superseded 2026-07-24 by [ADR-0005](0005-sampling-design.md): the **quintile cut into 5
+strata** is replaced by k=20 k-means over the frozen vector — the descriptor space is a
+continuum with no interior optimum, so k is set at the one measured boundary, the
+seed-stability cliff at k=20→30.)*
 
 The ruggedness metric is **TRI (Riley: mean absolute elevation difference to the 8
 neighbours)**, computed on the **×8 overview** and aggregated per window. TRI is preferred
@@ -90,6 +101,12 @@ single-axis TRI quintile strata this section allocates over are gone — replace
 frozen 6-metric k-means vector. The **allocation design** here (quota-per-stratum, the
 10° geo-cell round-robin, the per-tile window cap) is not decided by ADR-0004 either;
 it is redrawn by Phase D, which is charted as its own effort.)*
+*(Superseded 2026-07-24 by [ADR-0005](0005-sampling-design.md) — Phase D drew it. **Equal
+quotas → pure Neyman** (`n_h ∝ N_h·σ_h`), the **skew-quotas knob is gone** (Neyman sets the
+skew from measured σ_h), and the **per-1°-tile window cap is retired** as inert (realized
+max 44 against the untested cap of 64). The **10° geo-cell round-robin survives**, now
+inside FSCS and required to fall through to the next-nearest window. The 10° cell id in the
+manifest, and the Phase-3 deferral of regime labels, are unchanged.)*
 
 Target distribution is **equal quota per stratum** (~10k each → 50k). Because the natural
 distribution is flat-dominated, uniform-across-strata automatically oversamples rugged

@@ -93,7 +93,7 @@ feeding a 48×-oversupplied allocation — it almost certainly does not change *
 are selected. Against that trivial yield, any gate change forces a full **C→D→E
 re-materialization**: re-fit the k-means on a changed keep-set ([#44](https://github.com/JStoschek/DEMAE/issues/44)),
 re-stratify, re-allocate — reopening everything Phase D locked (k=20, the allocation, the
-frozen metric vector). Worse, the catalog stores only the **aggregate** `edm_edited_frac`;
+frozen metric vector), now recorded as [ADR-0005](0005-sampling-design.md). Worse, the catalog stores only the **aggregate** `edm_edited_frac`;
 isolating `EDM==2` from `EDM ∈ {3,4}` likely needs a **per-code mask recompute**, i.e. new
 pipeline work, to recover those 751 windows at all. Full re-materialization (possibly
 gated on a mask recompute) for a +1.4% pool bump in a 48×-oversupplied stratum is not a

@@ -63,6 +63,32 @@ GitHub issue #1.
   clear the water and edited caps *unevaluated*. Such windows are flagged and excluded
   from `keep` — unknown quality is not passing quality. Zero windows in the shipped
   catalog; it exists so a future scoring run cannot seed the frame silently.
+- **Stratum** (`stratum_id`) — one of the **k = 20** k-means cells the kept catalog is
+  partitioned into, in the z-scored space of the frozen metric vector. It is a **label, not
+  a rank**: unlike the TRI-era `stratum` (a ruggedness quintile) it carries no ordering, and
+  the two columns are not comparable — which is why [ADR-0002 §3a](docs/adr/0002-storage-format-and-manifest.md)
+  renamed rather than reused it. k=20 is set at the one measured boundary, the seed-stability
+  cliff at k=20→30; the descriptor space is a **continuum, not clumps**, so no interior
+  optimum exists to find, and *distinguishability between* adjacent strata is explicitly
+  disavowed. A stratum is **terrain-meaningful** — the Gate E gallery judged all 20 coherent.
+  Frozen by [ADR-0005](docs/adr/0005-sampling-design.md).
+- **Selection list** — the committed list of `window_id, stratum_id, provenance` triples the
+  sampler emits: the windows chosen for a tier, *before* any of them is read at full
+  resolution. It is **the determinism contract** — not the seed, and not the sampler's code
+  path. Phase E consumes the file rather than regenerating it, because multithreaded Lloyd is
+  not reproducible even at a fixed seed. Distinct from the **manifest**, which indexes what
+  actually survived materialization ([ADR-0005 §5](docs/adr/0005-sampling-design.md#5-determinism--the-persisted-artifact-is-the-contract-never-the-seed)).
+- **Neyman allocation** — the rule splitting a tier's budget across strata, `n_h ∝ N_h·σ_h`
+  (stratum size × mean distance to its centroid), apportioned to the exact budget by largest
+  remainder. It deliberately over-samples rare, varied terrain — a **1.8× per-row premium** —
+  which is precisely why the corpus is **terrain-diverse, not geo-uniform**: per-region counts
+  read as representativeness will mislead. The only addition is a within-stratum **coastal
+  frame-rate floor** at 1.337%, the rate at which coastal windows occur in the frame.
+- **FSCS** — feature-space coverage sampling: the within-stratum selector. Sub-k-means at
+  `k = quota`, taking the window nearest each sub-centroid, so a stratum's picks *cover* its
+  descriptor space instead of sampling it randomly. Ties resolve by a **10° geo-cell
+  round-robin that falls through** to the next-nearest window — without the fall-through the
+  quota under-fills, because two sub-centroids in one dense pocket resolve to the same row.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.
@@ -74,8 +100,9 @@ GitHub issue #1.
   [ADR-0001](docs/adr/0001-corpus-construction-recipe.md); it is now the **metric
   vector** ([ADR-0004](docs/adr/0004-frozen-metric-vector.md)), and the v2 schema
   ([ADR-0002 §3a](docs/adr/0002-storage-format-and-manifest.md)) follows Phase D's
-  allocation design — the column is `stratum_id` (a k=20 label), not the TRI-era
-  `stratum` (a ruggedness quintile), and `tri` is gone. Denormalizing makes the manifest
+  allocation design, now recorded as [ADR-0005](docs/adr/0005-sampling-design.md) — the
+  column is `stratum_id` (a k=20 label), not the TRI-era `stratum` (a ruggedness
+  quintile), and `tri` is gone. Denormalizing makes the manifest
   **self-contained**: reading the corpus needs no second file. **Region is recorded** so a
   geographic hold-out split is possible in Phase 2 (the split itself is not a Phase-0
   decision).

@@ -29,7 +29,8 @@ or accept the concentration as correct?**
 **The confound is the whole problem.** The gate keys on `land_std` (window flatness).
 `land_std` is *not* one of the six frozen metrics, but it correlates with two of them
 (`slope_mean`, `local_relief`), and the k=20 strata are k-means cells in that six-metric
-space. So a flatness gate concentrating in the flat strata is **partly structural, not
+space ([ADR-0005 §2](0005-sampling-design.md#2-k--20-strata--lloyd-chosen-at-the-one-measured-boundary)).
+So a flatness gate concentrating in the flat strata is **partly structural, not
 necessarily bias** — you cannot read the raw 5.32× as excess. Separating "excess bias"
 from "expected structure" needs an *expected-ratio model* that the #54 verdict explicitly
 **barred from being built post-hoc at Gate E** (a model chosen after seeing which pairs it

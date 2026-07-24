@@ -9,11 +9,11 @@ existing ADR, surface it rather than silently overriding.
 
 | ADR | Decision | Status |
 |---|---|---|
-| [0001](0001-corpus-construction-recipe.md) | Corpus-construction recipe (Phase 0) | Accepted — §4 amended by Gate A3; §3 amended by Phase C2; §4–5 metric basis superseded by [0004](0004-frozen-metric-vector.md) |
+| [0001](0001-corpus-construction-recipe.md) | Corpus-construction recipe (Phase 0) | Accepted — §4 amended by Gate A3; §3 amended by Phase C2; §4–5 metric basis superseded by [0004](0004-frozen-metric-vector.md); §4–5 strata/quotas superseded by [0005](0005-sampling-design.md) |
 | [0002](0002-storage-format-and-manifest.md) | Storage format and manifest | Accepted |
 | [0003](0003-dataloader-design.md) | Dataloader design | Accepted |
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
-| 0005 | Stratum descriptions / corpus card (E3) | Reserved — [#56](https://github.com/JStoschek/DEMAE/issues/56), pending |
+| [0005](0005-sampling-design.md) | Sampling design — stratification, allocation, within-stratum selection (Phase D / Gate E) | Accepted |
 | [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |
 | [0007](0007-accept-degenerate-flatness-gate-flat-strata.md) | Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17 | Accepted |
 
