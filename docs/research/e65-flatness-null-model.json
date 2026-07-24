@@ -1,0 +1,300 @@
+{
+  "artifact": "E65 \u2014 structural-null model run: observed-vs-expected degenerate drop rate",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/65",
+  "map": "https://github.com/JStoschek/DEMAE/issues/62",
+  "bar": "docs/research/e63-flatness-null-bar.json",
+  "produced_by": "notebooks/e65_flatness_null_model.py",
+  "code_version": "6b446a0",
+  "rate_signal": "ACCEPT",
+  "primary_stratum": 5,
+  "binding_rung_stratum5": "L0",
+  "fit_population": {
+    "assignable_rows": 3634257,
+    "unassignable_rows": 752463,
+    "degenerate_assignable": 403197,
+    "flag_equals_landstd_lt_3": {
+      "matches": 3634257,
+      "of": 3634257
+    },
+    "uniform_anchor_rate": 0.0976
+  },
+  "significance_leg": {
+    "null": "Poisson-binomial, normal (CLT) evaluation of the pinned distribution",
+    "alpha": 0.01,
+    "note": "non-binding at this N per the bar; z-scores reported for transparency"
+  },
+  "strata": {
+    "5": {
+      "n_would_be": 247681,
+      "observed_count": 128511,
+      "observed_rate": 0.5188569167598645,
+      "anchor_uniform": {
+        "expected_rate": 0.0976,
+        "residual_pp": 0.42125691675986443,
+        "residual_ratio": 5.316156934015004
+      },
+      "anchor_saturated": {
+        "expected_rate": 0.5188569167598645,
+        "residual_pp": 0.0,
+        "residual_ratio": 1.0
+      },
+      "rungs": {
+        "L0": {
+          "observed_rate": 0.5188569167598645,
+          "expected_rate": 0.5255571078918526,
+          "residual_pp": -0.006700191131988165,
+          "residual_ratio": 0.9872512596036149,
+          "residual_count": -1659.5100397619606,
+          "significant": false,
+          "null_z": -15.124956814213927,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L1": {
+          "observed_rate": 0.5188569167598645,
+          "expected_rate": 0.5191943755281639,
+          "residual_pp": -0.0003374587682994923,
+          "residual_ratio": 0.9993500338520497,
+          "residual_count": -83.58212519118655,
+          "significant": false,
+          "null_z": -0.82780679248844,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L2": {
+          "observed_rate": 0.5188569167598645,
+          "expected_rate": 0.5226771969175187,
+          "residual_pp": -0.0038202801576542322,
+          "residual_ratio": 0.9926909377715648,
+          "residual_count": -946.2108097279579,
+          "significant": false,
+          "null_z": -9.258474522801263,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L3": {
+          "observed_rate": 0.5188569167598645,
+          "expected_rate": 0.5193730662204595,
+          "residual_pp": -0.0005161494605950834,
+          "residual_ratio": 0.9990062067246744,
+          "residual_count": -127.84041454965084,
+          "significant": false,
+          "null_z": -1.3557263627362937,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        }
+      },
+      "loosen_signal_all_rungs": false,
+      "family": "near-level plains / basins",
+      "role": "primary"
+    },
+    "2": {
+      "n_would_be": 217614,
+      "observed_count": 65447,
+      "observed_rate": 0.30074811363239495,
+      "anchor_uniform": {
+        "expected_rate": 0.0976,
+        "residual_pp": 0.20314811363239493,
+        "residual_ratio": 3.08143559049585
+      },
+      "anchor_saturated": {
+        "expected_rate": 0.30074811363239495,
+        "residual_pp": 0.0,
+        "residual_ratio": 1.0
+      },
+      "rungs": {
+        "L0": {
+          "observed_rate": 0.30074811363239495,
+          "expected_rate": 0.3056489822357999,
+          "residual_pp": -0.00490086860340494,
+          "residual_ratio": 0.9839656963109923,
+          "residual_count": -1066.4976202613625,
+          "significant": false,
+          "null_z": -12.510869408554447,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L1": {
+          "observed_rate": 0.30074811363239495,
+          "expected_rate": 0.3013483664528641,
+          "residual_pp": -0.0006002528204691604,
+          "residual_ratio": 0.9980081099242891,
+          "residual_count": -130.62341727357588,
+          "significant": false,
+          "null_z": -1.7034909562244593,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L2": {
+          "observed_rate": 0.30074811363239495,
+          "expected_rate": 0.29779928057032207,
+          "residual_pp": 0.0029488330620728864,
+          "residual_ratio": 1.0099020825585123,
+          "residual_count": 641.7073579699291,
+          "significant": true,
+          "null_z": 8.153563003591051,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L3": {
+          "observed_rate": 0.30074811363239495,
+          "expected_rate": 0.2993577096485177,
+          "residual_pp": 0.001390403983877242,
+          "residual_ratio": 1.0046446239367268,
+          "residual_count": 302.57137254746215,
+          "significant": true,
+          "null_z": 4.110828502143715,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        }
+      },
+      "loosen_signal_all_rungs": false,
+      "family": "low-relief plains with faint drainage",
+      "role": "corroborating"
+    },
+    "7": {
+      "n_would_be": 212872,
+      "observed_count": 67579,
+      "observed_rate": 0.31746307640272087,
+      "anchor_uniform": {
+        "expected_rate": 0.0976,
+        "residual_pp": 0.21986307640272085,
+        "residual_ratio": 3.2526954549459104
+      },
+      "anchor_saturated": {
+        "expected_rate": 0.31746307640272087,
+        "residual_pp": 0.0,
+        "residual_ratio": 1.0
+      },
+      "rungs": {
+        "L0": {
+          "observed_rate": 0.31746307640272087,
+          "expected_rate": 0.3138708532469688,
+          "residual_pp": 0.0035922231557520834,
+          "residual_ratio": 1.0114449083710413,
+          "residual_count": 764.6837276112575,
+          "significant": true,
+          "null_z": 6.953715308554406,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L1": {
+          "observed_rate": 0.31746307640272087,
+          "expected_rate": 0.3202950666073264,
+          "residual_pp": -0.0028319902046055057,
+          "residual_ratio": 0.9911581835005987,
+          "residual_count": -602.8514188347832,
+          "significant": false,
+          "null_z": -6.701617115407343,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L2": {
+          "observed_rate": 0.31746307640272087,
+          "expected_rate": 0.3179133004145462,
+          "residual_pp": -0.00045022401182531757,
+          "residual_ratio": 0.9985838151117357,
+          "residual_count": -95.840085845279,
+          "significant": false,
+          "null_z": -0.9172371449405599,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L3": {
+          "observed_rate": 0.31746307640272087,
+          "expected_rate": 0.31881281178390686,
+          "residual_pp": -0.0013497353811859902,
+          "residual_ratio": 0.9957663703235965,
+          "residual_count": -287.3208700638241,
+          "significant": false,
+          "null_z": -3.212991225922162,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        }
+      },
+      "loosen_signal_all_rungs": false,
+      "family": "high-altitude flats / plateaus",
+      "role": "corroborating"
+    },
+    "17": {
+      "n_would_be": 168601,
+      "observed_count": 50046,
+      "observed_rate": 0.29683097965018,
+      "anchor_uniform": {
+        "expected_rate": 0.0976,
+        "residual_pp": 0.19923097965018,
+        "residual_ratio": 3.0413010210059426
+      },
+      "anchor_saturated": {
+        "expected_rate": 0.29683097965018,
+        "residual_pp": 0.0,
+        "residual_ratio": 1.0
+      },
+      "rungs": {
+        "L0": {
+          "observed_rate": 0.29683097965018,
+          "expected_rate": 0.26891538430841033,
+          "residual_pp": 0.027915595341769683,
+          "residual_ratio": 1.1038081008773906,
+          "residual_count": 4706.59729021771,
+          "significant": true,
+          "null_z": 59.1165254475497,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L1": {
+          "observed_rate": 0.29683097965018,
+          "expected_rate": 0.292899857870809,
+          "residual_pp": 0.003931121779370994,
+          "residual_ratio": 1.0134213850697904,
+          "residual_count": 662.7910631237289,
+          "significant": true,
+          "null_z": 8.40411865389767,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L2": {
+          "observed_rate": 0.29683097965018,
+          "expected_rate": 0.2883297479433782,
+          "residual_pp": 0.008501231706801837,
+          "residual_ratio": 1.0294844072366451,
+          "residual_count": 1433.3161669984966,
+          "significant": true,
+          "null_z": 19.516462608420646,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        },
+        "L3": {
+          "observed_rate": 0.29683097965018,
+          "expected_rate": 0.2960209077166396,
+          "residual_pp": 0.0008100719335404349,
+          "residual_ratio": 1.0027365362122187,
+          "residual_count": 136.57893806685087,
+          "significant": false,
+          "null_z": 1.6397109429075496,
+          "meets_abs_floor": false,
+          "meets_rel_floor": false,
+          "meets_all_three": false
+        }
+      },
+      "loosen_signal_all_rungs": false,
+      "family": "low-relief lowlands with drainage / water",
+      "role": "corroborating"
+    }
+  }
+}
