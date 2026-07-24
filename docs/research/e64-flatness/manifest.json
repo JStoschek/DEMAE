@@ -1,0 +1,665 @@
+{
+  "seed": 20260723,
+  "sheets": {
+    "s05-dropped-uniform": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM:3376:976",
+        "stem": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 976,
+        "land_std": 0.275,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.56
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM:224:3376",
+        "stem": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM",
+        "win_row0": 224,
+        "win_col0": 3376,
+        "land_std": 1.771,
+        "texture": 0.003,
+        "geomorphon_entropy": 0.854
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM:3136:1568",
+        "stem": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 1568,
+        "land_std": 1.588,
+        "texture": 0.004,
+        "geomorphon_entropy": 0.846
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM:3376:224",
+        "stem": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 224,
+        "land_std": 0.493,
+        "texture": 0.002,
+        "geomorphon_entropy": 0.257
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM:2240:3136",
+        "stem": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 3136,
+        "land_std": 1.835,
+        "texture": 0.002,
+        "geomorphon_entropy": 1.376
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM:2240:3136",
+        "stem": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 3136,
+        "land_std": 2.495,
+        "texture": 0.004,
+        "geomorphon_entropy": 1.132
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM:2912:2240",
+        "stem": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM",
+        "win_row0": 2912,
+        "win_col0": 2240,
+        "land_std": 2.273,
+        "texture": 0.002,
+        "geomorphon_entropy": 0.611
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM:672:448",
+        "stem": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM",
+        "win_row0": 672,
+        "win_col0": 448,
+        "land_std": 1.213,
+        "texture": 0.012,
+        "geomorphon_entropy": 1.343
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM:2016:224",
+        "stem": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM",
+        "win_row0": 2016,
+        "win_col0": 224,
+        "land_std": 1.126,
+        "texture": 0.01,
+        "geomorphon_entropy": 1.362
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S38_00_W061_00_DEM:2688:448",
+        "stem": "Copernicus_DSM_COG_10_S38_00_W061_00_DEM",
+        "win_row0": 2688,
+        "win_col0": 448,
+        "land_std": 1.655,
+        "texture": 0.003,
+        "geomorphon_entropy": 0.338
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM:672:2240",
+        "stem": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM",
+        "win_row0": 672,
+        "win_col0": 2240,
+        "land_std": 0.703,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.074
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S34_00_E137_00_DEM:1344:3136",
+        "stem": "Copernicus_DSM_COG_10_S34_00_E137_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 3136,
+        "land_std": 2.097,
+        "texture": 0.002,
+        "geomorphon_entropy": 1.043
+      }
+    ],
+    "s05-dropped-by-landstd": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM:3376:976",
+        "stem": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 976,
+        "land_std": 0.275,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.56
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM:3376:224",
+        "stem": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 224,
+        "land_std": 0.493,
+        "texture": 0.002,
+        "geomorphon_entropy": 0.257
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM:672:2240",
+        "stem": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM",
+        "win_row0": 672,
+        "win_col0": 2240,
+        "land_std": 0.703,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.074
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N48_00_E046_00_DEM:2464:1792",
+        "stem": "Copernicus_DSM_COG_10_N48_00_E046_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 1792,
+        "land_std": 0.908,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.849
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM:2016:224",
+        "stem": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM",
+        "win_row0": 2016,
+        "win_col0": 224,
+        "land_std": 1.126,
+        "texture": 0.01,
+        "geomorphon_entropy": 1.362
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM:672:448",
+        "stem": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM",
+        "win_row0": 672,
+        "win_col0": 448,
+        "land_std": 1.213,
+        "texture": 0.012,
+        "geomorphon_entropy": 1.343
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM:3136:1568",
+        "stem": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 1568,
+        "land_std": 1.588,
+        "texture": 0.004,
+        "geomorphon_entropy": 0.846
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM:224:3376",
+        "stem": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM",
+        "win_row0": 224,
+        "win_col0": 3376,
+        "land_std": 1.771,
+        "texture": 0.003,
+        "geomorphon_entropy": 0.854
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM:2240:3136",
+        "stem": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 3136,
+        "land_std": 1.835,
+        "texture": 0.002,
+        "geomorphon_entropy": 1.376
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM:2912:2240",
+        "stem": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM",
+        "win_row0": 2912,
+        "win_col0": 2240,
+        "land_std": 2.273,
+        "texture": 0.002,
+        "geomorphon_entropy": 0.611
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM:2240:3136",
+        "stem": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 3136,
+        "land_std": 2.495,
+        "texture": 0.004,
+        "geomorphon_entropy": 1.132
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S19_00_E025_00_DEM:3376:1568",
+        "stem": "Copernicus_DSM_COG_10_S19_00_E025_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 1568,
+        "land_std": 2.854,
+        "texture": 0.002,
+        "geomorphon_entropy": 0.387
+      }
+    ],
+    "s05-kept-uniform": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_N06_00_E033_00_DEM:3136:3376",
+        "stem": "Copernicus_DSM_COG_10_N06_00_E033_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 3376,
+        "land_std": 5.04,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.103
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S27_00_E115_00_DEM:2464:1120",
+        "stem": "Copernicus_DSM_COG_10_S27_00_E115_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 1120,
+        "land_std": 9.494,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.241
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N27_00_W005_00_DEM:1568:3376",
+        "stem": "Copernicus_DSM_COG_10_N27_00_W005_00_DEM",
+        "win_row0": 1568,
+        "win_col0": 3376,
+        "land_std": 4.987,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.56
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S19_00_E122_00_DEM:2464:224",
+        "stem": "Copernicus_DSM_COG_10_S19_00_E122_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 224,
+        "land_std": 8.178,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.354
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S20_00_E135_00_DEM:896:2912",
+        "stem": "Copernicus_DSM_COG_10_S20_00_E135_00_DEM",
+        "win_row0": 896,
+        "win_col0": 2912,
+        "land_std": 3.382,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.033
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N22_00_E048_00_DEM:1344:0",
+        "stem": "Copernicus_DSM_COG_10_N22_00_E048_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 0,
+        "land_std": 3.051,
+        "texture": 0.011,
+        "geomorphon_entropy": 1.092
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N27_00_E001_00_DEM:0:2912",
+        "stem": "Copernicus_DSM_COG_10_N27_00_E001_00_DEM",
+        "win_row0": 0,
+        "win_col0": 2912,
+        "land_std": 4.084,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.002
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N10_00_E049_00_DEM:1120:2688",
+        "stem": "Copernicus_DSM_COG_10_N10_00_E049_00_DEM",
+        "win_row0": 1120,
+        "win_col0": 2688,
+        "land_std": 19.448,
+        "texture": 0.001,
+        "geomorphon_entropy": 0.793
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N15_00_E009_00_DEM:2464:672",
+        "stem": "Copernicus_DSM_COG_10_N15_00_E009_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 672,
+        "land_std": 5.701,
+        "texture": 0.0,
+        "geomorphon_entropy": 1.302
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N30_00_W103_00_DEM:0:224",
+        "stem": "Copernicus_DSM_COG_10_N30_00_W103_00_DEM",
+        "win_row0": 0,
+        "win_col0": 224,
+        "land_std": 10.52,
+        "texture": 0.003,
+        "geomorphon_entropy": 1.276
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N24_00_W012_00_DEM:672:448",
+        "stem": "Copernicus_DSM_COG_10_N24_00_W012_00_DEM",
+        "win_row0": 672,
+        "win_col0": 448,
+        "land_std": 6.049,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.751
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S20_00_E133_00_DEM:0:224",
+        "stem": "Copernicus_DSM_COG_10_S20_00_E133_00_DEM",
+        "win_row0": 0,
+        "win_col0": 224,
+        "land_std": 3.462,
+        "texture": 0.0,
+        "geomorphon_entropy": 0.453
+      }
+    ],
+    "s02-dropped-uniform": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_S82_00_W176_00_DEM:2912:224",
+        "stem": "Copernicus_DSM_COG_10_S82_00_W176_00_DEM",
+        "win_row0": 2912,
+        "win_col0": 224,
+        "land_std": 0.989,
+        "texture": 0.01,
+        "geomorphon_entropy": 2.016
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S78_00_W064_00_DEM:448:0",
+        "stem": "Copernicus_DSM_COG_10_S78_00_W064_00_DEM",
+        "win_row0": 448,
+        "win_col0": 0,
+        "land_std": 0.53,
+        "texture": 0.006,
+        "geomorphon_entropy": 1.78
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S70_00_E073_00_DEM:1792:448",
+        "stem": "Copernicus_DSM_COG_10_S70_00_E073_00_DEM",
+        "win_row0": 1792,
+        "win_col0": 448,
+        "land_std": 1.948,
+        "texture": 0.001,
+        "geomorphon_entropy": 1.543
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N49_00_W103_00_DEM:1344:896",
+        "stem": "Copernicus_DSM_COG_10_N49_00_W103_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 896,
+        "land_std": 2.926,
+        "texture": 0.015,
+        "geomorphon_entropy": 2.051
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N51_00_W106_00_DEM:1344:1568",
+        "stem": "Copernicus_DSM_COG_10_N51_00_W106_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 1568,
+        "land_std": 2.677,
+        "texture": 0.011,
+        "geomorphon_entropy": 1.528
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N21_00_W106_00_DEM:1120:2240",
+        "stem": "Copernicus_DSM_COG_10_N21_00_W106_00_DEM",
+        "win_row0": 1120,
+        "win_col0": 2240,
+        "land_std": 1.551,
+        "texture": 0.026,
+        "geomorphon_entropy": 1.804
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S26_00_W063_00_DEM:2240:0",
+        "stem": "Copernicus_DSM_COG_10_S26_00_W063_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 0,
+        "land_std": 1.321,
+        "texture": 0.012,
+        "geomorphon_entropy": 1.931
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N12_00_E015_00_DEM:3136:1792",
+        "stem": "Copernicus_DSM_COG_10_N12_00_E015_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 1792,
+        "land_std": 0.797,
+        "texture": 0.03,
+        "geomorphon_entropy": 1.803
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S69_00_E071_00_DEM:2016:1344",
+        "stem": "Copernicus_DSM_COG_10_S69_00_E071_00_DEM",
+        "win_row0": 2016,
+        "win_col0": 1344,
+        "land_std": 2.128,
+        "texture": 0.017,
+        "geomorphon_entropy": 1.176
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N41_00_E085_00_DEM:1120:896",
+        "stem": "Copernicus_DSM_COG_10_N41_00_E085_00_DEM",
+        "win_row0": 1120,
+        "win_col0": 896,
+        "land_std": 1.285,
+        "texture": 0.005,
+        "geomorphon_entropy": 1.727
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM:2016:672",
+        "stem": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM",
+        "win_row0": 2016,
+        "win_col0": 672,
+        "land_std": 1.512,
+        "texture": 0.033,
+        "geomorphon_entropy": 1.949
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N39_00_W090_00_DEM:3136:224",
+        "stem": "Copernicus_DSM_COG_10_N39_00_W090_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 224,
+        "land_std": 2.331,
+        "texture": 0.041,
+        "geomorphon_entropy": 1.784
+      }
+    ],
+    "s07-dropped-uniform": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_S79_00_E109_00_DEM:2240:672",
+        "stem": "Copernicus_DSM_COG_10_S79_00_E109_00_DEM",
+        "win_row0": 2240,
+        "win_col0": 672,
+        "land_std": 0.884,
+        "texture": 0.079,
+        "geomorphon_entropy": 2.961
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S72_00_E129_00_DEM:3136:224",
+        "stem": "Copernicus_DSM_COG_10_S72_00_E129_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 224,
+        "land_std": 2.728,
+        "texture": 0.23,
+        "geomorphon_entropy": 3.09
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S80_00_W002_00_DEM:3376:672",
+        "stem": "Copernicus_DSM_COG_10_S80_00_W002_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 672,
+        "land_std": 1.758,
+        "texture": 0.043,
+        "geomorphon_entropy": 2.829
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S75_00_E149_00_DEM:1344:976",
+        "stem": "Copernicus_DSM_COG_10_S75_00_E149_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 976,
+        "land_std": 2.106,
+        "texture": 0.056,
+        "geomorphon_entropy": 2.668
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S78_00_E149_00_DEM:224:976",
+        "stem": "Copernicus_DSM_COG_10_S78_00_E149_00_DEM",
+        "win_row0": 224,
+        "win_col0": 976,
+        "land_std": 2.424,
+        "texture": 0.057,
+        "geomorphon_entropy": 2.794
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S88_00_E135_00_DEM:448:136",
+        "stem": "Copernicus_DSM_COG_10_S88_00_E135_00_DEM",
+        "win_row0": 448,
+        "win_col0": 136,
+        "land_std": 1.779,
+        "texture": 0.152,
+        "geomorphon_entropy": 3.091
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S73_00_E053_00_DEM:1344:672",
+        "stem": "Copernicus_DSM_COG_10_S73_00_E053_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 672,
+        "land_std": 2.402,
+        "texture": 0.133,
+        "geomorphon_entropy": 2.958
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S72_00_E124_00_DEM:2016:976",
+        "stem": "Copernicus_DSM_COG_10_S72_00_E124_00_DEM",
+        "win_row0": 2016,
+        "win_col0": 976,
+        "land_std": 2.861,
+        "texture": 0.141,
+        "geomorphon_entropy": 3.008
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S83_00_E099_00_DEM:1120:0",
+        "stem": "Copernicus_DSM_COG_10_S83_00_E099_00_DEM",
+        "win_row0": 1120,
+        "win_col0": 0,
+        "land_std": 1.834,
+        "texture": 0.12,
+        "geomorphon_entropy": 3.046
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S80_00_E109_00_DEM:3376:672",
+        "stem": "Copernicus_DSM_COG_10_S80_00_E109_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 672,
+        "land_std": 1.759,
+        "texture": 0.14,
+        "geomorphon_entropy": 3.087
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S72_00_E111_00_DEM:2688:976",
+        "stem": "Copernicus_DSM_COG_10_S72_00_E111_00_DEM",
+        "win_row0": 2688,
+        "win_col0": 976,
+        "land_std": 2.093,
+        "texture": 0.19,
+        "geomorphon_entropy": 3.062
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S74_00_E100_00_DEM:896:224",
+        "stem": "Copernicus_DSM_COG_10_S74_00_E100_00_DEM",
+        "win_row0": 896,
+        "win_col0": 224,
+        "land_std": 2.987,
+        "texture": 0.2,
+        "geomorphon_entropy": 3.068
+      }
+    ],
+    "s17-dropped-uniform": [
+      {
+        "window_id": "Copernicus_DSM_COG_10_N69_00_E150_00_DEM:3136:1344",
+        "stem": "Copernicus_DSM_COG_10_N69_00_E150_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 1344,
+        "land_std": 2.469,
+        "texture": 0.003,
+        "geomorphon_entropy": 1.423
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM:2464:3376",
+        "stem": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 3376,
+        "land_std": 2.144,
+        "texture": 0.018,
+        "geomorphon_entropy": 1.588
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N44_00_E046_00_DEM:3376:2912",
+        "stem": "Copernicus_DSM_COG_10_N44_00_E046_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 2912,
+        "land_std": 1.441,
+        "texture": 0.014,
+        "geomorphon_entropy": 1.451
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_S39_00_W061_00_DEM:2464:2016",
+        "stem": "Copernicus_DSM_COG_10_S39_00_W061_00_DEM",
+        "win_row0": 2464,
+        "win_col0": 2016,
+        "land_std": 2.196,
+        "texture": 0.011,
+        "geomorphon_entropy": 1.164
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N31_00_E074_00_DEM:672:896",
+        "stem": "Copernicus_DSM_COG_10_N31_00_E074_00_DEM",
+        "win_row0": 672,
+        "win_col0": 896,
+        "land_std": 1.86,
+        "texture": 0.048,
+        "geomorphon_entropy": 2.154
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N53_00_W085_00_DEM:224:1344",
+        "stem": "Copernicus_DSM_COG_10_N53_00_W085_00_DEM",
+        "win_row0": 224,
+        "win_col0": 1344,
+        "land_std": 2.228,
+        "texture": 0.004,
+        "geomorphon_entropy": 0.972
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N68_00_E053_00_DEM:1344:1344",
+        "stem": "Copernicus_DSM_COG_10_N68_00_E053_00_DEM",
+        "win_row0": 1344,
+        "win_col0": 1344,
+        "land_std": 0.958,
+        "texture": 0.015,
+        "geomorphon_entropy": 2.069
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N48_00_W096_00_DEM:3376:2240",
+        "stem": "Copernicus_DSM_COG_10_N48_00_W096_00_DEM",
+        "win_row0": 3376,
+        "win_col0": 2240,
+        "land_std": 2.557,
+        "texture": 0.04,
+        "geomorphon_entropy": 2.061
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N27_00_E078_00_DEM:3136:2464",
+        "stem": "Copernicus_DSM_COG_10_N27_00_E078_00_DEM",
+        "win_row0": 3136,
+        "win_col0": 2464,
+        "land_std": 1.211,
+        "texture": 0.036,
+        "geomorphon_entropy": 1.645
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N30_00_E076_00_DEM:448:0",
+        "stem": "Copernicus_DSM_COG_10_N30_00_E076_00_DEM",
+        "win_row0": 448,
+        "win_col0": 0,
+        "land_std": 2.053,
+        "texture": 0.048,
+        "geomorphon_entropy": 2.223
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N69_00_W132_00_DEM:0:1120",
+        "stem": "Copernicus_DSM_COG_10_N69_00_W132_00_DEM",
+        "win_row0": 0,
+        "win_col0": 1120,
+        "land_std": 0.678,
+        "texture": 0.005,
+        "geomorphon_entropy": 1.297
+      },
+      {
+        "window_id": "Copernicus_DSM_COG_10_N29_00_E027_00_DEM:0:1792",
+        "stem": "Copernicus_DSM_COG_10_N29_00_E027_00_DEM",
+        "win_row0": 0,
+        "win_col0": 1792,
+        "land_std": 1.398,
+        "texture": 0.005,
+        "geomorphon_entropy": 1.342
+      }
+    ]
+  }
+}

@@ -1,0 +1,1603 @@
+{
+  "gate": "degenerate",
+  "cap_land_std_m": 3.0,
+  "corpus_degenerate_rate": 0.0976,
+  "primary_stratum": 5,
+  "strata": {
+    "5": {
+      "stratum": 5,
+      "name": "near-level plains / basins",
+      "membership": 247681,
+      "kept": 118638,
+      "degenerate_drops": 128511,
+      "within_stratum_drop_rate": 0.5189,
+      "corpus_degenerate_rate": 0.0976,
+      "ratio_vs_corpus": 5.32,
+      "allocation_n_h": 1991,
+      "kept_pool_multiple_of_allocation": 59.6,
+      "recoverability": {
+        "sole_cause_degenerate": 118845,
+        "co_fire_water": 9596,
+        "co_fire_zero_fill": 3836,
+        "co_fire_edited": 87
+      },
+      "land_std_of_drops": {
+        "quantiles": {
+          "p00": 0.0001,
+          "p10": 0.4801,
+          "p25": 0.8068,
+          "p50": 1.377,
+          "p75": 2.0787,
+          "p90": 2.6045,
+          "p99": 2.9594,
+          "p100": 3.0
+        },
+        "bands_below_cap": {
+          "0.0-1.0": 43913,
+          "1.0-2.0": 49217,
+          "2.0-2.5": 18974,
+          "2.5-3.0": 16407
+        }
+      },
+      "land_std_of_kept": {
+        "quantiles": {
+          "p00": 3.0001,
+          "p10": 3.4094,
+          "p25": 4.1071,
+          "p50": 5.5183,
+          "p75": 7.7131,
+          "p90": 10.7027,
+          "p99": 20.5422,
+          "p100": 99.289
+        }
+      },
+      "junk_vs_informative": [
+        {
+          "land_std_band": "0.0-1.0",
+          "n": 43913,
+          "texture_median": 0.0012,
+          "texture_p90": 0.0104,
+          "geomorphon_entropy_median": 0.5057
+        },
+        {
+          "land_std_band": "1.0-2.0",
+          "n": 49217,
+          "texture_median": 0.0013,
+          "texture_p90": 0.0116,
+          "geomorphon_entropy_median": 0.6299
+        },
+        {
+          "land_std_band": "2.0-2.5",
+          "n": 18974,
+          "texture_median": 0.0008,
+          "texture_p90": 0.0093,
+          "geomorphon_entropy_median": 0.6062
+        },
+        {
+          "land_std_band": "2.5-3.0",
+          "n": 16407,
+          "texture_median": 0.0007,
+          "texture_p90": 0.0083,
+          "geomorphon_entropy_median": 0.6174
+        }
+      ],
+      "terrain_metrics": {
+        "dropped": {
+          "land_std": {
+            "mean": 1.459,
+            "median": 1.377,
+            "p10": 0.48,
+            "p90": 2.605
+          },
+          "slope_mean": {
+            "mean": 0.473,
+            "median": 0.475,
+            "p10": 0.309,
+            "p90": 0.638
+          },
+          "local_relief": {
+            "mean": 7.406,
+            "median": 6.999,
+            "p10": 2.214,
+            "p90": 12.934
+          },
+          "texture": {
+            "mean": 0.004,
+            "median": 0.001,
+            "p10": 0.0,
+            "p90": 0.01
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.458,
+            "median": 0.468,
+            "p10": 0.299,
+            "p90": 0.607
+          },
+          "mean_elevation": {
+            "mean": 274.79,
+            "median": 150.598,
+            "p10": 3.809,
+            "p90": 722.046
+          },
+          "geomorphon_entropy": {
+            "mean": 0.621,
+            "median": 0.584,
+            "p10": 0.101,
+            "p90": 1.203
+          }
+        },
+        "kept": {
+          "land_std": {
+            "mean": 6.629,
+            "median": 5.518,
+            "p10": 3.409,
+            "p90": 10.703
+          },
+          "slope_mean": {
+            "mean": 0.568,
+            "median": 0.568,
+            "p10": 0.424,
+            "p90": 0.691
+          },
+          "local_relief": {
+            "mean": 29.913,
+            "median": 25.38,
+            "p10": 15.69,
+            "p90": 47.698
+          },
+          "texture": {
+            "mean": 0.002,
+            "median": 0.001,
+            "p10": 0.0,
+            "p90": 0.006
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.472,
+            "median": 0.469,
+            "p10": 0.355,
+            "p90": 0.59
+          },
+          "mean_elevation": {
+            "mean": 510.871,
+            "median": 392.894,
+            "p10": 96.125,
+            "p90": 1131.862
+          },
+          "geomorphon_entropy": {
+            "mean": 0.746,
+            "median": 0.764,
+            "p10": 0.261,
+            "p90": 1.197
+          }
+        }
+      },
+      "geography": {
+        "n_windows": 128511,
+        "n_distinct_cogs": 6357,
+        "n_distinct_geocells": 362,
+        "lat_range": [
+          -89.4,
+          83.6
+        ],
+        "lon_range": [
+          -179.91,
+          179.91
+        ],
+        "top_geocells": [
+          {
+            "geocell": "-070_-040",
+            "n": 5570
+          },
+          {
+            "geocell": "+010_+010",
+            "n": 4562
+          },
+          {
+            "geocell": "+050_+040",
+            "n": 4408
+          },
+          {
+            "geocell": "+020_-030",
+            "n": 4002
+          },
+          {
+            "geocell": "+030_+010",
+            "n": 3474
+          },
+          {
+            "geocell": "+030_+000",
+            "n": 3158
+          },
+          {
+            "geocell": "-010_+020",
+            "n": 3105
+          },
+          {
+            "geocell": "+020_+020",
+            "n": 3067
+          },
+          {
+            "geocell": "+060_+040",
+            "n": 2703
+          },
+          {
+            "geocell": "+010_+020",
+            "n": 2678
+          },
+          {
+            "geocell": "+130_-020",
+            "n": 2601
+          },
+          {
+            "geocell": "+040_+030",
+            "n": 2552
+          }
+        ]
+      }
+    },
+    "2": {
+      "stratum": 2,
+      "name": "low-relief plains with faint drainage",
+      "membership": 217614,
+      "kept": 150898,
+      "degenerate_drops": 65447,
+      "within_stratum_drop_rate": 0.3007,
+      "corpus_degenerate_rate": 0.0976,
+      "ratio_vs_corpus": 3.08,
+      "allocation_n_h": 2316,
+      "kept_pool_multiple_of_allocation": 65.2,
+      "recoverability": {
+        "sole_cause_degenerate": 62287,
+        "co_fire_water": 3138,
+        "co_fire_zero_fill": 1998,
+        "co_fire_edited": 28
+      },
+      "land_std_of_drops": {
+        "quantiles": {
+          "p00": 0.3466,
+          "p10": 0.7183,
+          "p25": 1.0778,
+          "p50": 1.582,
+          "p75": 2.1956,
+          "p90": 2.6523,
+          "p99": 2.9651,
+          "p100": 3.0
+        },
+        "bands_below_cap": {
+          "0.0-1.0": 13931,
+          "1.0-2.0": 30430,
+          "2.0-2.5": 11483,
+          "2.5-3.0": 9603
+        }
+      },
+      "land_std_of_kept": {
+        "quantiles": {
+          "p00": 3.0001,
+          "p10": 3.886,
+          "p25": 5.2723,
+          "p50": 7.7033,
+          "p75": 11.3405,
+          "p90": 16.6276,
+          "p99": 36.3936,
+          "p100": 60.4313
+        }
+      },
+      "junk_vs_informative": [
+        {
+          "land_std_band": "0.0-1.0",
+          "n": 13931,
+          "texture_median": 0.0106,
+          "texture_p90": 0.0315,
+          "geomorphon_entropy_median": 1.8414
+        },
+        {
+          "land_std_band": "1.0-2.0",
+          "n": 30430,
+          "texture_median": 0.0175,
+          "texture_p90": 0.0406,
+          "geomorphon_entropy_median": 1.9059
+        },
+        {
+          "land_std_band": "2.0-2.5",
+          "n": 11483,
+          "texture_median": 0.0147,
+          "texture_p90": 0.0389,
+          "geomorphon_entropy_median": 1.8898
+        },
+        {
+          "land_std_band": "2.5-3.0",
+          "n": 9603,
+          "texture_median": 0.0129,
+          "texture_p90": 0.0399,
+          "geomorphon_entropy_median": 1.8851
+        }
+      ],
+      "terrain_metrics": {
+        "dropped": {
+          "land_std": {
+            "mean": 1.638,
+            "median": 1.582,
+            "p10": 0.718,
+            "p90": 2.652
+          },
+          "slope_mean": {
+            "mean": 0.851,
+            "median": 0.83,
+            "p10": 0.698,
+            "p90": 1.006
+          },
+          "local_relief": {
+            "mean": 8.175,
+            "median": 7.781,
+            "p10": 2.779,
+            "p90": 13.7
+          },
+          "texture": {
+            "mean": 0.019,
+            "median": 0.015,
+            "p10": 0.003,
+            "p90": 0.039
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.516,
+            "median": 0.503,
+            "p10": 0.408,
+            "p90": 0.639
+          },
+          "mean_elevation": {
+            "mean": 206.059,
+            "median": 108.115,
+            "p10": 6.006,
+            "p90": 458.625
+          },
+          "geomorphon_entropy": {
+            "mean": 1.89,
+            "median": 1.887,
+            "p10": 1.483,
+            "p90": 2.3
+          }
+        },
+        "kept": {
+          "land_std": {
+            "mean": 9.434,
+            "median": 7.703,
+            "p10": 3.886,
+            "p90": 16.628
+          },
+          "slope_mean": {
+            "mean": 0.944,
+            "median": 0.903,
+            "p10": 0.74,
+            "p90": 1.143
+          },
+          "local_relief": {
+            "mean": 42.038,
+            "median": 35.331,
+            "p10": 18.704,
+            "p90": 71.238
+          },
+          "texture": {
+            "mean": 0.01,
+            "median": 0.006,
+            "p10": 0.001,
+            "p90": 0.025
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.518,
+            "median": 0.505,
+            "p10": 0.419,
+            "p90": 0.631
+          },
+          "mean_elevation": {
+            "mean": 436.525,
+            "median": 343.223,
+            "p10": 69.061,
+            "p90": 1006.781
+          },
+          "geomorphon_entropy": {
+            "mean": 1.877,
+            "median": 1.906,
+            "p10": 1.443,
+            "p90": 2.258
+          }
+        }
+      },
+      "geography": {
+        "n_windows": 65447,
+        "n_distinct_cogs": 5577,
+        "n_distinct_geocells": 348,
+        "lat_range": [
+          -85.4,
+          83.16
+        ],
+        "lon_range": [
+          -179.91,
+          179.91
+        ],
+        "top_geocells": [
+          {
+            "geocell": "-070_-030",
+            "n": 3605
+          },
+          {
+            "geocell": "+010_+010",
+            "n": 2680
+          },
+          {
+            "geocell": "+070_+060",
+            "n": 1653
+          },
+          {
+            "geocell": "-090_+050",
+            "n": 1579
+          },
+          {
+            "geocell": "+110_+030",
+            "n": 1537
+          },
+          {
+            "geocell": "-010_+010",
+            "n": 1529
+          },
+          {
+            "geocell": "+050_+040",
+            "n": 1527
+          },
+          {
+            "geocell": "+040_+040",
+            "n": 1499
+          },
+          {
+            "geocell": "-170_-090",
+            "n": 1479
+          },
+          {
+            "geocell": "+020_+010",
+            "n": 1455
+          },
+          {
+            "geocell": "+170_-090",
+            "n": 1368
+          },
+          {
+            "geocell": "+060_+040",
+            "n": 1349
+          }
+        ]
+      }
+    },
+    "7": {
+      "stratum": 7,
+      "name": "high-altitude flats / plateaus",
+      "membership": 212872,
+      "kept": 139429,
+      "degenerate_drops": 67579,
+      "within_stratum_drop_rate": 0.3175,
+      "corpus_degenerate_rate": 0.0976,
+      "ratio_vs_corpus": 3.25,
+      "allocation_n_h": 2604,
+      "kept_pool_multiple_of_allocation": 53.5,
+      "recoverability": {
+        "sole_cause_degenerate": 64783,
+        "co_fire_water": 0,
+        "co_fire_zero_fill": 0,
+        "co_fire_edited": 2796
+      },
+      "land_std_of_drops": {
+        "quantiles": {
+          "p00": 0.4988,
+          "p10": 1.1876,
+          "p25": 1.5611,
+          "p50": 2.0604,
+          "p75": 2.5287,
+          "p90": 2.8097,
+          "p99": 2.9805,
+          "p100": 3.0
+        },
+        "bands_below_cap": {
+          "0.0-1.0": 3064,
+          "1.0-2.0": 28616,
+          "2.0-2.5": 18034,
+          "2.5-3.0": 17865
+        }
+      },
+      "land_std_of_kept": {
+        "quantiles": {
+          "p00": 3.0001,
+          "p10": 3.4383,
+          "p25": 4.1889,
+          "p50": 6.0551,
+          "p75": 9.6739,
+          "p90": 15.0667,
+          "p99": 30.6648,
+          "p100": 128.1761
+        }
+      },
+      "junk_vs_informative": [
+        {
+          "land_std_band": "0.0-1.0",
+          "n": 3064,
+          "texture_median": 0.0832,
+          "texture_p90": 0.1401,
+          "geomorphon_entropy_median": 2.9226
+        },
+        {
+          "land_std_band": "1.0-2.0",
+          "n": 28616,
+          "texture_median": 0.0928,
+          "texture_p90": 0.1713,
+          "geomorphon_entropy_median": 2.9573
+        },
+        {
+          "land_std_band": "2.0-2.5",
+          "n": 18034,
+          "texture_median": 0.0913,
+          "texture_p90": 0.1785,
+          "geomorphon_entropy_median": 2.9584
+        },
+        {
+          "land_std_band": "2.5-3.0",
+          "n": 17865,
+          "texture_median": 0.0911,
+          "texture_p90": 0.1822,
+          "geomorphon_entropy_median": 2.9557
+        }
+      ],
+      "terrain_metrics": {
+        "dropped": {
+          "land_std": {
+            "mean": 2.025,
+            "median": 2.06,
+            "p10": 1.188,
+            "p90": 2.81
+          },
+          "slope_mean": {
+            "mean": 1.577,
+            "median": 1.376,
+            "p10": 1.07,
+            "p90": 2.001
+          },
+          "local_relief": {
+            "mean": 8.736,
+            "median": 8.768,
+            "p10": 4.651,
+            "p90": 12.628
+          },
+          "texture": {
+            "mean": 0.098,
+            "median": 0.091,
+            "p10": 0.033,
+            "p90": 0.174
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.505,
+            "median": 0.506,
+            "p10": 0.369,
+            "p90": 0.64
+          },
+          "mean_elevation": {
+            "mean": 3157.188,
+            "median": 3217.365,
+            "p10": 2474.988,
+            "p90": 3722.894
+          },
+          "geomorphon_entropy": {
+            "mean": 2.9,
+            "median": 2.956,
+            "p10": 2.612,
+            "p90": 3.076
+          }
+        },
+        "kept": {
+          "land_std": {
+            "mean": 8.026,
+            "median": 6.055,
+            "p10": 3.438,
+            "p90": 15.067
+          },
+          "slope_mean": {
+            "mean": 1.499,
+            "median": 1.418,
+            "p10": 1.087,
+            "p90": 1.961
+          },
+          "local_relief": {
+            "mean": 33.963,
+            "median": 25.894,
+            "p10": 14.426,
+            "p90": 63.435
+          },
+          "texture": {
+            "mean": 0.109,
+            "median": 0.098,
+            "p10": 0.037,
+            "p90": 0.198
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.513,
+            "median": 0.511,
+            "p10": 0.389,
+            "p90": 0.637
+          },
+          "mean_elevation": {
+            "mean": 2592.114,
+            "median": 2549.677,
+            "p10": 1807.063,
+            "p90": 3456.196
+          },
+          "geomorphon_entropy": {
+            "mean": 2.929,
+            "median": 2.988,
+            "p10": 2.645,
+            "p90": 3.095
+          }
+        }
+      },
+      "geography": {
+        "n_windows": 67579,
+        "n_distinct_cogs": 4095,
+        "n_distinct_geocells": 92,
+        "lat_range": [
+          -89.97,
+          79.97
+        ],
+        "lon_range": [
+          -179.31,
+          179.69
+        ],
+        "top_geocells": [
+          {
+            "geocell": "+110_-080",
+            "n": 4848
+          },
+          {
+            "geocell": "+090_-080",
+            "n": 4327
+          },
+          {
+            "geocell": "+120_-080",
+            "n": 4307
+          },
+          {
+            "geocell": "+100_-080",
+            "n": 3731
+          },
+          {
+            "geocell": "+040_-080",
+            "n": 3613
+          },
+          {
+            "geocell": "+010_-080",
+            "n": 2823
+          },
+          {
+            "geocell": "+020_-080",
+            "n": 2734
+          },
+          {
+            "geocell": "+140_-080",
+            "n": 2693
+          },
+          {
+            "geocell": "+030_-080",
+            "n": 2579
+          },
+          {
+            "geocell": "+130_-080",
+            "n": 2565
+          },
+          {
+            "geocell": "+050_-080",
+            "n": 1890
+          },
+          {
+            "geocell": "+050_-090",
+            "n": 1833
+          }
+        ]
+      }
+    },
+    "17": {
+      "stratum": 17,
+      "name": "low-relief lowlands with drainage / water",
+      "membership": 168601,
+      "kept": 105302,
+      "degenerate_drops": 50046,
+      "within_stratum_drop_rate": 0.2968,
+      "corpus_degenerate_rate": 0.0976,
+      "ratio_vs_corpus": 3.04,
+      "allocation_n_h": 1847,
+      "kept_pool_multiple_of_allocation": 57.0,
+      "recoverability": {
+        "sole_cause_degenerate": 41300,
+        "co_fire_water": 8722,
+        "co_fire_zero_fill": 2487,
+        "co_fire_edited": 26
+      },
+      "land_std_of_drops": {
+        "quantiles": {
+          "p00": 0.2461,
+          "p10": 0.9863,
+          "p25": 1.2922,
+          "p50": 1.7597,
+          "p75": 2.3196,
+          "p90": 2.7108,
+          "p99": 2.9703,
+          "p100": 2.9999
+        },
+        "bands_below_cap": {
+          "0.0-1.0": 5252,
+          "1.0-2.0": 25429,
+          "2.0-2.5": 10364,
+          "2.5-3.0": 9001
+        }
+      },
+      "land_std_of_kept": {
+        "quantiles": {
+          "p00": 3.0001,
+          "p10": 3.7917,
+          "p25": 5.2261,
+          "p50": 8.0177,
+          "p75": 12.1031,
+          "p90": 17.685,
+          "p99": 36.0077,
+          "p100": 105.0854
+        }
+      },
+      "junk_vs_informative": [
+        {
+          "land_std_band": "0.0-1.0",
+          "n": 5252,
+          "texture_median": 0.0148,
+          "texture_p90": 0.0365,
+          "geomorphon_entropy_median": 1.3896
+        },
+        {
+          "land_std_band": "1.0-2.0",
+          "n": 25429,
+          "texture_median": 0.0229,
+          "texture_p90": 0.0495,
+          "geomorphon_entropy_median": 1.6545
+        },
+        {
+          "land_std_band": "2.0-2.5",
+          "n": 10364,
+          "texture_median": 0.0222,
+          "texture_p90": 0.0537,
+          "geomorphon_entropy_median": 1.7394
+        },
+        {
+          "land_std_band": "2.5-3.0",
+          "n": 9001,
+          "texture_median": 0.021,
+          "texture_p90": 0.0551,
+          "geomorphon_entropy_median": 1.7577
+        }
+      ],
+      "terrain_metrics": {
+        "dropped": {
+          "land_std": {
+            "mean": 1.803,
+            "median": 1.76,
+            "p10": 0.986,
+            "p90": 2.711
+          },
+          "slope_mean": {
+            "mean": 0.789,
+            "median": 0.786,
+            "p10": 0.508,
+            "p90": 1.079
+          },
+          "local_relief": {
+            "mean": 11.171,
+            "median": 10.453,
+            "p10": 5.065,
+            "p90": 17.862
+          },
+          "texture": {
+            "mean": 0.025,
+            "median": 0.021,
+            "p10": 0.003,
+            "p90": 0.051
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.24,
+            "median": 0.252,
+            "p10": 0.113,
+            "p90": 0.351
+          },
+          "mean_elevation": {
+            "mean": 161.885,
+            "median": 81.878,
+            "p10": 1.417,
+            "p90": 393.141
+          },
+          "geomorphon_entropy": {
+            "mean": 1.605,
+            "median": 1.661,
+            "p10": 0.934,
+            "p90": 2.204
+          }
+        },
+        "kept": {
+          "land_std": {
+            "mean": 9.814,
+            "median": 8.018,
+            "p10": 3.792,
+            "p90": 17.685
+          },
+          "slope_mean": {
+            "mean": 1.011,
+            "median": 0.946,
+            "p10": 0.698,
+            "p90": 1.402
+          },
+          "local_relief": {
+            "mean": 54.79,
+            "median": 43.103,
+            "p10": 20.833,
+            "p90": 102.584
+          },
+          "texture": {
+            "mean": 0.015,
+            "median": 0.009,
+            "p10": 0.001,
+            "p90": 0.037
+          },
+          "elevation_relief_ratio": {
+            "mean": 0.267,
+            "median": 0.28,
+            "p10": 0.143,
+            "p90": 0.369
+          },
+          "mean_elevation": {
+            "mean": 417.036,
+            "median": 300.605,
+            "p10": 36.818,
+            "p90": 1026.213
+          },
+          "geomorphon_entropy": {
+            "mean": 1.779,
+            "median": 1.838,
+            "p10": 1.244,
+            "p90": 2.238
+          }
+        }
+      },
+      "geography": {
+        "n_windows": 50046,
+        "n_distinct_cogs": 6223,
+        "n_distinct_geocells": 335,
+        "lat_range": [
+          -85.47,
+          83.6
+        ],
+        "lon_range": [
+          -179.84,
+          179.94
+        ],
+        "top_geocells": [
+          {
+            "geocell": "+070_+020",
+            "n": 1815
+          },
+          {
+            "geocell": "+120_+040",
+            "n": 1353
+          },
+          {
+            "geocell": "+110_+030",
+            "n": 1177
+          },
+          {
+            "geocell": "+140_-030",
+            "n": 1147
+          },
+          {
+            "geocell": "+140_-040",
+            "n": 1107
+          },
+          {
+            "geocell": "-060_-030",
+            "n": 1084
+          },
+          {
+            "geocell": "+070_+030",
+            "n": 1079
+          },
+          {
+            "geocell": "+070_+050",
+            "n": 1053
+          },
+          {
+            "geocell": "-070_-020",
+            "n": 976
+          },
+          {
+            "geocell": "+010_+010",
+            "n": 960
+          },
+          {
+            "geocell": "-070_-040",
+            "n": 930
+          },
+          {
+            "geocell": "-060_-020",
+            "n": 902
+          }
+        ]
+      }
+    }
+  },
+  "provenance": {
+    "code_version": "c8fb5e5",
+    "catalog": "data/catalog_gated",
+    "centroids": "artifacts/phase_d/centroids.json",
+    "draw_seed": 20260723
+  },
+  "gallery": {
+    "seed": 20260723,
+    "sheets": {
+      "s05-dropped-uniform": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM:3376:976",
+          "stem": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 976,
+          "land_std": 0.275,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.56
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM:224:3376",
+          "stem": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM",
+          "win_row0": 224,
+          "win_col0": 3376,
+          "land_std": 1.771,
+          "texture": 0.003,
+          "geomorphon_entropy": 0.854
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM:3136:1568",
+          "stem": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 1568,
+          "land_std": 1.588,
+          "texture": 0.004,
+          "geomorphon_entropy": 0.846
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM:3376:224",
+          "stem": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 224,
+          "land_std": 0.493,
+          "texture": 0.002,
+          "geomorphon_entropy": 0.257
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM:2240:3136",
+          "stem": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 3136,
+          "land_std": 1.835,
+          "texture": 0.002,
+          "geomorphon_entropy": 1.376
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM:2240:3136",
+          "stem": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 3136,
+          "land_std": 2.495,
+          "texture": 0.004,
+          "geomorphon_entropy": 1.132
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM:2912:2240",
+          "stem": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM",
+          "win_row0": 2912,
+          "win_col0": 2240,
+          "land_std": 2.273,
+          "texture": 0.002,
+          "geomorphon_entropy": 0.611
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM:672:448",
+          "stem": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM",
+          "win_row0": 672,
+          "win_col0": 448,
+          "land_std": 1.213,
+          "texture": 0.012,
+          "geomorphon_entropy": 1.343
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM:2016:224",
+          "stem": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM",
+          "win_row0": 2016,
+          "win_col0": 224,
+          "land_std": 1.126,
+          "texture": 0.01,
+          "geomorphon_entropy": 1.362
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S38_00_W061_00_DEM:2688:448",
+          "stem": "Copernicus_DSM_COG_10_S38_00_W061_00_DEM",
+          "win_row0": 2688,
+          "win_col0": 448,
+          "land_std": 1.655,
+          "texture": 0.003,
+          "geomorphon_entropy": 0.338
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM:672:2240",
+          "stem": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM",
+          "win_row0": 672,
+          "win_col0": 2240,
+          "land_std": 0.703,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.074
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S34_00_E137_00_DEM:1344:3136",
+          "stem": "Copernicus_DSM_COG_10_S34_00_E137_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 3136,
+          "land_std": 2.097,
+          "texture": 0.002,
+          "geomorphon_entropy": 1.043
+        }
+      ],
+      "s05-dropped-by-landstd": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM:3376:976",
+          "stem": "Copernicus_DSM_COG_10_S78_00_W059_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 976,
+          "land_std": 0.275,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.56
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM:3376:224",
+          "stem": "Copernicus_DSM_COG_10_N24_00_E068_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 224,
+          "land_std": 0.493,
+          "texture": 0.002,
+          "geomorphon_entropy": 0.257
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM:672:2240",
+          "stem": "Copernicus_DSM_COG_10_N05_00_E032_00_DEM",
+          "win_row0": 672,
+          "win_col0": 2240,
+          "land_std": 0.703,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.074
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N48_00_E046_00_DEM:2464:1792",
+          "stem": "Copernicus_DSM_COG_10_N48_00_E046_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 1792,
+          "land_std": 0.908,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.849
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM:2016:224",
+          "stem": "Copernicus_DSM_COG_10_N54_00_W087_00_DEM",
+          "win_row0": 2016,
+          "win_col0": 224,
+          "land_std": 1.126,
+          "texture": 0.01,
+          "geomorphon_entropy": 1.362
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM:672:448",
+          "stem": "Copernicus_DSM_COG_10_N14_00_W014_00_DEM",
+          "win_row0": 672,
+          "win_col0": 448,
+          "land_std": 1.213,
+          "texture": 0.012,
+          "geomorphon_entropy": 1.343
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM:3136:1568",
+          "stem": "Copernicus_DSM_COG_10_N01_00_E030_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 1568,
+          "land_std": 1.588,
+          "texture": 0.004,
+          "geomorphon_entropy": 0.846
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM:224:3376",
+          "stem": "Copernicus_DSM_COG_10_N00_00_E042_00_DEM",
+          "win_row0": 224,
+          "win_col0": 3376,
+          "land_std": 1.771,
+          "texture": 0.003,
+          "geomorphon_entropy": 0.854
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM:2240:3136",
+          "stem": "Copernicus_DSM_COG_10_S36_00_W068_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 3136,
+          "land_std": 1.835,
+          "texture": 0.002,
+          "geomorphon_entropy": 1.376
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM:2912:2240",
+          "stem": "Copernicus_DSM_COG_10_N01_00_E041_00_DEM",
+          "win_row0": 2912,
+          "win_col0": 2240,
+          "land_std": 2.273,
+          "texture": 0.002,
+          "geomorphon_entropy": 0.611
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM:2240:3136",
+          "stem": "Copernicus_DSM_COG_10_S22_00_E144_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 3136,
+          "land_std": 2.495,
+          "texture": 0.004,
+          "geomorphon_entropy": 1.132
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S19_00_E025_00_DEM:3376:1568",
+          "stem": "Copernicus_DSM_COG_10_S19_00_E025_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 1568,
+          "land_std": 2.854,
+          "texture": 0.002,
+          "geomorphon_entropy": 0.387
+        }
+      ],
+      "s05-kept-uniform": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_N06_00_E033_00_DEM:3136:3376",
+          "stem": "Copernicus_DSM_COG_10_N06_00_E033_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 3376,
+          "land_std": 5.04,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.103
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S27_00_E115_00_DEM:2464:1120",
+          "stem": "Copernicus_DSM_COG_10_S27_00_E115_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 1120,
+          "land_std": 9.494,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.241
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N27_00_W005_00_DEM:1568:3376",
+          "stem": "Copernicus_DSM_COG_10_N27_00_W005_00_DEM",
+          "win_row0": 1568,
+          "win_col0": 3376,
+          "land_std": 4.987,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.56
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S19_00_E122_00_DEM:2464:224",
+          "stem": "Copernicus_DSM_COG_10_S19_00_E122_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 224,
+          "land_std": 8.178,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.354
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S20_00_E135_00_DEM:896:2912",
+          "stem": "Copernicus_DSM_COG_10_S20_00_E135_00_DEM",
+          "win_row0": 896,
+          "win_col0": 2912,
+          "land_std": 3.382,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.033
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N22_00_E048_00_DEM:1344:0",
+          "stem": "Copernicus_DSM_COG_10_N22_00_E048_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 0,
+          "land_std": 3.051,
+          "texture": 0.011,
+          "geomorphon_entropy": 1.092
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N27_00_E001_00_DEM:0:2912",
+          "stem": "Copernicus_DSM_COG_10_N27_00_E001_00_DEM",
+          "win_row0": 0,
+          "win_col0": 2912,
+          "land_std": 4.084,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.002
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N10_00_E049_00_DEM:1120:2688",
+          "stem": "Copernicus_DSM_COG_10_N10_00_E049_00_DEM",
+          "win_row0": 1120,
+          "win_col0": 2688,
+          "land_std": 19.448,
+          "texture": 0.001,
+          "geomorphon_entropy": 0.793
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N15_00_E009_00_DEM:2464:672",
+          "stem": "Copernicus_DSM_COG_10_N15_00_E009_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 672,
+          "land_std": 5.701,
+          "texture": 0.0,
+          "geomorphon_entropy": 1.302
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N30_00_W103_00_DEM:0:224",
+          "stem": "Copernicus_DSM_COG_10_N30_00_W103_00_DEM",
+          "win_row0": 0,
+          "win_col0": 224,
+          "land_std": 10.52,
+          "texture": 0.003,
+          "geomorphon_entropy": 1.276
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N24_00_W012_00_DEM:672:448",
+          "stem": "Copernicus_DSM_COG_10_N24_00_W012_00_DEM",
+          "win_row0": 672,
+          "win_col0": 448,
+          "land_std": 6.049,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.751
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S20_00_E133_00_DEM:0:224",
+          "stem": "Copernicus_DSM_COG_10_S20_00_E133_00_DEM",
+          "win_row0": 0,
+          "win_col0": 224,
+          "land_std": 3.462,
+          "texture": 0.0,
+          "geomorphon_entropy": 0.453
+        }
+      ],
+      "s02-dropped-uniform": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_S82_00_W176_00_DEM:2912:224",
+          "stem": "Copernicus_DSM_COG_10_S82_00_W176_00_DEM",
+          "win_row0": 2912,
+          "win_col0": 224,
+          "land_std": 0.989,
+          "texture": 0.01,
+          "geomorphon_entropy": 2.016
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S78_00_W064_00_DEM:448:0",
+          "stem": "Copernicus_DSM_COG_10_S78_00_W064_00_DEM",
+          "win_row0": 448,
+          "win_col0": 0,
+          "land_std": 0.53,
+          "texture": 0.006,
+          "geomorphon_entropy": 1.78
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S70_00_E073_00_DEM:1792:448",
+          "stem": "Copernicus_DSM_COG_10_S70_00_E073_00_DEM",
+          "win_row0": 1792,
+          "win_col0": 448,
+          "land_std": 1.948,
+          "texture": 0.001,
+          "geomorphon_entropy": 1.543
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N49_00_W103_00_DEM:1344:896",
+          "stem": "Copernicus_DSM_COG_10_N49_00_W103_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 896,
+          "land_std": 2.926,
+          "texture": 0.015,
+          "geomorphon_entropy": 2.051
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N51_00_W106_00_DEM:1344:1568",
+          "stem": "Copernicus_DSM_COG_10_N51_00_W106_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 1568,
+          "land_std": 2.677,
+          "texture": 0.011,
+          "geomorphon_entropy": 1.528
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N21_00_W106_00_DEM:1120:2240",
+          "stem": "Copernicus_DSM_COG_10_N21_00_W106_00_DEM",
+          "win_row0": 1120,
+          "win_col0": 2240,
+          "land_std": 1.551,
+          "texture": 0.026,
+          "geomorphon_entropy": 1.804
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S26_00_W063_00_DEM:2240:0",
+          "stem": "Copernicus_DSM_COG_10_S26_00_W063_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 0,
+          "land_std": 1.321,
+          "texture": 0.012,
+          "geomorphon_entropy": 1.931
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N12_00_E015_00_DEM:3136:1792",
+          "stem": "Copernicus_DSM_COG_10_N12_00_E015_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 1792,
+          "land_std": 0.797,
+          "texture": 0.03,
+          "geomorphon_entropy": 1.803
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S69_00_E071_00_DEM:2016:1344",
+          "stem": "Copernicus_DSM_COG_10_S69_00_E071_00_DEM",
+          "win_row0": 2016,
+          "win_col0": 1344,
+          "land_std": 2.128,
+          "texture": 0.017,
+          "geomorphon_entropy": 1.176
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N41_00_E085_00_DEM:1120:896",
+          "stem": "Copernicus_DSM_COG_10_N41_00_E085_00_DEM",
+          "win_row0": 1120,
+          "win_col0": 896,
+          "land_std": 1.285,
+          "texture": 0.005,
+          "geomorphon_entropy": 1.727
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM:2016:672",
+          "stem": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM",
+          "win_row0": 2016,
+          "win_col0": 672,
+          "land_std": 1.512,
+          "texture": 0.033,
+          "geomorphon_entropy": 1.949
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N39_00_W090_00_DEM:3136:224",
+          "stem": "Copernicus_DSM_COG_10_N39_00_W090_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 224,
+          "land_std": 2.331,
+          "texture": 0.041,
+          "geomorphon_entropy": 1.784
+        }
+      ],
+      "s07-dropped-uniform": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_S79_00_E109_00_DEM:2240:672",
+          "stem": "Copernicus_DSM_COG_10_S79_00_E109_00_DEM",
+          "win_row0": 2240,
+          "win_col0": 672,
+          "land_std": 0.884,
+          "texture": 0.079,
+          "geomorphon_entropy": 2.961
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S72_00_E129_00_DEM:3136:224",
+          "stem": "Copernicus_DSM_COG_10_S72_00_E129_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 224,
+          "land_std": 2.728,
+          "texture": 0.23,
+          "geomorphon_entropy": 3.09
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S80_00_W002_00_DEM:3376:672",
+          "stem": "Copernicus_DSM_COG_10_S80_00_W002_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 672,
+          "land_std": 1.758,
+          "texture": 0.043,
+          "geomorphon_entropy": 2.829
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S75_00_E149_00_DEM:1344:976",
+          "stem": "Copernicus_DSM_COG_10_S75_00_E149_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 976,
+          "land_std": 2.106,
+          "texture": 0.056,
+          "geomorphon_entropy": 2.668
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S78_00_E149_00_DEM:224:976",
+          "stem": "Copernicus_DSM_COG_10_S78_00_E149_00_DEM",
+          "win_row0": 224,
+          "win_col0": 976,
+          "land_std": 2.424,
+          "texture": 0.057,
+          "geomorphon_entropy": 2.794
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S88_00_E135_00_DEM:448:136",
+          "stem": "Copernicus_DSM_COG_10_S88_00_E135_00_DEM",
+          "win_row0": 448,
+          "win_col0": 136,
+          "land_std": 1.779,
+          "texture": 0.152,
+          "geomorphon_entropy": 3.091
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S73_00_E053_00_DEM:1344:672",
+          "stem": "Copernicus_DSM_COG_10_S73_00_E053_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 672,
+          "land_std": 2.402,
+          "texture": 0.133,
+          "geomorphon_entropy": 2.958
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S72_00_E124_00_DEM:2016:976",
+          "stem": "Copernicus_DSM_COG_10_S72_00_E124_00_DEM",
+          "win_row0": 2016,
+          "win_col0": 976,
+          "land_std": 2.861,
+          "texture": 0.141,
+          "geomorphon_entropy": 3.008
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S83_00_E099_00_DEM:1120:0",
+          "stem": "Copernicus_DSM_COG_10_S83_00_E099_00_DEM",
+          "win_row0": 1120,
+          "win_col0": 0,
+          "land_std": 1.834,
+          "texture": 0.12,
+          "geomorphon_entropy": 3.046
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S80_00_E109_00_DEM:3376:672",
+          "stem": "Copernicus_DSM_COG_10_S80_00_E109_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 672,
+          "land_std": 1.759,
+          "texture": 0.14,
+          "geomorphon_entropy": 3.087
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S72_00_E111_00_DEM:2688:976",
+          "stem": "Copernicus_DSM_COG_10_S72_00_E111_00_DEM",
+          "win_row0": 2688,
+          "win_col0": 976,
+          "land_std": 2.093,
+          "texture": 0.19,
+          "geomorphon_entropy": 3.062
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S74_00_E100_00_DEM:896:224",
+          "stem": "Copernicus_DSM_COG_10_S74_00_E100_00_DEM",
+          "win_row0": 896,
+          "win_col0": 224,
+          "land_std": 2.987,
+          "texture": 0.2,
+          "geomorphon_entropy": 3.068
+        }
+      ],
+      "s17-dropped-uniform": [
+        {
+          "window_id": "Copernicus_DSM_COG_10_N69_00_E150_00_DEM:3136:1344",
+          "stem": "Copernicus_DSM_COG_10_N69_00_E150_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 1344,
+          "land_std": 2.469,
+          "texture": 0.003,
+          "geomorphon_entropy": 1.423
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM:2464:3376",
+          "stem": "Copernicus_DSM_COG_10_N29_00_E075_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 3376,
+          "land_std": 2.144,
+          "texture": 0.018,
+          "geomorphon_entropy": 1.588
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N44_00_E046_00_DEM:3376:2912",
+          "stem": "Copernicus_DSM_COG_10_N44_00_E046_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 2912,
+          "land_std": 1.441,
+          "texture": 0.014,
+          "geomorphon_entropy": 1.451
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_S39_00_W061_00_DEM:2464:2016",
+          "stem": "Copernicus_DSM_COG_10_S39_00_W061_00_DEM",
+          "win_row0": 2464,
+          "win_col0": 2016,
+          "land_std": 2.196,
+          "texture": 0.011,
+          "geomorphon_entropy": 1.164
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N31_00_E074_00_DEM:672:896",
+          "stem": "Copernicus_DSM_COG_10_N31_00_E074_00_DEM",
+          "win_row0": 672,
+          "win_col0": 896,
+          "land_std": 1.86,
+          "texture": 0.048,
+          "geomorphon_entropy": 2.154
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N53_00_W085_00_DEM:224:1344",
+          "stem": "Copernicus_DSM_COG_10_N53_00_W085_00_DEM",
+          "win_row0": 224,
+          "win_col0": 1344,
+          "land_std": 2.228,
+          "texture": 0.004,
+          "geomorphon_entropy": 0.972
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N68_00_E053_00_DEM:1344:1344",
+          "stem": "Copernicus_DSM_COG_10_N68_00_E053_00_DEM",
+          "win_row0": 1344,
+          "win_col0": 1344,
+          "land_std": 0.958,
+          "texture": 0.015,
+          "geomorphon_entropy": 2.069
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N48_00_W096_00_DEM:3376:2240",
+          "stem": "Copernicus_DSM_COG_10_N48_00_W096_00_DEM",
+          "win_row0": 3376,
+          "win_col0": 2240,
+          "land_std": 2.557,
+          "texture": 0.04,
+          "geomorphon_entropy": 2.061
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N27_00_E078_00_DEM:3136:2464",
+          "stem": "Copernicus_DSM_COG_10_N27_00_E078_00_DEM",
+          "win_row0": 3136,
+          "win_col0": 2464,
+          "land_std": 1.211,
+          "texture": 0.036,
+          "geomorphon_entropy": 1.645
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N30_00_E076_00_DEM:448:0",
+          "stem": "Copernicus_DSM_COG_10_N30_00_E076_00_DEM",
+          "win_row0": 448,
+          "win_col0": 0,
+          "land_std": 2.053,
+          "texture": 0.048,
+          "geomorphon_entropy": 2.223
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N69_00_W132_00_DEM:0:1120",
+          "stem": "Copernicus_DSM_COG_10_N69_00_W132_00_DEM",
+          "win_row0": 0,
+          "win_col0": 1120,
+          "land_std": 0.678,
+          "texture": 0.005,
+          "geomorphon_entropy": 1.297
+        },
+        {
+          "window_id": "Copernicus_DSM_COG_10_N29_00_E027_00_DEM:0:1792",
+          "stem": "Copernicus_DSM_COG_10_N29_00_E027_00_DEM",
+          "win_row0": 0,
+          "win_col0": 1792,
+          "land_std": 1.398,
+          "texture": 0.005,
+          "geomorphon_entropy": 1.342
+        }
+      ]
+    }
+  }
+}
