@@ -1,0 +1,132 @@
+{
+  "artifact": "Flatness-gate structural-null / expected-ratio pre-registration",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/63",
+  "map": "https://github.com/JStoschek/DEMAE/issues/62",
+  "analog": "https://github.com/JStoschek/DEMAE/issues/47",
+  "purpose": "Pins the structural-null model AND the excess-bias fire/no-fire rule for the `degenerate` (land_std < 3 m) flatness gate over the flat strata 2/5/7/17, BEFORE any number is computed. The run-model ticket (#65) imports this file and executes it blind; it does not define the model or thresholds inline. This is the #47-analog for the flatness-gate map: the confounded firing (a flatness gate biting flat strata is partly structural) cannot be talked to either verdict once the numbers are seen.",
+  "committed_before": "Any per-stratum expected/observed number. This file is committed while #65 is still blocked. Any change to the model spec or a threshold here after #65 has produced a number must be a separate, dated commit that justifies itself.",
+
+  "seeded_by": {
+    "gate_e_fail": "https://github.com/JStoschek/DEMAE/issues/54",
+    "e2_report_section": "docs/research/e2-validation-report.md §5 — 'Three things Gate E has to weigh', point 3 (the confound) and the firing table",
+    "sibling_precedent": "docs/adr/0006-accept-edm-flm-hollowing-stratum19.md — the edited×19 half of the same FAIL, reviewed → accept",
+    "the_firing": {
+      "gate": "degenerate",
+      "key": "land_std < degenerate_land_std_m (= 3.0 m), applied in Phase C",
+      "registered_baseline_rate": 0.0976,
+      "fired_pairs": [
+        {"stratum": 2, "within_stratum": 0.301, "ratio": 3.08, "would_be_membership": 217614},
+        {"stratum": 5, "within_stratum": 0.519, "ratio": 5.32, "would_be_membership": 247681},
+        {"stratum": 7, "within_stratum": 0.317, "ratio": 3.25, "would_be_membership": 212872},
+        {"stratum": 17, "within_stratum": 0.297, "ratio": 3.04, "would_be_membership": 168601}
+      ],
+      "note": "Strata 2/7/17 sit at 3.04-3.25x (barely over the old 3x line) and vanish under the sensitivity baseline; stratum 5 (5.32x) survives both baselines. The #54 guidance: 'centre on degenerate×5; carry 2/7/17 as lower-confidence.'"
+    }
+  },
+
+  "the_confound": {
+    "why_this_file_exists": "The gate keys on `land_std` (window flatness). `land_std` is NOT one of the six frozen metrics, but it correlates with two of them (`slope_mean`, `local_relief`). The k=20 strata are k-means cells in the six-metric space. So a flatness gate concentrating in the flat strata is PARTLY structural, not necessarily bias. Separating 'excess bias' from 'expected structure' needs an expected-ratio model the #54 verdict explicitly barred from being built post-hoc at Gate E. Building it, pre-registered, is what this map exists to do.",
+    "the_capacity_trap": "Any single expected-ratio model pre-loads a verdict. A saturated model of P(fire | six metrics) predicts each stratum's own average rate (within a k-means cell the six metrics are ~constant), so expected ≈ observed → excess ≈ 0 → always ACCEPT (vacuous). A too-rigid model (linear-in-logit) under-predicts the joint-low slope&relief corner where the flat strata live → manufactures fake excess → biases toward the expensive LOOSEN. The fire rule therefore does NOT pick one model: it requires the excess to survive an entire pre-registered capacity ladder, and reports two fixed anchors either side so a reader sees exactly where the analysis stood.",
+    "scope_note": "This file pins the RATE model only. The sibling question — is the dropped terrain junk or informative, and does the loss starve selection — is #64's job. The accept/loosen DECISION (#66) weighs this file's rate-signal against #64's representativeness/starvation findings. This file produces a signal, never the verdict."
+  },
+
+  "committed_inputs": {
+    "gated_catalog": "data/catalog_gated (4386720 rows; keep 3052735; degenerate fires 428050, whole-catalog rate 0.0976)",
+    "centroids": "artifacts/phase_d/centroids.json",
+    "scaler": "artifacts/phase_d/scaler.json",
+    "k": 20,
+    "frozen_metric_vector": ["slope_mean", "local_relief", "texture", "elevation_relief_ratio", "mean_elevation", "geomorphon_entropy"],
+    "log_metrics": ["slope_mean", "local_relief"],
+    "gate_key_column": "land_std",
+    "gate_threshold": {"degenerate_land_std_m": 3.0},
+    "assignable_rows": 3634257,
+    "unassignable_rows": 752463,
+    "primary_stratum": 5,
+    "corroborating_strata": [2, 7, 17]
+  },
+
+  "model": {
+    "name": "stratum-blind expected-ratio model with a pre-registered capacity ladder",
+    "target": "binary `degenerate` fire (land_std < 3.0 m) per window",
+    "fit_population": {
+      "rows": "the 3,634,257 ASSIGNABLE catalog rows — every window whose six frozen metrics are non-NaN (so it z-scores and takes a stratum via centroids.json). Kept AND dropped windows are included; the model is over would-be (pre-gate) membership, exactly as E2.5 built its table.",
+      "excluded": "the 752,463 unassignable (NaN-metric) rows, of which ~24,853 are degenerate fires (~6% of degenerate). Excluding them is a stated limit on what this model can see, mirroring E2.5's 'built on 44% of drops' disclosure. It does not bias the flat-strata reading: degenerate's unassignable share is 6%, versus 83-92% for water/zero_fill."
+    },
+    "features": {
+      "use": "the six frozen metrics ONLY, transformed exactly as k-means saw them: log on slope_mean & local_relief, then z-score via scaler.json params.",
+      "deliberately_excluded": {
+        "land_std": "the gate's own key. Including it lets the model predict the gate ~perfectly — circular; the residual would be ~0 by construction.",
+        "stratum_id": "stratum-blindness IS the test. The expected rate must come from the strata-DEFINING coordinates, not from stratum identity, or 'excess beyond structure' is undefined."
+      }
+    },
+    "capacity_ladder": {
+      "note": "Every hyperparameter is pinned here so #65 has NO free knob to tune after seeing a number. All estimators are scikit-learn-native (the env that fit centroids.json, sklearn 1.9.0) so #65 needs no new dependency. Each model is fit to log-loss, so predicted probabilities are calibrated and the per-stratum expected rate = mean predicted P(fire) over the stratum's would-be members is the model-implied drop rate.",
+      "rungs": [
+        {"id": "L0", "estimator": "LogisticRegression", "spec": "main effects on the 6 z-scored metrics (6 coefficients + intercept), penalty='l2', C=1.0, solver='lbfgs', max_iter sufficient to converge", "credits": "first-order (monotone) trend only; under-predicts the joint-low corner"},
+        {"id": "L1", "estimator": "PolynomialFeatures(degree=2, interaction_only=False) -> LogisticRegression", "spec": "same logistic settings on the degree-2 expansion of the 6 z-scored metrics (main + squares + pairwise interactions, incl. slope_mean×local_relief)", "credits": "the slope×relief flatness corner and simple curvature"},
+        {"id": "L2", "estimator": "SplineTransformer(degree=3, n_knots=5) per metric -> LogisticRegression", "spec": "natural cubic B-splines, 5 knots per metric, main-effect splines only; same logistic settings", "credits": "per-metric nonlinearity"},
+        {"id": "L3", "estimator": "HistGradientBoostingClassifier", "spec": "max_depth=3, learning_rate=0.1, max_iter=200 with early_stopping=True on a 10% internal validation split (log-loss), l2_regularization=0.0, random_state=0. Predictions produced by 5-FOLD CROSS-FITTING (KFold(n_splits=5, shuffle=True, random_state=0)): each row's predicted P(fire) comes from a model trained on the other four folds.", "credits": "the structure-generous end — near-saturated but not memorising. Cross-fitting prevents the flexible model from memorising stratum-5's own members and inflating its expected rate, which would bias toward ACCEPT."}
+      ],
+      "anchors": {
+        "note": "Reported for transparency, NEVER gated. They bracket the ladder.",
+        "A_uniform": "expected rate = the flat-gate whole-catalog rate (0.0976) for every stratum — the ORIGINAL E2.5 null that fired 2/5/7/17. Credits zero structure.",
+        "A_saturated": "expected rate = each stratum's own observed rate → residual 0 by definition. Credits all structure."
+      },
+      "expected_rate_definition": "for stratum h at rung r: mean over h's would-be members of that rung's predicted P(fire)."
+    }
+  },
+
+  "statistic": {
+    "per_stratum_per_rung": ["observed_rate", "expected_rate", "residual_pp = observed_rate - expected_rate", "residual_ratio = observed_rate / expected_rate", "residual_count = would_be_membership * residual_pp"],
+    "significance_null": {
+      "form": "Poisson-binomial null on the drop COUNT within a stratum, built from that rung's per-window predicted rates p_i. Under 'the gate fires independently at the model's predicted rates', the null count is PoissonBinomial({p_i}). Fire the statistical leg if the observed drop count exceeds the 99th percentile of this null.",
+      "alpha": 0.01,
+      "power_disclosure": "At N ≈ 250k would-be members per flat stratum the Poisson-binomial is extremely tight, so this leg is trivially met by any real excess and is essentially non-binding at the debug tier. It is pinned for form, to guard the degenerate small-denominator case, and for Phase F re-use at smaller tiers where it gains teeth. The OPERATIVE constraints are the two residual-magnitude floors below, applied at every rung."
+    }
+  },
+
+  "fire_rule": {
+    "shape": "two-tier. Stratum 5 is the primary test and the ONLY stratum that can trigger a LOOSEN rate-signal; strata 2/7/17 are computed identically and reported as lower-confidence corroboration, never independently triggering. This directly implements the #54 guidance.",
+    "primary_stratum_5": {
+      "fires_LOOSEN_signal_iff": "at EVERY ladder rung L0, L1, L2, L3, all three hold:",
+      "conditions": [
+        "significance: observed drop count > 99th-pct Poisson-binomial null (per significance_null above)",
+        "absolute residual floor: (observed_rate - expected_rate) >= 0.10  (10 pp)",
+        "relative residual floor: (observed_rate / expected_rate) >= 1.5"
+      ],
+      "binding_rung": "expected to be L3 (most structure credited → smallest residual). Requiring ALL rungs guards non-monotonicity and yields the full trajectory: if the residual decays to ~0 by L2 the signal is ACCEPT; if it is still large at L3 the signal is a robust LOOSEN.",
+      "else": "ACCEPT rate-signal (the flat-strata concentration is at or within structural expectation)."
+    },
+    "corroborating_strata_2_7_17": {
+      "computed": "the identical statistic and the same three-condition test, at every rung.",
+      "role": "reported as context/corroboration only. May strengthen or qualify a stratum-5 firing and inform whether a fix (if #66 chooses LOOSEN) should be per-stratum or broader. Does NOT contribute to the LOOSEN/ACCEPT trigger."
+    },
+    "number_provenance": {
+      "10pp_absolute": "reuses E2.5's '>= 10% of would-be membership' hollowing floor (docs/research/e2-gate-bar.json, E2.5 number_provenance: '10% is where hollowed is honestly the right word'), now applied to the RESIDUAL (excess beyond structural expectation) rather than the raw drop rate. A judgment call, not a derivation.",
+      "1.5x_relative": "the E2.5 '3x' ratio analog, softened. E2.5's 3x was against a structure-free uniform baseline; here the denominator (expected_rate) already credits structure, so a smaller multiple is already meaningful. Conjunction with the absolute floor mirrors E2.5's shape and guards both failure modes (a pure ratio detonates on small denominators; a pure absolute misses a small stratum). A judgment call.",
+      "posture": "Both floors, plus 'survives every rung with L3 binding', make LOOSEN deliberately hard to trigger. This matches the conservative pre-registration posture: ACCEPT is the legitimate default terminal verdict (#54 warned this firing 'may well be no-change'; ADR-0006 accepted the sibling), and LOOSEN commissions an expensive C→D→E re-run, so the excess must be undeniable and capacity-choice-proof."
+    }
+  },
+
+  "knob": {
+    "why": "The plan §215-228 knob table has NO row for the land_std flatness screen (it lists caps: WBM water cap, EDM/FLM cap — the land_std and zero_fill PIXEL screens are absent). This file defines the knob's SHAPE so a LOOSEN outcome is well-formed; the numeric VALUE stays fog until the decision (#66).",
+    "shape": {
+      "global": "degenerate_land_std_m (default 3.0)",
+      "per_stratum_override": "degenerate_land_std_m_by_stratum: optional {stratum_id: cap} map",
+      "semantics": "a window fires `degenerate` iff land_std < (per_stratum_override[stratum] if present else global). LOOSEN = lower the effective cap for the flagged strata (values = fog)."
+    },
+    "why_this_shape": "a superset: 'lower it globally' (edit only the scalar) and 'exempt/relax the flat families' (add overrides) both fall out as special cases, so this file does NOT pre-commit the execution map to either. The choice within the shape, and every value, is #66's.",
+    "proposed_knob_table_row": {
+      "knob": "degenerate flatness screen (land_std cap)",
+      "default": "3.0 m global; no per-stratum override",
+      "evidence": "ADR-0002 §2 (near-constant tiles carry no MAE-learnable signal); none published — project",
+      "amendment_trigger": "this map's expected-ratio model (#63/#65) shows excess beyond structure on stratum 5 AND #64 shows the dropped terrain is informative and/or starves selection"
+    }
+  },
+
+  "blindness": {
+    "committed_artifact": "docs/research/e63-flatness-null-bar.json (this file) + docs/research/e63-flatness-null-bar.md (companion).",
+    "discipline": "#65 imports this file and computes the numbers; it does not redefine the model or thresholds. This file is committed while #65 is blocked, so no per-stratum number exists yet. The run-model ticket is blocked_by this ticket precisely so no one peeks first — the same discipline that made Gate E's own bar honest (#47).",
+    "reusable_at_scale": "nothing here is a debug-tier constant: the population comes from the catalog, the strata from committed centroids, every threshold from this file. Phase F can re-run the identical spec against its own catalog and re-registered bar; the significance leg gains teeth at smaller N."
+  }
+}
