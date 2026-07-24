@@ -15,6 +15,7 @@ existing ADR, surface it rather than silently overriding.
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
 | 0005 | Stratum descriptions / corpus card (E3) | Reserved — [#56](https://github.com/JStoschek/DEMAE/issues/56), pending |
 | [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |
+| [0007](0007-accept-degenerate-flatness-gate-flat-strata.md) | Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17 | Accepted |
 
 ## Supersession
 

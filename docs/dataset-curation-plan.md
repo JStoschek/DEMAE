@@ -222,6 +222,7 @@ distribution, high-latitude pixel anisotropy policy.
 | allocation | Neyman + floor + boosts | Neyman verified; floor/boost sizes project | validation report imbalance |
 | WBM water cap | 0.30 drop / 0.05 flag | none published — project | A1 prevalence + attrition table |
 | EDM/FLM cap | 0.25 drop | none published — project | same |
+| degenerate flatness screen (`land_std` cap) | 3.0 m global; no per-stratum override | ADR-0002 §2 (near-constant tiles carry no MAE-learnable signal); none published — project | expected-ratio model shows excess beyond structure **and** characterization shows informative loss (ran: ADR-0007, both negative → kept 3.0 m) |
 | scoring source | ×8 overview | calibration A3 | any metric ρ < 0.9 → full-res in-region pass |
 | dedup | grid-guaranteed zero overlap | SSL4EO precedent exceeded | jittered/overlapping windows introduced |
 | debug budget | 50k | plateau evidence: ample | — |
@@ -241,11 +242,14 @@ in A2–A3 proceeds in parallel without it.
    and the k knob; worst case, fall back to the Iwahashi 40-cluster global product as an
    external stratum label (published, downloadable).
 3. **Quality gates hollowing out steep-forest strata** — attrition-by-stratum table
-   (E2.5) catches it; loosen EDM cap per-stratum if needed. `[realized — edited limb
+   (E2.5) catches it; loosen EDM cap per-stratum if needed. `[realized — both limbs
    accepted]` The E2.5 table fired the `edited` gate on high-alpine stratum 19 (18.1%,
    12.1×); the "if needed" test was applied and the answer is **not needed** — the gate
    stands, per ADR-0006 (decision #60). The `degenerate`/flatness firings from the same
-   table (strata 2/5/7/17) are a separate, still-open question.
+   table (strata 2/5/7/17, 3.04–5.32×) were run through a pre-registered structural-null
+   model and characterization and found **structural, not excess bias** — the flatness
+   gate also stands, per ADR-0007 (decision #66), with a Phase-F revisit trigger on the
+   2/17 drainage loss. Both limbs of this risk are now realized and consciously accepted.
 4. **Overview scoring bias at high latitude** (anisotropic pixels + band discontinuities
    above 50°) — anisotropic dx/dy in A2 + lat-band column + A3 calibration sample
    includes high-lat tiles.

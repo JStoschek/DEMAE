@@ -243,8 +243,16 @@ before deciding whether the cap stays retired at 500 k.
 > and **reviewed → accept** per [ADR-0006](../adr/0006-accept-edm-flm-hollowing-stratum19.md)
 > (decision [#60](https://github.com/JStoschek/DEMAE/issues/60)): the gate stands
 > unchanged and the hollowing is correct data-quality behaviour. The four `degenerate`
-> (flatness) pairs — strata 2, 5, 7, 17 — are **still open** and await their own effort;
-> nothing here dispositions them. This note does not alter the pre-registered scoring
+> (flatness) pairs — strata 2, 5, 7, 17 — were carried into the flatness-gate map
+> ([#62](https://github.com/JStoschek/DEMAE/issues/62)) and **reviewed → accept** per
+> [ADR-0007](../adr/0007-accept-degenerate-flatness-gate-flat-strata.md) (decision
+> [#66](https://github.com/JStoschek/DEMAE/issues/66)): a pre-registered structural-null
+> model ([#63](https://github.com/JStoschek/DEMAE/issues/63)/[#65](https://github.com/JStoschek/DEMAE/issues/65))
+> found the concentration **structural, not excess bias** (stratum 5's 5.32× collapses to
+> ~1.00× at every rung, capacity-choice-proof), and the flatness gate stands unchanged —
+> with a Phase-F revisit trigger on the 2/17 drainage loss. Both halves of this FAIL are
+> now dispositioned (edited × 19 → ADR-0006; degenerate × {2,5,7,17} → ADR-0007); a future
+> re-score should not re-raise either. This note does not alter the pre-registered scoring
 > below (that fed #54's verdict); it records what became of the firing.
 
 ![gate attrition per stratum](e2-gate-attrition.png)
