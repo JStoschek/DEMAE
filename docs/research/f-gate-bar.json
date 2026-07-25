@@ -1,0 +1,371 @@
+{
+  "artifact": "Gate F pre-registered pass/fail bar — the 500,000-window scale tier",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/69",
+  "map": "https://github.com/JStoschek/DEMAE/issues/67",
+  "purpose": "Pins Gate F's pass/fail criteria BEFORE the 500k selection list (#71), the corpus (#72) or the validation report (#73) exist, so the review (#74) cannot rationalize whatever the numbers turn out to be. The #47-analog at scale, and the #63-analog in discipline. The F report imports this file; it does not define thresholds inline.",
+  "committed_before": "The 500k draw (#71), the corpus (#72), the report and gallery (#73). Any change to a threshold here after those exist must be a separate, dated commit that justifies itself.",
+  "inherits": {
+    "from": "docs/research/e2-gate-bar.json (#47)",
+    "unchanged": [
+      "the Defect vs Finding split and its two consequences",
+      "the 4-field Finding payload schema",
+      "the Defect-first -> any-Finding-fails -> else-PASS roll-up",
+      "the prose-anchor discipline: the reader refuses a bar whose prose no longer states the numbers the module measures against"
+    ],
+    "note": "Gate E's bar is FROZEN, not superseded. ADR-0006 and ADR-0007 rest on its registered numbers; this file registers a second, independent bar for a second tier. dataset.validate is left untouched and dataset.validate_f imports its pure rule functions."
+  },
+  "failure_classes": {
+    "defect": "The corpus does not faithfully implement its own committed inputs (selection list, n_h table, centroids, scaler). The design is UNTESTED because the artifact is wrong. Consequence: fix code, re-run, STAY IN THIS MAP. Not a Gate F verdict.",
+    "finding": "The corpus faithfully implements the design, and the DESIGN is revealed wrong. Consequence: record the verdict, STOP this map, open a fresh map with the implicated knob. Per the map's Destination, acting on a fired criterion is a fresh map regardless of which criterion fired."
+  },
+  "what_changed_from_gate_e": {
+    "note": "Gate F is not Gate E re-run at a bigger number. Three E criteria were retired as structurally inert at scale, three new ones were added, and one absolute threshold was rescaled. Each move is justified below and was decided before any 500k number existed.",
+    "retired_as_gating": {
+      "E2.5_gate_attrition_bias": "BIT-IDENTICAL at 500k, not merely reproducible. It is computed on the 4,386,720-row catalog and the Phase-C gates; the budget never enters it, so it cannot surface a new gate x stratum pair or a different ratio. Its firing is already dispositioned in full by ADR-0006 and ADR-0007, and re-gating it would re-raise a settled FAIL — which map #67 places out of scope. Carried as F5_gate_attrition_published with a disposition pointer.",
+      "E2.4_gallery_coherence": "Its registered question is whether the k=20 strata are terrain-meaningful, and its knob is k. The same persisted centroids give the same partition, so #53/#54's 20/20-coherent already answered it, and k is out of scope for this map. Re-rendering draws different TILES from identical strata. 12 tiles per stratum also has near-zero power to detect the one genuinely new effect (a 10x-deeper draw reaching more peripheral cluster members) — and the protocol's own disavowed clause says blending in a continuum is expected. Carried as F4_gallery_published: still rendered, still labelled, not gated.",
+      "E2.3_coverage.guard_per_cog_cap": "Arithmetically guaranteed to fire. A 1-degree COG holds at most 256 kept windows (mean 126.6 over 24,118 COGs); at 500k the average draw is 16.4% of the kept pool, putting mean windows/COG near 21, and at 50k one COG already drew 44 at a tenth that rate. The cap of 64 sits INSIDE the healthy range. No budget-scaled replacement is any better, because the ceiling is a COG's own inventory, not a number we choose. The knob table (plan §215-228) has no per-COG row, so a firing could never have been a Finding. Replaced by F6a/F6b, which state the mechanical failures the cap was proxying for in a form that scales."
+    },
+    "added": {
+      "F1d_pixel_integrity": "Gate E never checked a pixel. E2.1a compares the manifest's frozen metrics to the catalog's, but manifest.py copies them from the catalog, so E2.1a verifies the JOIN, not the imagery. The manifest's std column IS pixel-derived (normalize.py computes it on the stored int16 array) while the catalog's land_std was computed independently at full res in Phase C, so the two can be cross-checked across the whole corpus.",
+      "F6a_distinctness": "A duplicate window_id INSIDE the selection list passes E2.2a (md5, row count, per-stratum counts and provenance all still match) and passes E2.2b (realized <= selected still holds). Nothing in Gate E would have caught it.",
+      "F3_drainage_representation": "ADR-0007's Phase-F revisit trigger, and the reason map #67 exists in this shape. See its own block below."
+    },
+    "rescaled": {
+      "F2c_thin_stratum.absolute": "500 -> 5000. The floor is #42's max(500, 1%*budget) clamp, so it is 5,000 at a 500k budget — confirmed by running select.allocate at budget=500000, which reports floor_clamp=5000 and floor_clamp_strata_below=0. Still structurally inert (smallest n_h is 7,343 > 5,000) and retained for the same reason: if attrition pushes a stratum under it, that inert clamp becomes retroactively binding — the event worth naming."
+    },
+    "unchanged": {
+      "F2d_coastal_floor": "0.01337 is a RATE (coastline's within-frame rate, 40,815 / 3,052,735), not a count, so it is budget-invariant and carries over untouched.",
+      "F1b_drop_selectivity": "Self-scaling: #50's rule is keyed only on the realized drop count D, read off the materialization ledger, so it needs no rescaling."
+    }
+  },
+  "committed_inputs": {
+    "budget": 500000,
+    "selection_list": "artifacts/phase_f/selection_scale_500k.csv — DRAWN BY #71, WHICH DOES NOT YET EXIST. This bar is committed first, so F2a checks the list as the driver loaded it against the md5 #71 commits, which #71 records into this file's sibling report rather than here.",
+    "selection_md5": null,
+    "selection_md5_owner": "https://github.com/JStoschek/DEMAE/issues/71",
+    "allocation": {
+      "source": "select.allocate(N_h, sigma_h, coast_h, budget=500000) over the committed d2-allocation-nh.json frame — Neyman shares are budget-invariant, so this is the same rule, not a re-derivation",
+      "sum_n_h": 500000,
+      "coast_floor": 6700,
+      "coast_floor_rate": 0.0134,
+      "floor_clamp": 5000,
+      "floor_clamp_strata_below": 0,
+      "min_n_h": 7343,
+      "min_n_h_stratum": 6,
+      "n_h": {
+        "0": 32200, "1": 28072, "2": 23159, "3": 21851, "4": 36612,
+        "5": 19909, "6": 7343, "7": 26043, "8": 37015, "9": 27239,
+        "10": 28175, "11": 10147, "12": 32031, "13": 33236, "14": 24673,
+        "15": 20974, "16": 30874, "17": 18472, "18": 30921, "19": 11054
+      }
+    },
+    "centroids": "artifacts/phase_d/centroids.json",
+    "centroids_md5": "9e209b792b77b07cc4ec82cc39fe6886",
+    "scaler": "artifacts/phase_d/scaler.json",
+    "scaler_md5": "62e665ce668fae1f1a1a1f3d3ca289e8",
+    "gated_catalog": "data/catalog_gated (4386720 rows; keep=3052735; dropped-present=1333985)",
+    "k": 20,
+    "frozen_metric_vector": [
+      "slope_mean",
+      "local_relief",
+      "texture",
+      "elevation_relief_ratio",
+      "mean_elevation",
+      "geomorphon_entropy"
+    ],
+    "gate_thresholds": {
+      "zero_fill_min": 0.75,
+      "degenerate_land_std_m": 3.0,
+      "water_drop_max": 0.3,
+      "water_affected_min": 0.05,
+      "edited_max": 0.25
+    },
+    "attrition_contract": "accept_shortfall",
+    "attrition_contract_note": "#50 settled this at Gate E; it is a committed input here, not a branch. The backfill_to_budget branch is dead text and is not carried forward.",
+    "per_cog_inventory": {
+      "note": "Measured on the kept pool, for F6b's bound and F6c's published distribution. Budget-invariant.",
+      "n_cogs": 24118,
+      "max_kept_windows_in_a_cog": 256,
+      "mean_kept_windows_per_cog": 126.57,
+      "median_kept_windows_per_cog": 122
+    }
+  },
+  "normalization_branch": {
+    "note": "Conditional pre-registration, the #47/#50 precedent. The normalization statistic is #70's call and is unresolved while this bar is committed. #70 may SELECT a branch; it may not invent one. dataset_version is Phase 1's reproducibility contract, so the recorded statistic is gated either way — but which check is correct depends on #70's answer.",
+    "branches": [
+      "tier_specific",
+      "inherit_debug"
+    ],
+    "live_contract_source": "corpus_meta.json:normalization_stat_source",
+    "cross_reference": "https://github.com/JStoschek/DEMAE/issues/70",
+    "debug_tier_values": {
+      "global_mean": 951.1396151875607,
+      "global_std": 1012.9799372491552,
+      "source": "data/corpus_50k/corpus_meta.json"
+    }
+  },
+  "criteria": {
+    "F1a_metric_fidelity": {
+      "gates": true,
+      "class": "defect",
+      "test": "For every materialized window, the manifest's frozen-metric values equal the catalog's values for the same window_id.",
+      "tolerance": "exact under the manifest's declared storage dtype, after the ADR-0002 §3a documented cast",
+      "carried_from": "E2.1a, unchanged — an exact join is scale-invariant",
+      "implicated_knob": null
+    },
+    "F1b_drop_selectivity": {
+      "gates": true,
+      "class": "defect",
+      "test": "The dropped windows are metric-indistinguishable from retained windows: per-metric Wasserstein-1 distance between dropped and retained (within the frozen vector) below the pre-registered bound.",
+      "threshold": {
+        "form": "A RULE, not a number — carried from #50 unchanged, because it is keyed only on the realized drop count D and therefore self-scaling.",
+        "statistic": "per-metric Wasserstein-1 distance between the dropped set (size D) and the retained set, over the 6 frozen metrics",
+        "null_model": "Attrition is random with respect to terrain. Draw a random size-D subset from the 500,000 SELECTED windows' committed catalog metrics, compute W1 against its complement, per frozen metric; repeat to build the null. D is the realized drop count read off the materialization ledger.",
+        "fire_if": "any one of the 6 metrics' observed W1 exceeds the 99th percentile of its own null distribution",
+        "permutations": 10000,
+        "seed": "fixed and recorded in the F report",
+        "power_disclosure": "At the expected D of about 20 this test is still low-powered — better than Gate E's D=2, but only marginally. The same caveat #63 made about its significance leg applies: it is pinned for form and to catch a gross terrain-correlated attrition, not because D=20 makes it sharp."
+      },
+      "implicated_knob": null
+    },
+    "F1c_pool_ecdf": {
+      "gates": false,
+      "class": "published",
+      "test": "Per-metric ECDF overlay, corpus vs the 3,052,735-row kept pool, with Wasserstein-1 distances printed as descriptive labels. Second overlay weights each tile by N_h/n_h (should approximately recover the pool).",
+      "carried_from": "E2.1c — more informative at 16.4% of the pool than at 1.6%",
+      "implicated_knob": null
+    },
+    "F1d_pixel_integrity": {
+      "gates": true,
+      "class": "defect",
+      "test": "The manifest's pixel-derived std agrees with the catalog's independently-computed land_std: the share of tiles with abs(manifest.std - catalog.land_std) / catalog.land_std > 0.5 must be at most 0.001 (0.1% of tiles).",
+      "why_this_exists": "Gate E never read a shard. E2.1a compares manifest metrics to catalog metrics, but manifest.py copies the frozen vector from the catalog, so E2.1a verifies the join and not the imagery. The manifest's std is the one column computed from the STORED int16 array (normalize.py), and the catalog's land_std was computed independently at full res in Phase C, so the pair is a whole-corpus identity check on the pixels.",
+      "measured_separation": {
+        "note": "Measured on the 49,998-tile debug tier BEFORE this bar was written. These are debug-tier facts about a DIFFERENT corpus, used to size a threshold; no 500k number existed.",
+        "as_built_median_relative_diff": 8.37e-05,
+        "as_built_share_over_0.5": 0.0,
+        "adjacent_window_mixup_share_over_0.5": 0.481,
+        "full_shuffle_share_over_0.5": 0.762
+      },
+      "threshold_provenance": {
+        "0.5": "A judgement call, not a derivation. The as-built median relative disagreement is at the int16 quantization floor (8.4e-5), with a benign tail from the plausibility clip and the differing land-mask definition — 18 debug-tier tiles exceed 0.1, worst 0.46. 0.5 sits above that benign tail and below the mixup signature.",
+        "0.001": "Allows a handful of benign tail cases at 500k (the debug tier had zero over 0.5) while a genuine mis-join lights up roughly half the corpus — a separation of about 480x. Zero tolerance was rejected as brittle against the known benign causes."
+      },
+      "does_not_test": "Plausibility. A corruption that preserves land-std — a horizontal flip, say — passes this and would be obvious by eye. F4's gallery is the (non-gating) place that would show it.",
+      "implicated_knob": null
+    },
+    "F2a_selection_integrity": {
+      "gates": true,
+      "class": "defect",
+      "test": "The selection list AS THE DRIVER LOADED IT matches #71's commit: md5, 500,000 rows, every n_h in the committed table above, and both provenance tags summing to coast_floor = 6700.",
+      "carried_from": "E2.2a",
+      "implicated_knob": null
+    },
+    "F2b_materialization_counts": {
+      "gates": true,
+      "class": "defect",
+      "test": "Under accept_shortfall: realized <= selected for every stratum; realized > selected anywhere is an immediate defect (duplication); then F2c applies.",
+      "carried_from": "E2.2b, with the backfill branch dropped",
+      "implicated_knob": null
+    },
+    "F2c_thin_stratum": {
+      "gates": true,
+      "class": "finding",
+      "test": "Detects the plan's 'a stratum is empty' condition, made reachable.",
+      "conditions": {
+        "absolute": "every realized n_h >= 5000",
+        "relative": "a stratum trips if BOTH its drop rate >= 3x the corpus-wide drop rate AND it loses >= 2% of its allocation"
+      },
+      "number_provenance": {
+        "5000": "#42's max(500, 1%*budget) floor evaluated at budget=500000. Confirmed by select.allocate(budget=500000): floor_clamp=5000, floor_clamp_strata_below=0. Structurally inert (smallest n_h 7,343) and retained as the named event if attrition makes it retroactively binding.",
+        "3x_and_2pct": "carried from #47 unchanged. Disclosed as effectively non-binding at this tier: the 2% limb needs 147 drops inside the SMALLEST stratum, against about 20 expected corpus-wide (see F7)."
+      },
+      "implicated_knob": "allocation"
+    },
+    "F2d_coastal_floor": {
+      "gates": true,
+      "class": "finding",
+      "test": "realized_coastal / realized_total >= 0.01337 (the frame rate, not the count)",
+      "rationale": "Carried from E2.2d unchanged, because 0.01337 is coastline's within-frame rate (40,815 / 3,052,735) and therefore budget-invariant. The realized count is reported as itself, never rounded up to 6,700, never described as 'met'. A breach means enforce-by-construction at selection does not survive materialization — a design change, hence a Finding.",
+      "exposure_note": "Coastline windows are by construction high-zero-fraction, precisely the population most exposed to normalize.py's zero-fill re-screen, so this criterion has real teeth.",
+      "implicated_knob": "allocation (coastal floor sub-knob)"
+    },
+    "F3_drainage_representation": {
+      "gates": true,
+      "class": "finding",
+      "test": "For stratum h in {2, 17}: r_h, the share of shipped stratum-h tiles whose texture >= the stratum's pre-gate p75, must be at least 0.25. Fire if r_h < 0.25 for either stratum.",
+      "why_this_is_the_criterion": "This is ADR-0007's Phase-F revisit trigger, and the only Gate F criterion that measures something the budget actually changes. It is deliberately NOT a re-run of E2.5: gate attrition RATES are a property of the catalog and the gates, so E2.5 reproduces bit-identically at any budget (see what_changed_from_gate_e). What changes is HEADROOM. ADR-0007 leaned partly on 'all four flat strata keep >= 53x their allocation' — a 50k fact. At 500k those pools sit at >= 5.3x, and FSCS reaches ten times deeper into each one.",
+      "drainage_proxy": {
+        "metric": "texture",
+        "why_texture": "It is the only frozen metric that separates dropped from kept in these strata (#64): stratum 2 dropped median 0.015 vs kept 0.006, stratum 17 dropped 0.021 vs kept 0.009. geomorphon_entropy does NOT separate (stratum 2: dropped 1.887 vs kept 1.906), so it cannot serve as the proxy.",
+        "threshold_form": "each stratum's own pre-gate p75 texture, computed on the committed catalog under the committed centroids and FROZEN HERE — so the reference share is 0.25 by construction, and it is the drainage share the terrain itself has before the gate."
+      },
+      "reference_and_scale_sensitivity": {
+        "note": "Identical rule, tenfold harder at 500k. This is what makes it a scale test rather than a restatement of a budget-invariant fact.",
+        "stratum_2": {
+          "texture_p75_pre_gate": 0.017817,
+          "pre_gate_tail": 54421,
+          "kept_tail": 26271,
+          "tail_survival": 0.4827,
+          "kept_pool_share": 0.1741,
+          "n_h": 23159,
+          "tail_over_n_h": 1.1344,
+          "tiles_needed_for_0.25": 5790,
+          "exhaustion_needed_at_500k": 0.2204,
+          "exhaustion_needed_at_50k": 0.022
+        },
+        "stratum_17": {
+          "texture_p75_pre_gate": 0.026826,
+          "pre_gate_tail": 42163,
+          "kept_tail": 17930,
+          "tail_survival": 0.4253,
+          "kept_pool_share": 0.1703,
+          "n_h": 18472,
+          "tail_over_n_h": 0.9707,
+          "tiles_needed_for_0.25": 4618,
+          "exhaustion_needed_at_500k": 0.2576,
+          "exhaustion_needed_at_50k": 0.026
+        }
+      },
+      "why_single_limb": "A conjunction was the first design — fire only if the draw both EXHAUSTS the surviving drainage tail (so the gate, not the budget, is the binding constraint) and leaves the corpus deficient (so it matters). It is LOGICALLY UNSATISFIABLE at 500k. Because n_h is approximately the tail size (1.13x and 0.97x), realized share and exhaustion are the same statistic up to a constant: r_h = e_h * tail_h / n_h. Requiring e_h >= 0.50 forces r_h >= 0.57 (stratum 2) or 0.49 (stratum 17), far above any deficit threshold, so the conjunction could never fire. That is the vacuity trap #63's bar warned about in a new costume, and it is recorded here so a reader does not re-invent it.",
+      "two_sidedness": "Nothing predetermines the answer. Drawing proportionally from the kept pool gives r_h = 0.174 / 0.170 -> FIRES. Coverage-seeking at about 1.5x proportional gives about 0.26 -> PASSES. FSCS is coverage-balanced in the standardized six-metric space and the drainage tail is a sparse region of these strata, so it may well over-draw it; that is exactly what is being measured.",
+      "two_tier_scope": {
+        "note": "Copies #63's structure exactly, and for the same reason — ADR-0007 scoped its trigger to 2/17.",
+        "gating": [2, 17],
+        "corroboration_only": [5, 7],
+        "why_5_and_7_do_not_gate": "ADR-0007 leg 2: stratum 5 drops genuinely low-information smooth plains (dropped texture identical to kept), and stratum 7's texture is amplified sub-metre sastrugi rather than learnable landform and runs the OPPOSITE way (kept median 0.098 > dropped 0.091). Computed identically and reported, never independent triggers.",
+        "stratum_5": {"texture_p75_pre_gate": 0.003348, "kept_tail": 21250, "kept_pool_share": 0.1791, "n_h": 19909},
+        "stratum_7": {"texture_p75_pre_gate": 0.141502, "kept_tail": 38591, "kept_pool_share": 0.2768, "n_h": 26043}
+      },
+      "published_decomposition": {
+        "gates": false,
+        "note": "The attribution the unsatisfiable conjunction could not carry. Reported beside r_h, not gated on.",
+        "report": [
+          "r_h — the realized drainage share",
+          "e_h — exhaustion: realized drainage tiles / kept_tail",
+          "the kept-pool proportional share (0.1741 / 0.1703) as the reference point"
+        ],
+        "how_to_read_it": "r_h landing near the kept-pool share means FSCS drew proportionally and declined to over-sample an available tail — a sampler behaviour, not the gate's fault. r_h landing near the exhaustion ceiling means the survivors genuinely ran out — the gate is binding. The fresh map needs that distinction and should not have to re-derive it."
+      },
+      "implicated_knob": "degenerate flatness screen (`land_std` cap)",
+      "knob_provenance": "The row ADR-0007 added to the plan §215-228 knob table, closing the pairs_without_a_named_knob gap #54 flagged.",
+      "consequence_if_fired": "Finding. Reopens ADR-0007's flatness knob, which per map #67's Destination means: record the verdict and STOP. The loosening rule and its blast-radius analysis are a fresh map."
+    },
+    "F4_gallery_published": {
+      "gates": false,
+      "class": "published",
+      "test": "Re-render 12 tiles x 20 strata from the shipped scale corpus; reviewer records a terrain-family label per stratum and a coherent / mixed / incoherent mark.",
+      "why_not_gating": "See what_changed_from_gate_e. The marks are recorded for continuity with #53/#54's 20/20 and because #75's honesty notes need a gallery of the corpus actually shipped, not the debug tier. They carry no pass/fail.",
+      "also_serves": "The only look at scale imagery that would catch a corruption preserving land-std, which F1d cannot see.",
+      "implicated_knob": null
+    },
+    "F5_gate_attrition_published": {
+      "gates": false,
+      "class": "published",
+      "test": "The gate x stratum attrition table, reprinted with a disposition pointer to ADR-0006 and ADR-0007.",
+      "why_not_gating": "Bit-identical to Gate E's output — computed on the catalog and the gates, with no budget term. Re-gating it would re-raise a FAIL that ADR-0006 and ADR-0007 dispositioned in full, which map #67 places out of scope.",
+      "constants_retained_for_the_table": {"rate_ratio": 3.0, "min_within_stratum_rate": 0.1},
+      "implicated_knob": null
+    },
+    "F6a_distinctness": {
+      "gates": true,
+      "class": "defect",
+      "test": "Every window_id in the selection list is distinct, and every tile_id in the manifest is distinct.",
+      "tolerance": "zero",
+      "why_this_exists": "A duplicate INSIDE the selection list passes F2a (md5, row count, per-stratum counts and provenance all still match) and passes F2b (realized <= selected still holds). Nothing in Gate E would have caught it. tile_id is derived from source_cog + win_row0 + win_col0, so a duplicate is definitionally a bug.",
+      "debug_tier_baseline": "50,000 / 50,000 distinct window_ids; 49,998 / 49,998 distinct tile_ids.",
+      "implicated_knob": null
+    },
+    "F6b_cog_inventory_bound": {
+      "gates": true,
+      "class": "defect",
+      "test": "No COG's realized window count exceeds its own kept-pool inventory.",
+      "tolerance": "zero",
+      "rationale": "The mechanical failure the retired per-COG cap was actually watching for — a looping COG read, a collapsed stratum — stated in the only form that scales, since the draw cannot take more windows than a COG has.",
+      "implicated_knob": null
+    },
+    "F6c_cog_spread_published": {
+      "gates": false,
+      "class": "published",
+      "test": "Per-COG realized count distribution (mean / median / p99 / max) and the distribution of each COG's realized count as a fraction of its own kept inventory.",
+      "why_published": "This is the measurement #42 asked the scale tier to carry forward when it retired the cap as inert. There is no per-COG row in the §215-228 knob table, so there is nothing to gate against.",
+      "debug_tier_baseline": "mean 3.16, median 2, p99 16, max 44 over 15,834 COGs used; among COGs with inventory >= 32 the max fraction drawn was 0.312 and ZERO reached 0.5.",
+      "redundancy_note": "At a 16.4% average draw rate, neighbouring windows from one COG are spatially correlated, which dilutes effective sample size. The `dedup` knob does not cover this — its default is grid-guaranteed zero overlap, preserved at any budget. Handed to #75's honesty notes as a disclosed property of the scale tier rather than gated against an invented threshold.",
+      "implicated_knob": null
+    },
+    "F7_attrition_expectation": {
+      "gates": true,
+      "class": "defect",
+      "test": "The realized drop rate must not exceed 0.0004 (200 windows at 500,000).",
+      "pre_registered_expectation": {
+        "drops": 20,
+        "spread": "Poisson, sqrt(20) = 4.5, so about 11-31 at +/-2 sigma",
+        "derivation": "Not a scaled guess. Both debug-tier drops were `degenerate` re-screen fires (stratum 8, one coastal): the int16-quantized land_std falling under 3.0 m where the catalog's float value sat just above. The kept pool holds 1,449 windows in land_std [3.0, 3.01), about 145 per 0.001 m; a 50k draw touches about 2.4 of those per 0.001 m of band, and exactly 2 dropped, implying a flip band about 0.001 m wide. That matches the F1d cross-check's median relative agreement of 8.4e-5, which is about 0.00025 m at land_std = 3.0. Attrition is therefore linear in budget."
+      },
+      "threshold_provenance": "0.0004 is 10x the debug-tier rate of 0.00004, and about 40 sigma from the expectation — unambiguous separation. Defect rather than Finding because the re-screens recompute the same quantities on the same full-res arrays Phase C scored (C1's always-full-res scoring), so a 10x rate excursion means a read path, mask-cache or clip-bound regression, not a design flaw. Per-window causes live in the materialization ledger.",
+      "implicated_knob": null
+    },
+    "F7b_registered_status_set": {
+      "gates": true,
+      "class": "defect",
+      "test": "Every materialization-ledger status is one of {ok, zero_fill, degenerate, no_land}.",
+      "tolerance": "zero",
+      "rationale": "An unregistered failure mode should surface as itself, not be absorbed into F7's count threshold.",
+      "implicated_knob": null
+    },
+    "F7c_ledger_status_published": {
+      "gates": false,
+      "class": "published",
+      "test": "Full status breakdown from the materialization ledger.",
+      "implicated_knob": null
+    },
+    "F8_normalization_statistic": {
+      "gates": true,
+      "class": "defect",
+      "why_branched": "dataset_version is Phase 1's reproducibility contract, so the recorded statistic is gated either way — but the correct check depends on #70, which is unresolved while this bar is committed. See normalization_branch.",
+      "branch": {
+        "tier_specific": {
+          "test": "corpus_meta.json's global_mean and global_std reproduce exactly from the shipped 500k tiles under the declared normalization mode.",
+          "tolerance": "exact",
+          "active": null
+        },
+        "inherit_debug": {
+          "test": "corpus_meta.json's global_mean and global_std equal the debug tier's committed 951.1396151875607 and 1012.9799372491552 exactly; the values recomputed from the shipped 500k tiles are PUBLISHED as a divergence diagnostic, not gated.",
+          "tolerance": "exact on the recorded values; the recomputed 500k values carry no threshold",
+          "active": null
+        }
+      },
+      "implicated_knob": null
+    }
+  },
+  "finding_payload_schema": {
+    "note": "Carried from #47 unchanged. Every Finding carries exactly these four fields, emitted mechanically by #73 so the handoff to a fresh map is usable. A Finding names the knob; it does NOT prescribe the new value — that is the fresh map's call.",
+    "fields": {
+      "implicated_knob": "named from the plan §215-228 knob table verbatim (the criterion's pre-assigned knob above). If a criterion can't name a knob from the table, it is a Defect, not a Finding.",
+      "measured_miss": "the statistic and the threshold it crossed, as numbers",
+      "evidence_pointer": "committed figure/table + notebook cell by path (the manifest Parquet + report under docs/research/ — the corpus shards are gitignored)",
+      "class": "Defect or Finding restated; a Defect payload additionally names the suspected code path"
+    }
+  },
+  "verdict_rollup": {
+    "note": "Carried from #47 unchanged. Emitted by #74 into the F report and posted as the resolution comment on map #67. This ticket pins the SHAPE; #74 fills the form.",
+    "state_machine": [
+      {
+        "if": "any Defect open",
+        "verdict": "INCOMPLETE",
+        "consequence": "fix, re-run, STAY IN MAP; not a Gate F verdict. Finding-level criteria are reported but marked not-yet-adjudicated (cannot judge the design from a corpus known to be mis-built)."
+      },
+      {
+        "elif": "any Finding fired",
+        "verdict": "FAIL",
+        "consequence": "record verdict + payloads, STOP, fresh map. No partial credit — the analyses test different failure modes; one firing is one real design flaw."
+      },
+      {
+        "else": "Defect-clean and zero Findings",
+        "verdict": "PASS",
+        "consequence": "#75's E3 honesty notes proceed against the shipped scale corpus."
+      }
+    ],
+    "rationale": "Leaf thresholds are hard to fudge once they're numbers in a committed file; 'on balance it's basically fine' is easy to fudge — unless the rule that turns leaves into a verdict was itself written before the leaves had values."
+  }
+}
