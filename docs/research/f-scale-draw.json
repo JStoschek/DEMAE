@@ -42,86 +42,21 @@
   "gate_f_bar_crosscheck": {
     "bar": "docs/research/f-gate-bar.json (#69) \u2014 committed_inputs.allocation.n_h",
     "applicable": true,
-    "agrees": false,
-    "n_strata_differing": 12,
-    "max_abs_delta": 2,
+    "agrees": true,
+    "n_strata_differing": 0,
+    "max_abs_delta": 0,
     "drawn_sums_to_budget": true,
     "pre_registered_sums_to_budget": true,
-    "deltas": [
+    "deltas": [],
+    "cause_reproduced": false,
+    "bar_post_commit_corrections": [
       {
-        "stratum_id": 1,
-        "pre_registered_n_h": 28072,
-        "drawn_n_h": 28071,
-        "delta": -1
-      },
-      {
-        "stratum_id": 3,
-        "pre_registered_n_h": 21851,
-        "drawn_n_h": 21852,
-        "delta": 1
-      },
-      {
-        "stratum_id": 4,
-        "pre_registered_n_h": 36612,
-        "drawn_n_h": 36614,
-        "delta": 2
-      },
-      {
-        "stratum_id": 8,
-        "pre_registered_n_h": 37015,
-        "drawn_n_h": 37013,
-        "delta": -2
-      },
-      {
-        "stratum_id": 9,
-        "pre_registered_n_h": 27239,
-        "drawn_n_h": 27238,
-        "delta": -1
-      },
-      {
-        "stratum_id": 10,
-        "pre_registered_n_h": 28175,
-        "drawn_n_h": 28173,
-        "delta": -2
-      },
-      {
-        "stratum_id": 11,
-        "pre_registered_n_h": 10147,
-        "drawn_n_h": 10148,
-        "delta": 1
-      },
-      {
-        "stratum_id": 12,
-        "pre_registered_n_h": 32031,
-        "drawn_n_h": 32032,
-        "delta": 1
-      },
-      {
-        "stratum_id": 14,
-        "pre_registered_n_h": 24673,
-        "drawn_n_h": 24672,
-        "delta": -1
-      },
-      {
-        "stratum_id": 15,
-        "pre_registered_n_h": 20974,
-        "drawn_n_h": 20975,
-        "delta": 1
-      },
-      {
-        "stratum_id": 16,
-        "pre_registered_n_h": 30874,
-        "drawn_n_h": 30873,
-        "delta": -1
-      },
-      {
-        "stratum_id": 18,
-        "pre_registered_n_h": 30921,
-        "drawn_n_h": 30923,
-        "delta": 2
+        "date": "2026-07-27",
+        "field": "committed_inputs.allocation.n_h",
+        "kind": "computation fix \u2014 NOT a threshold re-chosen after seeing results",
+        "what_was_wrong": "12 of the 20 entries were off by +/-1 or +/-2 windows (strata 1, 3, 4, 8, 9, 10, 11, 12, 14, 15, 16, 18). Both the old and the new table sum to exactly 500,000."
       }
     ],
-    "cause_reproduced": true,
     "diagnosis": "The pre-registered table is reproduced bit-for-bit by feeding the 4-dp sigma_h that d2-allocation-nh.json PRINTS back into select.allocate, while the sampler recomputes sigma_h at full precision from the frame. #44 recorded this exact trap ('the JSON's 4-dp sigma_h is for legibility; feeding it back shifts a few n_h by +-1, which is why the sampler recomputes sigma_h from the frame') and asserts the full-precision path against the committed 50k table in tests/test_select.py. Both tables sum to the exact budget; the drawn one is the allocation rule ADR-0005 specifies, the pre-registered one is that rule evaluated on a display-rounded input.",
     "consequence": "F2a compares the shipped list's per-stratum counts against this table, so as committed it would fire a DEFECT on a correct draw. The bar is #69's artifact and #71 does not edit a pre-registered file after drawing against it: the discrepancy is published here, with its cause reproduced, for a separate dated commit to correct before #73 executes the gate."
   },

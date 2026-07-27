@@ -31,28 +31,11 @@ Nothing about the mechanism changed at 10× the budget, because nothing about it
 
 That is arithmetic, not a gate. Gate F's pass/fail bar is pre-registered in [`f-gate-bar.json`](f-gate-bar.json) ([#69](https://github.com/JStoschek/DEMAE/issues/69)) and executed by [#73](https://github.com/JStoschek/DEMAE/issues/73); this report supplies numbers to it and decides nothing.
 
-### …but not to the `n_h` table the Gate F bar pre-registered
+### …and to the `n_h` table the Gate F bar pre-registered
 
-They differ on **12 of 20 strata**, by at most **±2** windows. Both tables sum to exactly 500,000.
+The drawn per-stratum counts equal [`f-gate-bar.json`](f-gate-bar.json)'s `committed_inputs.allocation.n_h` for all 20 strata.
 
-| h | pre-registered `n_h` | drawn `n_h` | Δ |
-|---|---|---|---|
-| 1 | 28,072 | 28,071 | -1 |
-| 3 | 21,851 | 21,852 | +1 |
-| 4 | 36,612 | 36,614 | +2 |
-| 8 | 37,015 | 37,013 | -2 |
-| 9 | 27,239 | 27,238 | -1 |
-| 10 | 28,175 | 28,173 | -2 |
-| 11 | 10,147 | 10,148 | +1 |
-| 12 | 32,031 | 32,032 | +1 |
-| 14 | 24,673 | 24,672 | -1 |
-| 15 | 20,974 | 20,975 | +1 |
-| 16 | 30,874 | 30,873 | -1 |
-| 18 | 30,921 | 30,923 | +2 |
-
-**The cause is reproduced, not inferred.** The pre-registered table is reproduced bit-for-bit by feeding the 4-dp sigma_h that d2-allocation-nh.json PRINTS back into select.allocate, while the sampler recomputes sigma_h at full precision from the frame. #44 recorded this exact trap ('the JSON's 4-dp sigma_h is for legibility; feeding it back shifts a few n_h by +-1, which is why the sampler recomputes sigma_h from the frame') and asserts the full-precision path against the committed 50k table in tests/test_select.py. Both tables sum to the exact budget; the drawn one is the allocation rule ADR-0005 specifies, the pre-registered one is that rule evaluated on a display-rounded input.
-
-**F2a compares the shipped list's per-stratum counts against this table, so as committed it would fire a DEFECT on a correct draw. The bar is #69's artifact and #71 does not edit a pre-registered file after drawing against it: the discrepancy is published here, with its cause reproduced, for a separate dated commit to correct before #73 executes the gate.**
+**They did not, as originally registered.** This draw found `committed_inputs.allocation.n_h` wrong and published the per-stratum deltas rather than editing a pre-registered file it had just drawn against: 12 of the 20 entries were off by +/-1 or +/-2 windows (strata 1, 3, 4, 8, 9, 10, 11, 12, 14, 15, 16, 18). Both the old and the new table sum to exactly 500,000. #69 corrected it on **2026-07-27** as a separate dated commit (computation fix — NOT a threshold re-chosen after seeing results); see that file's `post_commit_corrections` and [`f-gate-bar.md`](f-gate-bar.md)'s amendment section for the argument. `F2a` would otherwise have fired a **Defect** on a correct draw when [#73](https://github.com/JStoschek/DEMAE/issues/73) executes the gate.
 
 ## Realized windows-per-COG — the metric #42 bound this tier to decide on
 

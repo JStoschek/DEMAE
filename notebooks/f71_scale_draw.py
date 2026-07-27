@@ -193,6 +193,14 @@ def gate_f_crosscheck(
         "pre_registered_sums_to_budget": int(pre_n_h.sum()) == allocation.budget,
         "deltas": deltas,
         "cause_reproduced": bool(np.array_equal(from_rounded, pre_n_h)),
+        # Read out of the bar rather than narrated here: once #69 corrects a value this
+        # report published deltas against, the agreement is only meaningful alongside the
+        # correction that produced it.
+        "bar_post_commit_corrections": [
+            {k: c.get(k) for k in ("date", "field", "kind", "what_was_wrong")}
+            for c in bar.doc.get("post_commit_corrections", [])
+            if c.get("field") == "committed_inputs.allocation.n_h"
+        ],
         "diagnosis": (
             "The pre-registered table is reproduced bit-for-bit by feeding the 4-dp "
             "sigma_h that d2-allocation-nh.json PRINTS back into select.allocate, while "
@@ -434,8 +442,20 @@ def write_markdown(p: dict[str, Any], path: Path) -> None:
         W(
             "The drawn per-stratum counts equal "
             "[`f-gate-bar.json`](f-gate-bar.json)'s `committed_inputs.allocation.n_h` for "
-            "all 20 strata.\n"
+            f"all {p['inputs']['k']} strata.\n"
         )
+        for c in x["bar_post_commit_corrections"]:
+            W(
+                f"**They did not, as originally registered.** This draw found "
+                f"`{c['field']}` wrong and published the per-stratum deltas rather than "
+                f"editing a pre-registered file it had just drawn against: "
+                f"{c['what_was_wrong']} "
+                f"#69 corrected it on **{c['date']}** as a separate dated "
+                f"commit ({c['kind']}); see that file's `post_commit_corrections` and "
+                f"[`f-gate-bar.md`](f-gate-bar.md)'s amendment section for the argument. "
+                f"`F2a` would otherwise have fired a **Defect** on a correct draw when "
+                f"[#73](https://github.com/JStoschek/DEMAE/issues/73) executes the gate.\n"
+            )
     else:
         W("### …but not to the `n_h` table the Gate F bar pre-registered\n")
         both_exact = x["drawn_sums_to_budget"] and x["pre_registered_sums_to_budget"]
