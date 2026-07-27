@@ -17,6 +17,44 @@ This document is the argument. The JSON is the contract, and
 [`validate_f.py`](../../src/dataset/validate_f.py) is the executable half; neither decides
 a threshold that is not written down here first.
 
+## Amendment — 2026-07-27: the `n_h` table was evaluated on a rounded input
+
+One field has been corrected after the draw:
+`committed_inputs.allocation.n_h`. Twelve of its twenty entries (strata 1, 3, 4, 8, 9, 10,
+11, 12, 14, 15, 16, 18) were off by **±1 or ±2 windows**. The record lives in
+[`f-gate-bar.json`](f-gate-bar.json)'s `post_commit_corrections`, per this bar's own rule
+that a post-hoc change arrives as a separate, dated commit that justifies itself.
+
+**The cause.** The registered table was produced by feeding the **4-decimal display
+`sigma_h`** that [`d2-allocation-nh.json`](d2-allocation-nh.json) prints for legibility
+back into the allocation rule. `dataset.select.allocate` recomputes `sigma_h` from the
+frame at full precision, so largest-remainder rounding lands on slightly different
+integers. [#44](https://github.com/JStoschek/DEMAE/issues/44) documented this exact trap in
+d2's own notes, and `tests/test_select.py::test_allocation_reproduces_committed_table_on_real_catalog`
+asserts the full-precision path. #71 reproduced the wrong table bit-for-bit from the
+rounded input and published the deltas in
+[`f-scale-draw.json`](f-scale-draw.json) → `gate_f_bar_crosscheck` rather than editing a
+pre-registered file it had just drawn against.
+
+**Why this is not a threshold moved to fit an outcome.** The corrected table depends on
+exactly three things — the kept frame, the persisted centroids/scaler, and ADR-0005's
+allocation rule. All three were committed *before* this bar was written and none has been
+touched since, so the number could have been produced at pre-registration time and would
+have been identical. No Gate F measurement, and nothing about the shipped list or the
+corpus, enters the computation. What changed is an input-precision mistake in how a
+registered value was evaluated.
+
+**What it would have cost.** `F2a` compares the shipped list's per-stratum counts against
+this table. Left as committed, it would have fired a **Defect on a correct draw** when
+[#73](https://github.com/JStoschek/DEMAE/issues/73) executes the gate — an INCOMPLETE
+verdict chasing a bug that does not exist.
+
+Nothing else moved. `sum_n_h` is still exactly 500,000, the coastal provenance tags still
+sum to `coast_floor = 6,700`, `floor_clamp` is still 5,000 with zero strata below it, and
+the smallest `n_h` is still **7,343** in stratum 6 — so every argument below stands
+unchanged, including F2c's inertness and F3's stratum 2 / 17 figures (23,159 / 18,472 were
+among the eight entries that were already right).
+
 ## Gate F is not Gate E with a bigger number
 
 The temptation was to re-register E's nine criteria at 500k and add one. That would have

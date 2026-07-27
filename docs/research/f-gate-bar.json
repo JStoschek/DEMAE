@@ -3,7 +3,25 @@
   "ticket": "https://github.com/JStoschek/DEMAE/issues/69",
   "map": "https://github.com/JStoschek/DEMAE/issues/67",
   "purpose": "Pins Gate F's pass/fail criteria BEFORE the 500k selection list (#71), the corpus (#72) or the validation report (#73) exist, so the review (#74) cannot rationalize whatever the numbers turn out to be. The #47-analog at scale, and the #63-analog in discipline. The F report imports this file; it does not define thresholds inline.",
-  "committed_before": "The 500k draw (#71), the corpus (#72), the report and gallery (#73). Any change to a threshold here after those exist must be a separate, dated commit that justifies itself.",
+  "committed_before": "The 500k draw (#71), the corpus (#72), the report and gallery (#73). Any change to a threshold here after those exist must be a separate, dated commit that justifies itself. One such commit exists: see post_commit_corrections.",
+  "post_commit_corrections": [
+    {
+      "date": "2026-07-27",
+      "field": "committed_inputs.allocation.n_h",
+      "kind": "computation fix — NOT a threshold re-chosen after seeing results",
+      "what_was_wrong": "12 of the 20 entries were off by +/-1 or +/-2 windows (strata 1, 3, 4, 8, 9, 10, 11, 12, 14, 15, 16, 18). Both the old and the new table sum to exactly 500,000.",
+      "cause": "The registered table was produced by feeding the 4-DECIMAL DISPLAY sigma_h that docs/research/d2-allocation-nh.json prints back into the allocation rule. dataset.select.allocate recomputes sigma_h from the frame at full precision, so largest-remainder rounding lands on slightly different integers. #44 documented this exact trap in d2's own notes, and tests/test_select.py::test_allocation_reproduces_committed_table_on_real_catalog asserts the full-precision path against the committed 50k table.",
+      "reproduced_by": "#71's draw report, docs/research/f-scale-draw.json -> gate_f_bar_crosscheck, which reproduces the pre-registered table bit-for-bit from the display-rounded sigma_h and publishes the per-stratum deltas rather than editing this file.",
+      "corrected_value_from": "PYTHONPATH=src python -c \"from dataset import frame as F, centroids as C, select; fr=F.kept_frame('data/catalog_gated'); print(list(map(int, select.allocation_at(fr, C.read_centroids(fingerprint=fr.fingerprint), F.read_scaler(fingerprint=fr.fingerprint), budget=500_000).n_h)))\" — identical to docs/research/f-allocation-nh-500k.json, committed by #71.",
+      "why_this_is_not_post_hoc_threshold_setting": "The corrected table depends only on the kept frame, the persisted centroids/scaler and ADR-0005's allocation rule — all three committed BEFORE this bar was written and none of them touched since. Nothing about the shipped selection list, the corpus or any Gate F measurement enters the computation, so the number could have been produced at pre-registration time and would have been identical. What changed is an input-precision mistake in how the registered value was evaluated, not a bar moved to fit an outcome.",
+      "what_it_would_have_done": "F2a (dataset.validate.selection_integrity, reached from dataset.validate_f) compares the shipped list's per-stratum counts against expected_per_stratum. Left as committed, it would have fired a DEFECT on a correct draw when #73 executes the gate.",
+      "unchanged_by_this_correction": "sum_n_h (500000), coast_floor (6700, and the coastal provenance tags still sum to it), floor_clamp (5000), floor_clamp_strata_below (0), min_n_h (7343) and min_n_h_stratum (6). No criterion, threshold, class or roll-up rule is touched — F2c's floor is still inert for the same reason, and F3's stratum 2 / 17 n_h (23,159 / 18,472) are among the eight entries that were already correct.",
+      "tickets": [
+        "https://github.com/JStoschek/DEMAE/issues/69",
+        "https://github.com/JStoschek/DEMAE/issues/71"
+      ]
+    }
+  ],
   "inherits": {
     "from": "docs/research/e2-gate-bar.json (#47)",
     "unchanged": [
@@ -44,7 +62,8 @@
     "selection_md5": null,
     "selection_md5_owner": "https://github.com/JStoschek/DEMAE/issues/71",
     "allocation": {
-      "source": "select.allocate(N_h, sigma_h, coast_h, budget=500000) over the committed d2-allocation-nh.json frame — Neyman shares are budget-invariant, so this is the same rule, not a re-derivation",
+      "source": "select.allocate(N_h, sigma_h, coast_h, budget=500000) over the committed kept frame — Neyman shares are budget-invariant, so this is the same rule, not a re-derivation. sigma_h is RECOMPUTED FROM THE FRAME at full precision, as dataset.select.allocate does; it is not read back from the 4-decimal sigma_h that d2-allocation-nh.json prints for legibility. See post_commit_corrections[0].",
+      "n_h_source": "docs/research/f-allocation-nh-500k.json",
       "sum_n_h": 500000,
       "coast_floor": 6700,
       "coast_floor_rate": 0.0134,
@@ -53,10 +72,10 @@
       "min_n_h": 7343,
       "min_n_h_stratum": 6,
       "n_h": {
-        "0": 32200, "1": 28072, "2": 23159, "3": 21851, "4": 36612,
-        "5": 19909, "6": 7343, "7": 26043, "8": 37015, "9": 27239,
-        "10": 28175, "11": 10147, "12": 32031, "13": 33236, "14": 24673,
-        "15": 20974, "16": 30874, "17": 18472, "18": 30921, "19": 11054
+        "0": 32200, "1": 28071, "2": 23159, "3": 21852, "4": 36614,
+        "5": 19909, "6": 7343, "7": 26043, "8": 37013, "9": 27238,
+        "10": 28173, "11": 10148, "12": 32032, "13": 33236, "14": 24672,
+        "15": 20975, "16": 30873, "17": 18472, "18": 30923, "19": 11054
       }
     },
     "centroids": "artifacts/phase_d/centroids.json",
