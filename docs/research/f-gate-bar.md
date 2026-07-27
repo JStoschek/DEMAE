@@ -36,6 +36,11 @@ rounded input and published the deltas in
 [`f-scale-draw.json`](f-scale-draw.json) → `gate_f_bar_crosscheck` rather than editing a
 pre-registered file it had just drawn against.
 
+That report has since been regenerated against the corrected table, so at `HEAD` it
+reports agreement on all 20 strata and its delta table is empty. The disagreement is a
+fact about a state that really existed, and git is where that state is kept —
+`git show 8560ff9:docs/research/f-scale-draw.json` is the reproduction as #71 published it.
+
 **Why this is not a threshold moved to fit an outcome.** The corrected table depends on
 exactly three things — the kept frame, the persisted centroids/scaler, and ADR-0005's
 allocation rule. All three were committed *before* this bar was written and none has been
