@@ -1,0 +1,35 @@
+{
+  "attrition_contract": "accept_shortfall",
+  "build_params": {
+    "catalog_version": "32818cc224caedb9f4d5c2fda70cf614",
+    "centroids_md5": "9e209b792b77b07cc4ec82cc39fe6886",
+    "clip_bounds": [
+      -500.0,
+      9000.0
+    ],
+    "degenerate_std_eps": 3.0,
+    "geocell_size_deg": 10,
+    "land_zero_frac_drop": 0.75,
+    "normalization": "per_tile_standardize",
+    "scaler_md5": "62e665ce668fae1f1a1a1f3d3ca289e8",
+    "schema_version": 2,
+    "selection_list_md5": "90d74c896d1fa04f7079b8491781c21e",
+    "tile_px": 224
+  },
+  "build_timestamp": "2026-07-27T21:15:00+00:00",
+  "clip_bounds": [
+    -500.0,
+    9000.0
+  ],
+  "code_version": "43d26cc",
+  "dataset_version": "bcbd6484d8116199c5c1160e21ea0284",
+  "degenerate_std_eps": 3.0,
+  "global_mean": 955.6728901295354,
+  "global_std": 1012.1607171908565,
+  "n_tiles": 499934,
+  "normalization": "per_tile_standardize",
+  "normalization_stat_source": "tier_specific",
+  "snapshot_date": "2026-07-27",
+  "storage_dtype": "int16",
+  "tile_px": 224
+}
