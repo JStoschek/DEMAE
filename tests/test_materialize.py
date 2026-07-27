@@ -670,6 +670,123 @@ def test_no_land_is_declared_but_structurally_unreachable():
     assert config.LAND_ZERO_FRAC_DROP < 1.0
 
 
+# --- Tiers (#72) --------------------------------------------------------------
+
+
+def test_the_shipped_tiers_are_the_committed_paths():
+    """The two tiers name the artifacts their tickets committed — #51's and #72's."""
+    debug = materialize.TIERS["debug"]
+    assert debug.selection_path == Path(config.SELECTION_PATH)
+    assert debug.out_dir == Path("data/corpus_50k")
+    assert debug.ledger_path == Path("artifacts/phase_e/materialization_ledger.parquet")
+
+    scale = materialize.TIERS["scale"]
+    assert scale.selection_path == Path(config.SCALE_SELECTION_PATH)
+    assert scale.out_dir == Path("data/corpus_500k")
+    assert scale.ledger_path == Path("artifacts/phase_f/materialization_ledger.parquet")
+
+
+def test_no_two_tiers_share_a_path():
+    """Why the tier is one flag and not three.
+
+    The ledger is the one artifact here that cannot be re-derived from committed
+    inputs (#50), so a scale run that inherited the debug tier's ``--ledger`` default
+    would overwrite it *silently* — the selection-list guard in ``run`` only watches
+    ``build_state.json``, which lives beside the shards, not beside the ledger. Paths
+    that move as a set cannot half-move.
+    """
+    for field in ("selection_path", "out_dir", "ledger_path"):
+        paths = [getattr(tier, field) for tier in materialize.TIERS.values()]
+        assert len(set(paths)) == len(paths), f"tiers share a {field}"
+
+
+def test_resolve_tier_returns_the_named_triple():
+    """Naming a tier and nothing else must yield that tier's paths untouched."""
+    assert materialize.resolve_tier("scale") == materialize.TIERS["scale"]
+
+
+def test_an_explicit_path_overrides_its_tier_default(tmp_path):
+    """Overrides are per-path, so a smoke run can redirect the corpus and keep the list."""
+    tier = materialize.resolve_tier("scale", out_dir=tmp_path / "scratch")
+    assert tier.out_dir == tmp_path / "scratch"
+    assert tier.selection_path == materialize.TIERS["scale"].selection_path
+    assert tier.ledger_path == materialize.TIERS["scale"].ledger_path
+
+
+def test_an_empty_override_is_an_error_not_a_silent_committed_default(tmp_path):
+    """`is not None`, not truthiness — falling back *to a committed path* is the one
+    direction this must never fail in."""
+    tier = materialize.resolve_tier("scale", ledger_path="")
+    assert tier.ledger_path == Path("")
+    assert tier.ledger_path != materialize.TIERS["scale"].ledger_path
+
+
+def test_resolve_tier_refuses_a_tier_it_does_not_ship():
+    with pytest.raises(KeyError, match="unknown tier"):
+        materialize.resolve_tier("smoke")
+
+
+def test_run_refuses_one_tiers_list_against_anothers_ledger(build):
+    """The hazard `Tier` exists for, reached the way it would really happen.
+
+    Not via the CLI: an in-process caller that names the scale list and forgets the
+    ledger would truncate the *committed* debug ledger, and no committed input could
+    rebuild it (#50 item 1). The guard lives in `run`, so this path is closed too.
+    """
+    with pytest.raises(ValueError, match="belong to different tiers"):
+        materialize.run(
+            cog_reader=build.reader,
+            tier="debug",  # ...but pointed at the scale tier's list
+            selection_path=materialize.TIERS["scale"].selection_path,
+            catalog_dir=build.catalog_dir,
+            out_dir=build.out_dir,
+        )
+
+
+def test_a_scratch_path_claims_no_tier_and_crosses_nothing(build, tmp_path):
+    """A `--limit-cogs` smoke redirects one leg to a scratch dir; that must stay legal."""
+    result = materialize.run(
+        cog_reader=build.reader,
+        tier="debug",
+        selection_path=build.selection,
+        catalog_dir=build.catalog_dir,
+        out_dir=tmp_path / "scratch",
+        ledger_path=tmp_path / "scratch.parquet",
+        centroids_path=build.centroids,
+        scaler_path=build.scaler,
+        rows_per_shard=4,
+    )
+    assert result.complete
+
+
+def test_the_tier_flag_reaches_run_without_a_debug_path_substituted(build, monkeypatch):
+    """``--tier scale`` alone must arrive at ``run`` as the tier, overriding nothing.
+
+    ``run`` is what resolves the triple (so in-process callers get the guard too), so
+    the thing to check at the CLI boundary is that it forwards the *name* and leaves
+    every path unset — a path defaulted here would silently outrank the tier there.
+    """
+    seen = {}
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(materialize, "run", _spy)
+    # The 500k list is 28 MB and this test is about path wiring, not parsing.
+    monkeypatch.setattr(materialize, "load_selection", lambda path: [])
+    with pytest.raises(SystemExit):
+        materialize.main(["--tier", "scale", "--catalog-dir", str(build.catalog_dir)])
+
+    assert seen["tier"] == "scale"
+    assert seen["selection_path"] is None
+    assert seen["out_dir"] is None
+    assert seen["ledger_path"] is None
+    # ...and that name resolves to the scale tier's three artifacts, none of them shared
+    # with the debug tier (the ledger being the one that cannot be rebuilt).
+    assert materialize.resolve_tier(seen["tier"]) == materialize.TIERS["scale"]
+
+
 def test_cli_builds_a_corpus(build, capsys):
     rc = materialize.main(
         [

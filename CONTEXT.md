@@ -140,12 +140,17 @@ GitHub issue #1.
   Backfilling was rejected because it would write window ids absent from the committed
   selection list — and that list, not the seed, is the determinism contract. The string
   is recorded in `corpus_meta.json` because Gate E's pre-registered bar branches on it.
-- **Materialization ledger** — one row per **selected** window (all 50,000) recording what
-  became of it: `ok`, or the cause it was dropped (`zero_fill`, `no_land`, `degenerate`,
-  `read_error`). The manifest holds the survivors; the ledger holds the account. It is
-  **committed** because, unlike the shards and the manifest, it cannot be re-derived from
-  committed inputs — knowing which windows failed requires the full-res read. Its
-  `status == 'ok'` set is exactly the manifest's tile set, by asserted invariant.
+- **Materialization ledger** — one row per **selected** window recording what became of it:
+  `ok`, or the cause it was dropped (`zero_fill`, `no_land`, `degenerate`, `read_error`).
+  The manifest holds the survivors; the ledger holds the account. It is **committed**
+  because, unlike the shards and the manifest, it cannot be re-derived from committed
+  inputs — knowing which windows failed requires the full-res read. Its `status == 'ok'`
+  set is exactly the manifest's tile set, by asserted invariant. **One per tier, and they
+  are not interchangeable** — `artifacts/phase_e/materialization_ledger.parquet` books the
+  debug tier's 50,000 and `artifacts/phase_f/`'s books the scale tier's 500,000. Because
+  neither is re-derivable, writing one tier's run into the other's ledger is unrecoverable;
+  `dataset.materialize.Tier` is what makes a tier's three paths move as a set, and
+  `_assert_tier_paths_agree` refuses a run that mixes two tiers' artifacts.
 - **Pre-registered bar** — Gate E's pass/fail criteria, committed to
   [`e2-gate-bar.json`](docs/research/e2-gate-bar.json) *before* the corpus, the E2 report or
   the gallery existed, so the review cannot rationalize whatever the numbers turn out to be.
@@ -169,7 +174,13 @@ GitHub issue #1.
   dataloader; chosen for streaming-read throughput (the plan's #1 risk: I/O
   starving the GPU).
 - **Corpus tiers** — **smoke** (a few hundred tiles, end-to-end pipeline check) →
-  **debug** (~50k, the Phase-0 deliverable) → **scale** (200–500k, Phase 3).
+  **debug** (50,000 selected / 49,998 materialized, the Phase-0 deliverable) → **scale**
+  (500,000 selected / 499,934 materialized, `data/corpus_500k`, built by
+  [#72](https://github.com/JStoschek/DEMAE/issues/72)). Both realized tiers are the *same*
+  `dataset.materialize` driver over two independent selection lists — not a nesting
+  ([#45](https://github.com/JStoschek/DEMAE/issues/45)) — and each carries its own ledger,
+  corpus card and `dataset_version`. "smoke" is a way of running the driver
+  (`--limit-cogs` into a scratch directory), not a third shipped tier.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

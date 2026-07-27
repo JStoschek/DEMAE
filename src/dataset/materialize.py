@@ -1,8 +1,11 @@
 """Stage 5 — the materialization driver: selection list in, corpus on disk out (Phase E1).
 
 This is the map's central execution ticket ([#51](https://github.com/JStoschek/DEMAE/issues/51)):
-it reads Phase D's committed 50,000-window selection list at **full resolution** and
-turns it into int16 shards, a v2 manifest, a corpus card, and a materialization ledger.
+it reads a committed selection list at **full resolution** and turns it into int16
+shards, a v2 manifest, a corpus card, and a materialization ledger. Both shipped tiers
+are this one driver over two lists — the 50,000-window debug tier (#51) and the
+500,000-window scale tier ([#72](https://github.com/JStoschek/DEMAE/issues/72)), which
+renegotiated no contract and so needed only a second set of paths to point at.
 It orchestrates components that already exist and adds no new recipe — :mod:`dataset.tiling`
 reads, :mod:`dataset.normalize` screens and prepares, :mod:`dataset.shards` stores,
 :mod:`dataset.manifest` indexes, :mod:`dataset.concurrency` schedules. What lives *here*
@@ -44,6 +47,7 @@ parallel executor; it is paid for here, once.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -67,7 +71,8 @@ from .tiling import CogReader
 #: Phase D's committed selection list — the determinism contract (#44). The literal
 #: lives in `config` so this stage and `dataset.select`, which writes it, cannot drift.
 SELECTION_PATH: Final = Path(config.SELECTION_PATH)
-#: The Phase-D provenance chain the corpus card records (#48 / ADR-0002 §3a).
+#: The Phase-D provenance chain the corpus card records (#48 / ADR-0002 §3a). Shared by
+#: both tiers: the scale draw came from the *same* persisted centroids and scaler (#71).
 CENTROIDS_PATH: Final = Path("artifacts/phase_d/centroids.json")
 SCALER_PATH: Final = Path("artifacts/phase_d/scaler.json")
 #: One row per *selected* window, with the cause of every drop. **Committed** — unlike
@@ -76,6 +81,13 @@ SCALER_PATH: Final = Path("artifacts/phase_d/scaler.json")
 LEDGER_PATH: Final = Path("artifacts/phase_e/materialization_ledger.parquet")
 #: The corpus itself: gitignored, ~5 GB at the debug tier.
 CORPUS_DIR: Final = Path("data/corpus_50k")
+
+#: The Phase-F scale tier (#72): the same driver over ten times the budget. Nothing in
+#: the recipe changes — the ticket renegotiated no contract — so what a tier *is*, here,
+#: is exactly these three paths.
+SCALE_SELECTION_PATH: Final = Path(config.SCALE_SELECTION_PATH)
+SCALE_CORPUS_DIR: Final = Path("data/corpus_500k")
+SCALE_LEDGER_PATH: Final = Path("artifacts/phase_f/materialization_ledger.parquet")
 
 MANIFEST_FILE: Final = "manifest.parquet"
 CORPUS_META_FILE: Final = "corpus_meta.json"
@@ -108,15 +120,16 @@ CATALOG_COLUMNS: Final = (
     "coastline",
 )
 
-#: COGs between checkpoints. ~250 of 15,834 is ~1 minute of the projected pass, against
-#: a checkpoint that costs two small Parquet rewrites — the cheap end of a cheap trade.
+#: COGs between checkpoints. ~250 is ~1 minute of either tier's projected pass (15,834
+#: COGs at the debug tier, 22,909 at the scale tier), against a checkpoint that costs two
+#: small Parquet rewrites — the cheap end of a cheap trade.
 CHECKPOINT_EVERY: Final = 250
 #: Whole-COG read attempts before the windows are booked ``read_error``. A transient
 #: ``/vsis3`` blip is the common failure and it is not worth a re-run for.
 READ_ATTEMPTS: Final = 3
 RETRY_BACKOFF_S: Final = 0.5
-#: Consecutive all-failed COGs that mean the transport is gone, not the data. Booking
-#: 15,834 COGs dead in a tight loop during a network outage is the failure this stops.
+#: Consecutive all-failed COGs that mean the transport is gone, not the data. Booking a
+#: whole tier's COGs dead in a tight loop during a network outage is the failure this stops.
 MAX_CONSECUTIVE_READ_ERRORS: Final = 50
 
 
@@ -126,8 +139,114 @@ class ReadOutage(RuntimeError):
     Raised before *this* streak is committed, so at most the failures a checkpoint
     happened to catch mid-streak survive the abort — and those stay retryable, which
     is what :data:`BuildState.read_error_cogs` is for. Without the breaker a dropped
-    connection would book all 15,834 COGs dead in a tight loop.
+    connection would book every remaining COG dead in a tight loop.
     """
+
+
+# --- Tiers --------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Tier:
+    """A tier's three paths, which move together or not at all.
+
+    :mod:`dataset.select` deliberately does *not* derive its ``--out`` from its
+    ``--budget`` — a tier is a budget and where it is spent, and the operator names
+    both. That reasoning holds for one output; this stage has three, and they are not
+    independent. Passing ``--selection`` and ``--out-dir`` for the scale tier while
+    forgetting ``--ledger`` writes 500,000 rows over
+    ``artifacts/phase_e/materialization_ledger.parquet`` — the **committed** debug
+    ledger, the one artifact in the repo that cannot be re-derived from committed
+    inputs (#50 item 1). The ``selection_md5`` guard in :func:`run` does not catch it:
+    that guard lives in ``build_state.json``, which sits beside the *shards*, so a
+    fresh ``--out-dir`` has no state to disagree with and the stale ledger is simply
+    truncated.
+
+    Naming the tier once, rather than the three paths, is what closes that. But the
+    *type* alone would only close it for the CLI, and the hazard is not the CLI's — it
+    is any caller that names two tiers' artifacts in one run. So the check that
+    actually holds the line is :func:`_assert_tier_paths_agree`, in :func:`run`, below
+    every override: paths that belong to a shipped tier must all belong to the **same**
+    one. Overrides stay unrestricted otherwise, because a path that is nobody's tier —
+    a scratch directory for a ``--limit-cogs`` smoke — claims nothing and crosses
+    nothing.
+    """
+
+    name: str
+    selection_path: Path
+    out_dir: Path
+    ledger_path: Path
+
+
+#: The two shipped tiers — the debug corpus (#51) and the scale corpus (#72).
+TIERS: Final[dict[str, Tier]] = {
+    "debug": Tier(
+        name="debug",
+        selection_path=SELECTION_PATH,
+        out_dir=CORPUS_DIR,
+        ledger_path=LEDGER_PATH,
+    ),
+    "scale": Tier(
+        name="scale",
+        selection_path=SCALE_SELECTION_PATH,
+        out_dir=SCALE_CORPUS_DIR,
+        ledger_path=SCALE_LEDGER_PATH,
+    ),
+}
+
+
+def resolve_tier(
+    name: str,
+    *,
+    selection_path: Path | str | None = None,
+    out_dir: Path | str | None = None,
+    ledger_path: Path | str | None = None,
+) -> Tier:
+    """The named tier, with any explicitly-given path substituted in.
+
+    ``is not None`` rather than truthiness, so an empty override is a caller error the
+    filesystem reports rather than a silent fall-back to a *committed* default — the
+    one direction this stage must never fail in (#50 item 1).
+    """
+    if name not in TIERS:
+        raise KeyError(f"unknown tier {name!r}; shipped tiers: {sorted(TIERS)}")
+    tier = TIERS[name]
+    return dataclasses.replace(
+        tier,
+        **{
+            field: Path(value)
+            for field, value in (
+                ("selection_path", selection_path),
+                ("out_dir", out_dir),
+                ("ledger_path", ledger_path),
+            )
+            if value is not None
+        },
+    )
+
+
+def _assert_tier_paths_agree(tier: Tier) -> None:
+    """Refuse a run that names one tier's artifact beside another's.
+
+    The failure this exists for is silent and unrecoverable: a scale-tier selection
+    list written into the debug tier's **committed** ledger truncates the only record
+    of which debug windows failed at full res, and no committed input can rebuild it
+    (#50 item 1). A path belonging to no shipped tier — a scratch directory — claims
+    nothing and is left alone, so ``--limit-cogs`` smoke runs stay unrestricted.
+    """
+    claimed = {
+        field: shipped.name
+        for field in ("selection_path", "out_dir", "ledger_path")
+        for shipped in TIERS.values()
+        if getattr(tier, field) == getattr(shipped, field)
+    }
+    if len(set(claimed.values())) > 1:
+        named = ", ".join(f"{field}={name}" for field, name in sorted(claimed.items()))
+        raise ValueError(
+            f"these paths belong to different tiers ({named}) — refusing to run. "
+            "One tier's artifacts must not be written from another's inputs; pass "
+            "--tier alone, or override every path away from a shipped tier."
+        )
 
 
 # --- The selection list, grouped ----------------------------------------------
@@ -174,8 +293,9 @@ def load_selection(path: Path | str = SELECTION_PATH) -> list[CogJob]:
     """Read the committed selection list and group it by source COG.
 
     Grouping is not a convenience: opening a COG costs ~0.43 s against ~0.24 s per
-    block read, so a driver that saw the windows one at a time would pay the open
-    15,834 extra times. COGs are ordered by stem and windows by pixel origin, which
+    block read, so a driver that saw the windows one at a time would pay the open once
+    per *window* instead of once per COG — 22,909 opens against 500,000 at the scale
+    tier. COGs are ordered by stem and windows by pixel origin, which
     makes the job list — and therefore the shard row order — a pure function of the
     committed file, independent of executor, worker count and filesystem order.
     """
@@ -745,10 +865,11 @@ def _assert_ledger_matches_manifest(
 def _global_stats(land_sum: float, land_sqsum: float, land_count: int) -> tuple[float, float]:
     """Corpus-wide land mean/std from the streamed accumulators (ADR-0003 §3).
 
-    Plain sums rather than a pooled Welford merge: at 50k tiles the sum of squares peaks
-    near 2e17, well inside float64's exact-integer range times its 1e-16 relative error,
-    and the variance is ~1e4 against a mean square of ~8e7 — four digits of cancellation
-    out of sixteen. The simplicity is worth more than the twelve digits that buys.
+    Plain sums rather than a pooled Welford merge: the sum of squares peaks near 2e17 at
+    the debug tier and 4.9e16 at the scale tier — both well inside float64's exact-integer
+    range times its 1e-16 relative error — and the variance is ~1e4 against a mean square
+    of ~8e7, four digits of cancellation out of sixteen. Ten times the tiles moves that
+    by one digit, so the simplicity keeps outrunning the twelve digits Welford would buy.
     """
     if land_count == 0:
         return 0.0, 0.0
@@ -774,10 +895,11 @@ def _tqdm(total: int, desc: str):
 def run(
     *,
     cog_reader: CogReader | None = None,
-    selection_path: Path | str = SELECTION_PATH,
+    tier: str = "debug",
+    selection_path: Path | str | None = None,
     catalog_dir: Path | str = Path("data/catalog_gated"),
-    out_dir: Path | str = CORPUS_DIR,
-    ledger_path: Path | str = LEDGER_PATH,
+    out_dir: Path | str | None = None,
+    ledger_path: Path | str | None = None,
     centroids_path: Path | str = CENTROIDS_PATH,
     scaler_path: Path | str = SCALER_PATH,
     workers: int | None = None,
@@ -816,6 +938,11 @@ def run(
     claims: a COG that is genuinely gone should stay booked (that is
     ``accept_shortfall``), while one that lost a race with the network should not be
     written off silently. The operator reads the ledger's ``detail`` column and decides.
+
+    ``tier`` names which corpus is being built and supplies the three paths that go
+    with it; each may still be overridden individually. The resolution runs *here*
+    rather than in :func:`main` so the cross-tier guard covers in-process callers too —
+    see :class:`Tier`.
     """
     from functools import partial
 
@@ -823,8 +950,13 @@ def run(
 
     started = time.perf_counter()
     elapsed_at_start = 0.0  # replaced from the state below; a resume keeps accumulating
-    out_dir = Path(out_dir)
-    ledger_path = Path(ledger_path)
+    resolved = resolve_tier(
+        tier, selection_path=selection_path, out_dir=out_dir, ledger_path=ledger_path
+    )
+    _assert_tier_paths_agree(resolved)
+    selection_path = resolved.selection_path
+    out_dir = Path(resolved.out_dir)
+    ledger_path = Path(resolved.ledger_path)
     shard_dir = out_dir / SHARDS_DIR
     manifest_path = out_dir / MANIFEST_FILE
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1121,14 +1253,22 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(
         prog="python -m dataset.materialize",
-        description="Read Phase D's selected windows at full resolution into int16 "
-        "shards + manifest + corpus card + materialization ledger (Phase E1, issue "
-        "#51). Resumable: re-run to continue.",
+        description="Read a tier's selected windows at full resolution into int16 "
+        "shards + manifest + corpus card + materialization ledger (Phase E1 issue #51 "
+        "at --tier debug, Phase F issue #72 at --tier scale). Resumable: re-run to "
+        "continue.",
     )
-    p.add_argument("--selection", type=Path, default=SELECTION_PATH)
+    p.add_argument("--tier", choices=sorted(TIERS), default="debug",
+                   help="which corpus to build: 'debug' (50k, #51) or 'scale' "
+                        "(500k, #72). Sets --selection, --out-dir and --ledger as a "
+                        "set — see the Tier docstring for why they cannot half-move")
+    p.add_argument("--selection", type=Path, default=None,
+                   help="override the tier's selection list")
     p.add_argument("--catalog-dir", type=Path, default=Path("data/catalog_gated"))
-    p.add_argument("--out-dir", type=Path, default=CORPUS_DIR)
-    p.add_argument("--ledger", type=Path, default=LEDGER_PATH)
+    p.add_argument("--out-dir", type=Path, default=None,
+                   help="override the tier's corpus directory")
+    p.add_argument("--ledger", type=Path, default=None,
+                   help="override the tier's materialization ledger")
     p.add_argument("--centroids", type=Path, default=CENTROIDS_PATH)
     p.add_argument("--scaler", type=Path, default=SCALER_PATH)
     p.add_argument("--executor", choices=("process", "thread"), default="process",
@@ -1157,15 +1297,24 @@ def main(argv: list[str] | None = None) -> int:
 
     from .provenance import git_sha, today
 
+    # Resolved once here for the log line; `run` resolves again from the same inputs,
+    # which is where the cross-tier guard actually fires.
+    tier = resolve_tier(
+        args.tier,
+        selection_path=args.selection,
+        out_dir=args.out_dir,
+        ledger_path=args.ledger,
+    )
     workers = args.workers if args.workers is not None else default_workers(args.executor)
-    jobs = load_selection(args.selection)
+    jobs = load_selection(tier.selection_path)
     log.info(
-        "selection: %s windows over %s COGs -> %s (%d %s workers)",
-        f"{sum(len(j.windows) for j in jobs):,}", f"{len(jobs):,}",
-        args.out_dir, workers, args.executor,
+        "tier %s: %s windows over %s COGs -> %s (%d %s workers), ledger %s",
+        tier.name, f"{sum(len(j.windows) for j in jobs):,}", f"{len(jobs):,}",
+        tier.out_dir, workers, args.executor, tier.ledger_path,
     )
 
     result = run(
+        tier=args.tier,
         selection_path=args.selection,
         catalog_dir=args.catalog_dir,
         out_dir=args.out_dir,

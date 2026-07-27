@@ -26,6 +26,13 @@ notebooks/data/
 data/corpus_50k/*
 !data/corpus_50k/manifest.parquet
 !data/corpus_50k/corpus_meta.json
+# The scale tier (issue #72), on the same rule at ten times the size: ~50 GB of shards
+# stay out, the index and the card ship. `build_state.json` is resume bookkeeping and is
+# caught by the `data/corpus_500k/*` line — it describes an *attempt*, not a corpus.
+!data/corpus_500k/
+data/corpus_500k/*
+!data/corpus_500k/manifest.parquet
+!data/corpus_500k/corpus_meta.json
 tiles/
 shards/
 *.tif
