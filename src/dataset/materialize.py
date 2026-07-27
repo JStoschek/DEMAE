@@ -862,8 +862,13 @@ def _assert_ledger_matches_manifest(
         )
 
 
-def _global_stats(land_sum: float, land_sqsum: float, land_count: int) -> tuple[float, float]:
+def global_stats(land_sum: float, land_sqsum: float, land_count: int) -> tuple[float, float]:
     """Corpus-wide land mean/std from the streamed accumulators (ADR-0003 §3).
+
+    Public because Gate F's ``F8_normalization_statistic`` has to *reproduce* the
+    recorded statistic from the shipped tiles, and reproducing it means running this
+    arithmetic rather than a second version of it — a re-derivation that rounded
+    differently would report a Defect on a correct corpus.
 
     Plain sums rather than a pooled Welford merge: the sum of squares peaks near 2e17 at
     the debug tier and 4.9e16 at the scale tier — both well inside float64's exact-integer
@@ -1125,7 +1130,7 @@ def run(
 
     complete = state.n_cogs_done == len(jobs)
     meta_path = out_dir / CORPUS_META_FILE
-    global_mean, global_std = _global_stats(state.land_sum, state.land_sqsum, state.land_count)
+    global_mean, global_std = global_stats(state.land_sum, state.land_sqsum, state.land_count)
     version = ""
 
     if complete:

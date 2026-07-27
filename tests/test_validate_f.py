@@ -264,6 +264,130 @@ def test_exhaustion_is_reported_but_does_not_gate(ft: validate_f.FThresholds) ->
     assert out.measured["per_stratum"]["17"]["exhaustion_e_h"] > 0.8
 
 
+# --- F3's inputs, assembled ---------------------------------------------------
+
+
+def _catalog(
+    members: dict[int, list[float]], keep: dict[int, list[bool]]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A tiny would-be-labelled catalog: textures and a keep mask, per stratum."""
+    labels, texture, kept = [], [], []
+    for h, values in members.items():
+        labels += [h] * len(values)
+        texture += values
+        kept += keep[h]
+    return (
+        np.array(texture, dtype=np.float64),
+        np.array(labels, dtype=np.int32),
+        np.array(kept, dtype=bool),
+    )
+
+
+def test_drainage_inputs_count_the_tail_against_the_registered_p75() -> None:
+    """The p75 is frozen in the bar, so the tail is counted at *that* number.
+
+    Recomputing it from the corpus would let the criterion's reference move with the
+    data it is judging — which is the whole thing the pre-registration prevents.
+    """
+    texture, labels, keep = _catalog(
+        {2: [0.01, 0.02, 0.03, 0.04], 17: [0.1, 0.2, 0.3, 0.4]},
+        {2: [True, True, False, True], 17: [True, True, True, False]},
+    )
+    out = validate_f.drainage_inputs(
+        shipped_texture=np.array([0.005, 0.03, 0.5]),
+        shipped_stratum=np.array([2, 2, 17]),
+        catalog_texture=texture,
+        catalog_stratum=labels,
+        catalog_keep=keep,
+        texture_p75=({2: 0.025, 17: 0.25}),
+    )
+    # stratum 2: 0.03 and 0.04 reach 0.025; only 0.04 is kept.
+    assert out.crosscheck["2"]["pre_gate_tail"] == 2
+    assert out.kept_tail[2] == 1
+    assert out.crosscheck["2"]["n_kept"] == 3
+    assert out.crosscheck["2"]["kept_pool_share"] == pytest.approx(1 / 3)
+    assert out.texture_by_stratum[2].tolist() == [0.005, 0.03]
+    assert out.texture_by_stratum[17].tolist() == [0.5]
+
+
+def test_drainage_inputs_surface_a_p75_the_corpus_no_longer_reproduces() -> None:
+    """The n_h table was registered off a display-rounded input; say so if it recurs.
+
+    The rule still thresholds on the registered number — but a rounding that moves a
+    tile across the line is a fact about the reference, and it is published rather
+    than quietly absorbed.
+    """
+    texture, labels, keep = _catalog(
+        {2: [0.0, 0.0, 0.0, 0.0, 0.10, 0.11, 0.12, 0.13]},
+        {2: [True] * 8},
+    )
+    out = validate_f.drainage_inputs(
+        shipped_texture=np.array([0.105]),
+        shipped_stratum=np.array([2]),
+        catalog_texture=texture,
+        catalog_stratum=labels,
+        catalog_keep=keep,
+        texture_p75={2: 0.11},  # the data's own p75 is 0.1125
+    )
+    entry = out.crosscheck["2"]
+    assert entry["recomputed_p75"] == pytest.approx(0.1125)
+    assert entry["registered_p75"] == 0.11
+    # 0.11 clears the registered number and misses the recomputed one.
+    assert entry["pre_gate_tail"] == 3
+    assert entry["pre_gate_tail_at_recomputed_p75"] == 2
+    assert out.p75_rounding_moves_tiles is True
+
+
+def test_drainage_inputs_feed_the_rule_they_were_built_for(
+    ft: validate_f.FThresholds,
+) -> None:
+    """The assembly and the criterion agree on what ``r_h`` means, end to end."""
+    p75 = ft.drainage_texture_p75
+    texture, labels, keep = _catalog(
+        {h: [p75[h] * 1.5] * 40 + [p75[h] / 2] * 60 for h in (2, 17)},
+        {h: [True] * 100 for h in (2, 17)},
+    )
+    shipped_texture = np.concatenate(
+        [np.full(10, p75[2] * 2), np.full(90, 0.0),
+         np.full(40, p75[17] * 2), np.full(60, 0.0)]
+    )
+    shipped_stratum = np.array([2] * 100 + [17] * 100)
+    inputs = validate_f.drainage_inputs(
+        shipped_texture=shipped_texture,
+        shipped_stratum=shipped_stratum,
+        catalog_texture=texture,
+        catalog_stratum=labels,
+        catalog_keep=keep,
+        texture_p75=p75,
+    )
+    out = validate_f.drainage_representation(
+        inputs.texture_by_stratum,
+        kept_tail=inputs.kept_tail,
+        thresholds=ft,
+        gating=(2, 17),
+        corroborating=(),
+    )
+    assert out.measured["hits"] == [2]  # r_2 = 0.10 < 0.25; r_17 = 0.40 clears it
+    assert out.measured["per_stratum"]["2"]["exhaustion_e_h"] == pytest.approx(10 / 40)
+
+
+def test_drainage_inputs_ignore_unassignable_rows() -> None:
+    """A NaN-metric window carries label ``-1`` and belongs to no terrain family."""
+    texture, labels, keep = _catalog(
+        {-1: [0.9, 0.9], 2: [0.01, 0.04]}, {-1: [False, False], 2: [True, True]}
+    )
+    out = validate_f.drainage_inputs(
+        shipped_texture=np.array([0.04]),
+        shipped_stratum=np.array([2]),
+        catalog_texture=texture,
+        catalog_stratum=labels,
+        catalog_keep=keep,
+        texture_p75={2: 0.025},
+    )
+    assert out.crosscheck["2"]["n_pre_gate"] == 2
+    assert out.crosscheck["2"]["pre_gate_tail"] == 1
+
+
 # --- F6a / F6b ----------------------------------------------------------------
 
 

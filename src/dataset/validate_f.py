@@ -43,6 +43,14 @@ the imagery. :func:`distinctness` closes a duplicate-inside-the-selection-list h
 Phase-F revisit trigger — the one criterion here that measures something the *budget*
 changes.
 
+## One thing here is not a rule
+
+:func:`drainage_inputs` assembles F3's three populations rather than judging any of them.
+It sits beside the criterion that consumes it because the mistake it exists to prevent is a
+mistake about *which population a number was counted over* — pre-gate, kept, or shipped —
+and that is not visible at the call site in the report driver. It carries no threshold and
+returns no verdict; :func:`drainage_representation` does both.
+
 ## Two failure classes, never merged
 
 Unchanged from Gate E. A **Defect** means the corpus does not implement its own committed
@@ -453,6 +461,106 @@ def drainage_representation(
     )
 
 
+@dataclass(frozen=True)
+class DrainageInputs:
+    """What :func:`drainage_representation` needs, plus the reference's own crosscheck.
+
+    ``texture_by_stratum`` and ``kept_tail`` go straight into the rule.
+    ``crosscheck`` is published beside it: the pre-gate population the bar's frozen
+    p75 was cut from, that population's *recomputed* p75, and the kept-pool
+    proportional share the bar's ``published_decomposition`` asks for as the reference
+    point for reading ``r_h``.
+    """
+
+    texture_by_stratum: dict[int, np.ndarray]
+    kept_tail: dict[int, int]
+    crosscheck: dict[str, dict[str, float | int]]
+    p75_rounding_moves_tiles: bool
+
+
+def drainage_inputs(
+    *,
+    shipped_texture: np.ndarray,
+    shipped_stratum: np.ndarray,
+    catalog_texture: np.ndarray,
+    catalog_stratum: np.ndarray,
+    catalog_keep: np.ndarray,
+    texture_p75: Mapping[int, float],
+) -> DrainageInputs:
+    """Assemble F3's inputs from the shipped manifest and the would-be-labelled catalog.
+
+    Decides nothing. The thresholds are :func:`read_bar`'s and the fail condition is
+    :func:`drainage_representation`'s; what this owns is the one thing a report can get
+    wrong without anybody noticing — *which population each number is counted over*.
+    There are three, and they are easy to mistake for each other:
+
+    * **pre-gate** — every catalog window the committed centroids assign to stratum
+      ``h``, dropped ones included. That is the population the bar cut its p75 from, so
+      the reference share is 0.25 by construction.
+    * **kept** — the same, restricted to ``keep``. Its drainage count is ``kept_tail``,
+      the exhaustion denominator, and its drainage *share* is the kept-pool proportional
+      share ``r_h`` is read against.
+    * **shipped** — the tiles actually in the corpus, which is what ``r_h`` measures.
+
+    ``catalog_stratum`` carries ``-1`` for a window whose metric vector has a NaN (no
+    land to measure), and no stratum id matches it, so those rows fall out of every
+    population rather than being imputed into a terrain family.
+
+    **The tail is counted at the registered p75, never at the recomputed one.** The
+    recomputed value is reported so that the display-rounding trap the ``n_h`` table
+    fell into — a registered number evaluated on a rounded input — is *visible* here if
+    it recurred rather than absorbed: ``p75_rounding_moves_tiles`` says whether the gap
+    between the two moves any window across the line at all.
+    """
+    catalog_texture = np.asarray(catalog_texture, dtype=np.float64)
+    catalog_stratum = np.asarray(catalog_stratum)
+    catalog_keep = np.asarray(catalog_keep, dtype=bool)
+    shipped_texture = np.asarray(shipped_texture, dtype=np.float64)
+    shipped_stratum = np.asarray(shipped_stratum)
+
+    by_stratum: dict[int, np.ndarray] = {}
+    kept_tail: dict[int, int] = {}
+    crosscheck: dict[str, dict[str, float | int]] = {}
+    moved = False
+    for h, registered in sorted((int(h), float(p)) for h, p in texture_p75.items()):
+        pre_gate = catalog_stratum == h
+        kept = pre_gate & catalog_keep
+        pre_values = catalog_texture[pre_gate]
+        kept_values = catalog_texture[kept]
+        recomputed = float(np.quantile(pre_values, 0.75)) if pre_values.size else float("nan")
+        tail = int((pre_values >= registered).sum())
+        tail_recomputed = (
+            int((pre_values >= recomputed).sum()) if pre_values.size else 0
+        )
+        kept_hits = int((kept_values >= registered).sum())
+        by_stratum[h] = shipped_texture[shipped_stratum == h]
+        kept_tail[h] = kept_hits
+        moved = moved or tail != tail_recomputed
+        crosscheck[str(h)] = {
+            "n_pre_gate": int(pre_gate.sum()),
+            "n_kept": int(kept.sum()),
+            "n_shipped": int(by_stratum[h].size),
+            "registered_p75": registered,
+            "recomputed_p75": recomputed,
+            "p75_delta": recomputed - registered,
+            "pre_gate_tail": tail,
+            "pre_gate_tail_at_recomputed_p75": tail_recomputed,
+            "kept_tail": kept_hits,
+            "tail_survival": kept_hits / tail if tail else float("nan"),
+            # The reference point the bar's published_decomposition names: r_h landing
+            # here means FSCS drew proportionally and declined an available tail.
+            "kept_pool_share": (
+                kept_hits / int(kept.sum()) if int(kept.sum()) else float("nan")
+            ),
+        }
+    return DrainageInputs(
+        texture_by_stratum=by_stratum,
+        kept_tail=kept_tail,
+        crosscheck=crosscheck,
+        p75_rounding_moves_tiles=moved,
+    )
+
+
 # --- F6a / F6b the checks that replaced the per-COG cap -----------------------
 
 
@@ -695,6 +803,7 @@ __all__ = [
     "DRAINAGE_GATING",
     "F_BAR_PATH",
     "REGISTERED_STATUSES",
+    "DrainageInputs",
     "FBar",
     "FThresholds",
     "Outcome",
@@ -702,6 +811,7 @@ __all__ = [
     "coastal_floor",
     "cog_inventory_bound",
     "distinctness",
+    "drainage_inputs",
     "drainage_representation",
     "drop_selectivity",
     "gate_stratum_bias",
