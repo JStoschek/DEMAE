@@ -90,6 +90,20 @@ SELECTION_PATH: Final = "artifacts/phase_d/selection_debug_50k.csv"
 # because #47's Gate-E bar reads it to pick which pre-committed branch to evaluate.
 ATTRITION_CONTRACT: Final = "accept_shortfall"
 
+# --- Global normalization statistic (issue #70, ADR-0003 §3 Amendment 1) -------
+# Which corpus ADR-0003's `global` normalization mode reads its mean/std from.
+# `tier_specific`: every tier accumulates its own land-pixel mu/sigma from its own
+# tiles, so the per-tile-vs-global ablation is a *within-tier* comparison only —
+# never compare a global-mode run across corpora, the denominators differ. The
+# rejected alternative was `inherit_debug` (freeze the 50k tier's values project-
+# wide); it buys a cross-tier comparison ADR-0005 §6 already disavowed, at the
+# price of normalizing each corpus against a statistic taken from a different one.
+# Recorded top-level in corpus_meta.json and *outside* build_params — same slot and
+# same reason as ATTRITION_CONTRACT above: #69's Gate-F bar reads it to pick which
+# pre-committed F8 branch to evaluate, and adding a build_params key would change
+# the debug tier's dataset_version, which four committed Gate-E artifacts quote.
+NORMALIZATION_STAT_SOURCE: Final = "tier_specific"
+
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
 # The cache-locally-not-stream policy (and why it differs from the COG reads) is

@@ -188,6 +188,7 @@ def write_corpus_meta(
     centroids_md5: str,
     scaler_md5: str,
     attrition_contract: str = config.ATTRITION_CONTRACT,
+    normalization_stat_source: str = config.NORMALIZATION_STAT_SOURCE,
 ) -> dict:
     """Write ``corpus_meta.json`` — the corpus card + reproducibility fingerprint.
 
@@ -202,6 +203,15 @@ def write_corpus_meta(
     live-contract source, and the fingerprint's contents were pinned by #48 before #50
     resolved. It says what happened to selected windows that failed at full res — under
     ``accept_shortfall``, ``n_tiles`` is a *realized* count, not the budget.
+
+    ``normalization_stat_source`` (#70) rides in the **same top-level slot, for a
+    stronger reason**. It names which corpus ``global_mean``/``global_std`` describe;
+    under ``tier_specific`` that is this corpus, so the pair is a pure function of the
+    tiles — which the fingerprint already hashes — and the string adds nothing a
+    ``build_params`` key would protect. It would, however, *cost*: adding a key changes
+    every corpus's ``dataset_version``, including the debug tier's ``6fde6a58…``, which
+    the committed E2 report and gallery both quote and ADR-0006/0007 rest on. A card
+    written before #70 has no such key and is ``tier_specific`` by construction.
     """
     params = build_params(
         selection_list_md5=selection_list_md5,
@@ -219,6 +229,7 @@ def write_corpus_meta(
         "n_tiles": len(rows),
         "global_mean": global_mean,
         "global_std": global_std,
+        "normalization_stat_source": normalization_stat_source,
         "snapshot_date": snapshot_date,
         "build_timestamp": build_timestamp,
         "code_version": code_version,

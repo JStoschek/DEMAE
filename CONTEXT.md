@@ -92,6 +92,16 @@ GitHub issue #1.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.
+- **Global normalization** — the *other* arm of the plan's normalization ablation
+  ([ADR-0003 §3](docs/adr/0003-dataloader-design.md)): `(x − μ)/σ` against one corpus-wide
+  land-pixel pair, so absolute altitude is **kept** rather than discarded. The statistic is
+  **tier-specific** — each tier accumulates its own μ/σ from its own tiles, recorded as
+  `normalization_stat_source: "tier_specific"` top-level in `corpus_meta.json` (outside
+  `build_params`, so it never moves `dataset_version`). Two consequences worth knowing before
+  Phase 1 spends a run: the ablation is a **within-tier** comparison only — two tiers normalize
+  against different constants — and the mode puts roughly **42×** more variance in between-tile
+  altitude than in within-tile relief, so a normalized tile with `std ≈ 0.02` is correct
+  behaviour, not a loader bug ([ADR-0003 Amendment 1](docs/adr/0003-dataloader-design.md#amendments)).
 - **Manifest** — the per-tile index: one row per tile **actually on disk**, holding the
   storage join (`shard_id`, `row_index`), the per-tile land `mean`/`std`, the geography,
   the `stratum_id` and `provenance` copied from the selection list, and the frozen metric

@@ -1014,6 +1014,7 @@ def run(
                 build_timestamp=_utc_now(),
                 code_version=code_version,
                 attrition_contract=config.ATTRITION_CONTRACT,
+                normalization_stat_source=config.NORMALIZATION_STAT_SOURCE,
                 **fingerprints.as_kwargs(),
             )["dataset_version"]
 

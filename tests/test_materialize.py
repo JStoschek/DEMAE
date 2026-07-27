@@ -304,6 +304,19 @@ def test_corpus_meta_carries_the_attrition_contract_and_fingerprints(build):
     assert "seed" not in params
 
 
+def test_corpus_meta_names_the_normalization_stat_source_outside_build_params(build):
+    """#70: the card says which corpus ``global_mean``/``global_std`` describe.
+
+    Top-level, not in ``build_params`` — #69's Gate-F bar reads
+    ``corpus_meta.json:normalization_stat_source`` to pick the live F8 branch, and a
+    ``build_params`` key would move every corpus's ``dataset_version``.
+    """
+    _run(build)
+    meta = json.loads((build.out_dir / "corpus_meta.json").read_text())
+    assert meta["normalization_stat_source"] == "tier_specific"
+    assert "normalization_stat_source" not in meta["build_params"]
+
+
 def test_global_stats_are_the_corpus_wide_land_mean_and_std(build):
     """ADR-0003's ``global`` mode: one streaming pass, not a second read."""
     result = _run(build)

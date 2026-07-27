@@ -11,7 +11,7 @@ existing ADR, surface it rather than silently overriding.
 |---|---|---|
 | [0001](0001-corpus-construction-recipe.md) | Corpus-construction recipe (Phase 0) | Accepted — §4 amended by Gate A3; §3 amended by Phase C2; §4–5 metric basis superseded by [0004](0004-frozen-metric-vector.md); §4–5 strata/quotas superseded by [0005](0005-sampling-design.md) |
 | [0002](0002-storage-format-and-manifest.md) | Storage format and manifest | Accepted |
-| [0003](0003-dataloader-design.md) | Dataloader design | Accepted |
+| [0003](0003-dataloader-design.md) | Dataloader design | Accepted — §3's `global` statistic amended by Phase F (tier-specific; within-tier ablation only) |
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
 | [0005](0005-sampling-design.md) | Sampling design — stratification, allocation, within-stratum selection (Phase D / Gate E) | Accepted |
 | [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |

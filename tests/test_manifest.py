@@ -117,6 +117,37 @@ def test_dataset_version_changes_with_content_and_params():
     assert manifest.dataset_version(rows, {"seed": 1}) != base
 
 
+def test_normalization_stat_source_is_recorded_and_fingerprint_neutral(tmp_path):
+    """#70: the card names which corpus ``global_mean``/``global_std`` describe.
+
+    Top-level and outside ``build_params`` — #69's Gate-F bar reads
+    ``corpus_meta.json:normalization_stat_source`` to pick the live F8 branch, and the
+    key must not move ``dataset_version``: the debug tier's ``6fde6a58…`` is quoted by
+    the committed E2 report and gallery, which ADR-0006/0007 rest on. So two cards that
+    differ *only* in this string must fingerprint identically.
+    """
+    rows = [_row(i) for i in range(5)]
+    common = dict(
+        rows=rows,
+        global_mean=812.3,
+        global_std=623.1,
+        snapshot_date="2026-07",
+        build_timestamp="2026-07-14T00:00:00Z",
+        code_version="abc123",
+        **_PROV,
+    )
+    default = manifest.write_corpus_meta(tmp_path / "a.json", **common)
+    other = manifest.write_corpus_meta(
+        tmp_path / "b.json", normalization_stat_source="inherit_debug", **common
+    )
+
+    assert default["normalization_stat_source"] == config.NORMALIZATION_STAT_SOURCE
+    assert default["normalization_stat_source"] == "tier_specific"
+    assert "normalization_stat_source" not in default["build_params"]
+    assert other["normalization_stat_source"] == "inherit_debug"
+    assert other["dataset_version"] == default["dataset_version"]
+
+
 def test_corpus_meta_records_card_and_global_stats(tmp_path):
     rows = [_row(i) for i in range(5)]
     path = tmp_path / "corpus_meta.json"
