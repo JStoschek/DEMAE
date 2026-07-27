@@ -1,0 +1,755 @@
+{
+  "artifact": "The 500,000-window scale-tier selection list",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/71",
+  "map": "https://github.com/JStoschek/DEMAE/issues/67",
+  "selection_list": "artifacts/phase_f/selection_scale_500k.csv",
+  "budget": 500000,
+  "seed": 57006,
+  "inputs": {
+    "catalog": "data/catalog_gated",
+    "kept_rows": 3052735,
+    "centroids": "artifacts/phase_d/centroids.json",
+    "scaler": "artifacts/phase_d/scaler.json",
+    "k": 20,
+    "frame_fingerprint": {
+      "n_kept": 3052735,
+      "gate_thresholds": {
+        "zero_fill_min": 0.75,
+        "degenerate_land_std_m": 3.0,
+        "water_drop_max": 0.3,
+        "water_affected_min": 0.05,
+        "edited_max": 0.25
+      },
+      "catalog_code_version": "ad46e96"
+    }
+  },
+  "conformance": {
+    "n_rows": 500000,
+    "n_distinct_window_ids": 500000,
+    "matches_budget": true,
+    "all_distinct": true,
+    "per_stratum_matches_n_h": true,
+    "per_stratum_coastal_matches_c_h": true,
+    "provenance_vocabulary": [
+      "base",
+      "floor:coastline"
+    ],
+    "provenance_counts": {
+      "base": 493300,
+      "floor:coastline": 6700
+    }
+  },
+  "gate_f_bar_crosscheck": {
+    "bar": "docs/research/f-gate-bar.json (#69) \u2014 committed_inputs.allocation.n_h",
+    "applicable": true,
+    "agrees": false,
+    "n_strata_differing": 12,
+    "max_abs_delta": 2,
+    "drawn_sums_to_budget": true,
+    "pre_registered_sums_to_budget": true,
+    "deltas": [
+      {
+        "stratum_id": 1,
+        "pre_registered_n_h": 28072,
+        "drawn_n_h": 28071,
+        "delta": -1
+      },
+      {
+        "stratum_id": 3,
+        "pre_registered_n_h": 21851,
+        "drawn_n_h": 21852,
+        "delta": 1
+      },
+      {
+        "stratum_id": 4,
+        "pre_registered_n_h": 36612,
+        "drawn_n_h": 36614,
+        "delta": 2
+      },
+      {
+        "stratum_id": 8,
+        "pre_registered_n_h": 37015,
+        "drawn_n_h": 37013,
+        "delta": -2
+      },
+      {
+        "stratum_id": 9,
+        "pre_registered_n_h": 27239,
+        "drawn_n_h": 27238,
+        "delta": -1
+      },
+      {
+        "stratum_id": 10,
+        "pre_registered_n_h": 28175,
+        "drawn_n_h": 28173,
+        "delta": -2
+      },
+      {
+        "stratum_id": 11,
+        "pre_registered_n_h": 10147,
+        "drawn_n_h": 10148,
+        "delta": 1
+      },
+      {
+        "stratum_id": 12,
+        "pre_registered_n_h": 32031,
+        "drawn_n_h": 32032,
+        "delta": 1
+      },
+      {
+        "stratum_id": 14,
+        "pre_registered_n_h": 24673,
+        "drawn_n_h": 24672,
+        "delta": -1
+      },
+      {
+        "stratum_id": 15,
+        "pre_registered_n_h": 20974,
+        "drawn_n_h": 20975,
+        "delta": 1
+      },
+      {
+        "stratum_id": 16,
+        "pre_registered_n_h": 30874,
+        "drawn_n_h": 30873,
+        "delta": -1
+      },
+      {
+        "stratum_id": 18,
+        "pre_registered_n_h": 30921,
+        "drawn_n_h": 30923,
+        "delta": 2
+      }
+    ],
+    "cause_reproduced": true,
+    "diagnosis": "The pre-registered table is reproduced bit-for-bit by feeding the 4-dp sigma_h that d2-allocation-nh.json PRINTS back into select.allocate, while the sampler recomputes sigma_h at full precision from the frame. #44 recorded this exact trap ('the JSON's 4-dp sigma_h is for legibility; feeding it back shifts a few n_h by +-1, which is why the sampler recomputes sigma_h from the frame') and asserts the full-precision path against the committed 50k table in tests/test_select.py. Both tables sum to the exact budget; the drawn one is the allocation rule ADR-0005 specifies, the pre-registered one is that rule evaluated on a display-rounded input.",
+    "consequence": "F2a compares the shipped list's per-stratum counts against this table, so as committed it would fire a DEFECT on a correct draw. The bar is #69's artifact and #71 does not edit a pre-registered file after drawing against it: the discrepancy is published here, with its cause reproduced, for a separate dated commit to correct before #73 executes the gate."
+  },
+  "determinism": {
+    "criterion": "two full runs from the committed artifacts, byte-identical \u2014 demonstrated, never asserted (#44's bar, re-earned at this tier)",
+    "selection_md5": "90d74c896d1fa04f7079b8491781c21e",
+    "n_rows": 500000,
+    "replicate_md5": "90d74c896d1fa04f7079b8491781c21e",
+    "byte_identical": true,
+    "run_seconds": 1894.0,
+    "workers": 6
+  },
+  "binding": {
+    "budget": 500000,
+    "floor_clamp": 5000,
+    "floor_clamp_strata_below": 0,
+    "min_n_h": 7343,
+    "coast_floor": 6700,
+    "coast_floor_rate": 0.0134,
+    "frame_coast_rate": 0.01337,
+    "realized_coast_share": 0.0134,
+    "coast_cap_strata_binding": 0,
+    "min_headroom": 4.39,
+    "min_headroom_stratum": 6,
+    "anything_binds": false
+  },
+  "per_cog": {
+    "n_windows": 500000,
+    "n_cogs": 22909,
+    "mean_per_cog": 21.8255,
+    "median_per_cog": 14,
+    "max_per_cog": 233,
+    "p99_per_cog": 118,
+    "histogram": {
+      "1": 1176,
+      "2": 1044,
+      "3": 935,
+      "4": 894,
+      "5": 806,
+      "6": 875,
+      "7": 816,
+      "8": 819,
+      "9": 815,
+      "10": 723,
+      "11": 750,
+      "12": 678,
+      "13": 690,
+      "14": 576,
+      "15": 630,
+      "16": 556,
+      "17": 464,
+      "18": 429,
+      "19": 462,
+      "20": 409,
+      "21": 412,
+      "22": 379,
+      "23": 310,
+      "24": 336,
+      "25": 324,
+      "26": 290,
+      "27": 309,
+      "28": 270,
+      "29": 286,
+      "30": 283,
+      "31": 242,
+      "32": 236,
+      "33": 203,
+      "34": 174,
+      "35": 187,
+      "36": 177,
+      "37": 177,
+      "38": 166,
+      "39": 147,
+      "40": 138,
+      "41": 138,
+      "42": 124,
+      "43": 117,
+      "44": 134,
+      "45": 92,
+      "46": 111,
+      "47": 122,
+      "48": 89,
+      "49": 110,
+      "50": 98,
+      "51": 92,
+      "52": 85,
+      "53": 78,
+      "54": 61,
+      "55": 81,
+      "56": 62,
+      "57": 60,
+      "58": 64,
+      "59": 43,
+      "60": 52,
+      "61": 46,
+      "62": 55,
+      "63": 41,
+      "64": 41,
+      "65": 44,
+      "66": 48,
+      "67": 36,
+      "68": 38,
+      "69": 52,
+      "70": 33,
+      "71": 41,
+      "72": 26,
+      "73": 29,
+      "74": 29,
+      "75": 27,
+      "76": 28,
+      "77": 23,
+      "78": 17,
+      "79": 22,
+      "80": 29,
+      "81": 27,
+      "82": 27,
+      "83": 22,
+      "84": 16,
+      "85": 24,
+      "86": 26,
+      "87": 16,
+      "88": 30,
+      "89": 23,
+      "90": 19,
+      "91": 21,
+      "92": 17,
+      "93": 17,
+      "94": 10,
+      "95": 12,
+      "96": 17,
+      "97": 17,
+      "98": 8,
+      "99": 13,
+      "100": 12,
+      "101": 10,
+      "102": 18,
+      "103": 18,
+      "104": 11,
+      "105": 10,
+      "106": 10,
+      "107": 7,
+      "108": 15,
+      "109": 13,
+      "110": 11,
+      "111": 14,
+      "112": 7,
+      "113": 9,
+      "114": 7,
+      "115": 11,
+      "116": 10,
+      "117": 8,
+      "118": 13,
+      "119": 14,
+      "120": 11,
+      "121": 1,
+      "122": 9,
+      "123": 2,
+      "124": 10,
+      "125": 8,
+      "126": 5,
+      "127": 7,
+      "128": 6,
+      "129": 6,
+      "130": 3,
+      "131": 4,
+      "132": 8,
+      "133": 3,
+      "134": 6,
+      "136": 4,
+      "137": 4,
+      "138": 4,
+      "139": 4,
+      "140": 4,
+      "141": 3,
+      "142": 2,
+      "143": 3,
+      "144": 6,
+      "145": 3,
+      "146": 1,
+      "147": 4,
+      "148": 2,
+      "149": 3,
+      "150": 2,
+      "151": 2,
+      "152": 4,
+      "153": 2,
+      "154": 2,
+      "155": 2,
+      "156": 1,
+      "157": 2,
+      "158": 3,
+      "159": 1,
+      "160": 2,
+      "161": 1,
+      "162": 2,
+      "163": 1,
+      "164": 3,
+      "165": 1,
+      "166": 2,
+      "167": 1,
+      "168": 2,
+      "169": 1,
+      "170": 1,
+      "171": 4,
+      "172": 1,
+      "173": 1,
+      "174": 1,
+      "177": 3,
+      "178": 1,
+      "180": 1,
+      "183": 1,
+      "184": 3,
+      "185": 1,
+      "187": 1,
+      "188": 1,
+      "189": 2,
+      "190": 1,
+      "193": 1,
+      "194": 2,
+      "197": 1,
+      "199": 1,
+      "206": 1,
+      "208": 1,
+      "213": 1,
+      "221": 1,
+      "223": 1,
+      "224": 1,
+      "233": 1
+    },
+    "densest_cogs": [
+      {
+        "stem": "Copernicus_DSM_COG_10_N09_00_E077_00_DEM",
+        "windows": 233,
+        "inventory": 255,
+        "fraction": 0.9137
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N20_00_W100_00_DEM",
+        "windows": 224,
+        "inventory": 249,
+        "fraction": 0.8996
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S31_00_E019_00_DEM",
+        "windows": 223,
+        "inventory": 255,
+        "fraction": 0.8745
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S05_00_W081_00_DEM",
+        "windows": 221,
+        "inventory": 251,
+        "fraction": 0.8805
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N29_00_E100_00_DEM",
+        "windows": 213,
+        "inventory": 255,
+        "fraction": 0.8353
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N29_00_W111_00_DEM",
+        "windows": 208,
+        "inventory": 256,
+        "fraction": 0.8125
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N39_00_E099_00_DEM",
+        "windows": 206,
+        "inventory": 253,
+        "fraction": 0.8142
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S30_00_W071_00_DEM",
+        "windows": 199,
+        "inventory": 256,
+        "fraction": 0.7773
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_S29_00_W071_00_DEM",
+        "windows": 197,
+        "inventory": 256,
+        "fraction": 0.7695
+      },
+      {
+        "stem": "Copernicus_DSM_COG_10_N07_00_E080_00_DEM",
+        "windows": 194,
+        "inventory": 255,
+        "fraction": 0.7608
+      }
+    ],
+    "fraction_of_inventory": {
+      "mean": 0.2291,
+      "median": 0.1523,
+      "p99": 1.0,
+      "max": 1.0,
+      "inventory_floor": 32,
+      "max_among_sizeable_cogs": 1.0,
+      "n_cogs_at_or_over_half": 2789,
+      "n_cogs_fully_drawn": 423,
+      "n_cogs_fully_drawn_sizeable": 2,
+      "max_windows_from_a_fully_drawn_cog": 48,
+      "n_cogs_in_pool": 24118,
+      "n_cogs_undrawn": 1209,
+      "highest_fraction_cogs": [
+        {
+          "stem": "Copernicus_DSM_COG_10_S89_00_W169_00_DEM",
+          "windows": 1,
+          "inventory": 1,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_W045_00_DEM",
+          "windows": 1,
+          "inventory": 1,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S87_00_W047_00_DEM",
+          "windows": 15,
+          "inventory": 15,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S87_00_W046_00_DEM",
+          "windows": 15,
+          "inventory": 15,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_E165_00_DEM",
+          "windows": 2,
+          "inventory": 2,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_E174_00_DEM",
+          "windows": 4,
+          "inventory": 4,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_E175_00_DEM",
+          "windows": 4,
+          "inventory": 4,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_E177_00_DEM",
+          "windows": 1,
+          "inventory": 1,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_W043_00_DEM",
+          "windows": 1,
+          "inventory": 1,
+          "fraction": 1.0
+        },
+        {
+          "stem": "Copernicus_DSM_COG_10_S78_00_W050_00_DEM",
+          "windows": 4,
+          "inventory": 4,
+          "fraction": 1.0
+        }
+      ]
+    }
+  },
+  "overlap": {
+    "label": "debug tier (50k, #44)",
+    "n_this": 500000,
+    "n_other": 50000,
+    "n_pool": 3052735,
+    "n_overlap": 30998,
+    "share_of_this": 0.061996,
+    "share_of_other": 0.61996,
+    "expected_if_uniform": 8189.3777,
+    "lift_over_uniform": 3.785
+  },
+  "reclustering_knob": {
+    "plan_text": "\u00a7F: same strata/centroids for comparability; re-clustering is a knob",
+    "status": "structurally inert \u2014 kept declared, never exercised",
+    "fit_rows": 3052735,
+    "kept_rows_a_refit_would_see": 3052735,
+    "refit_input_is_identical": true,
+    "fit_k": 20,
+    "fit_algorithm": "lloyd",
+    "fit_n_init": 25,
+    "argument": "The centroids were fit on the ENTIRE gated catalog (fit_rows 3,052,735 = the whole kept frame), not on the debug tier's 50,000 windows. A Phase-F refit would therefore run on identical input: same rows, same k=20, same Lloyd, same n_init. It cannot discover strata the committed fit did not already see, so its expected change is nil \u2014 while #41 established the FIT is not bitwise-reproducible across threads (assign() is). Refitting strictly loses: no expected gain, and a guaranteed loss of the cross-tier strata comparability the persisted artifacts exist to provide.",
+    "consequence": "The knob stays declared in ADR-0005 \u00a79 (k row) and in the plan's \u00a7F, and is never exercised \u2014 the #36/#42 pattern: retire on evidence, keep declared, so a future frame that genuinely moves the fit population makes it live again with no code change."
+  },
+  "allocation": [
+    {
+      "stratum_id": 0,
+      "N_h": 186950,
+      "sigma_h": 1.0787,
+      "coast_h": 1662,
+      "n_h": 32200,
+      "coastal": 273,
+      "base": 31927,
+      "headroom": 5.81
+    },
+    {
+      "stratum_id": 1,
+      "N_h": 168835,
+      "sigma_h": 1.0413,
+      "coast_h": 3093,
+      "n_h": 28071,
+      "coastal": 508,
+      "base": 27563,
+      "headroom": 6.01
+    },
+    {
+      "stratum_id": 2,
+      "N_h": 150898,
+      "sigma_h": 0.9612,
+      "coast_h": 1036,
+      "n_h": 23159,
+      "coastal": 170,
+      "base": 22989,
+      "headroom": 6.52
+    },
+    {
+      "stratum_id": 3,
+      "N_h": 130184,
+      "sigma_h": 1.0512,
+      "coast_h": 841,
+      "n_h": 21852,
+      "coastal": 138,
+      "base": 21714,
+      "headroom": 5.96
+    },
+    {
+      "stratum_id": 4,
+      "N_h": 232598,
+      "sigma_h": 0.9858,
+      "coast_h": 1426,
+      "n_h": 36614,
+      "coastal": 234,
+      "base": 36380,
+      "headroom": 6.35
+    },
+    {
+      "stratum_id": 5,
+      "N_h": 118638,
+      "sigma_h": 1.051,
+      "coast_h": 449,
+      "n_h": 19909,
+      "coastal": 74,
+      "base": 19835,
+      "headroom": 5.96
+    },
+    {
+      "stratum_id": 6,
+      "N_h": 32229,
+      "sigma_h": 1.4269,
+      "coast_h": 0,
+      "n_h": 7343,
+      "coastal": 0,
+      "base": 7343,
+      "headroom": 4.39
+    },
+    {
+      "stratum_id": 7,
+      "N_h": 139429,
+      "sigma_h": 1.1698,
+      "coast_h": 0,
+      "n_h": 26043,
+      "coastal": 0,
+      "base": 26043,
+      "headroom": 5.35
+    },
+    {
+      "stratum_id": 8,
+      "N_h": 292363,
+      "sigma_h": 0.7929,
+      "coast_h": 2344,
+      "n_h": 37013,
+      "coastal": 385,
+      "base": 36628,
+      "headroom": 7.9
+    },
+    {
+      "stratum_id": 9,
+      "N_h": 166251,
+      "sigma_h": 1.0261,
+      "coast_h": 2306,
+      "n_h": 27238,
+      "coastal": 379,
+      "base": 26859,
+      "headroom": 6.1
+    },
+    {
+      "stratum_id": 10,
+      "N_h": 148603,
+      "sigma_h": 1.1874,
+      "coast_h": 1340,
+      "n_h": 28173,
+      "coastal": 220,
+      "base": 27953,
+      "headroom": 5.27
+    },
+    {
+      "stratum_id": 11,
+      "N_h": 50767,
+      "sigma_h": 1.2518,
+      "coast_h": 0,
+      "n_h": 10148,
+      "coastal": 0,
+      "base": 10148,
+      "headroom": 5.0
+    },
+    {
+      "stratum_id": 12,
+      "N_h": 185487,
+      "sigma_h": 1.0815,
+      "coast_h": 5935,
+      "n_h": 32032,
+      "coastal": 974,
+      "base": 31058,
+      "headroom": 5.79
+    },
+    {
+      "stratum_id": 13,
+      "N_h": 194931,
+      "sigma_h": 1.0678,
+      "coast_h": 3573,
+      "n_h": 33236,
+      "coastal": 586,
+      "base": 32650,
+      "headroom": 5.87
+    },
+    {
+      "stratum_id": 14,
+      "N_h": 143914,
+      "sigma_h": 1.0737,
+      "coast_h": 4915,
+      "n_h": 24672,
+      "coastal": 807,
+      "base": 23865,
+      "headroom": 5.83
+    },
+    {
+      "stratum_id": 15,
+      "N_h": 115886,
+      "sigma_h": 1.1335,
+      "coast_h": 4064,
+      "n_h": 20975,
+      "coastal": 667,
+      "base": 20308,
+      "headroom": 5.52
+    },
+    {
+      "stratum_id": 16,
+      "N_h": 220981,
+      "sigma_h": 0.875,
+      "coast_h": 3816,
+      "n_h": 30873,
+      "coastal": 626,
+      "base": 30247,
+      "headroom": 7.16
+    },
+    {
+      "stratum_id": 17,
+      "N_h": 105302,
+      "sigma_h": 1.0986,
+      "coast_h": 1095,
+      "n_h": 18472,
+      "coastal": 180,
+      "base": 18292,
+      "headroom": 5.7
+    },
+    {
+      "stratum_id": 18,
+      "N_h": 215052,
+      "sigma_h": 0.9005,
+      "coast_h": 2920,
+      "n_h": 30923,
+      "coastal": 479,
+      "base": 30444,
+      "headroom": 6.95
+    },
+    {
+      "stratum_id": 19,
+      "N_h": 53437,
+      "sigma_h": 1.2955,
+      "coast_h": 0,
+      "n_h": 11054,
+      "coastal": 0,
+      "base": 11054,
+      "headroom": 4.83
+    }
+  ],
+  "adr0007_headroom": {
+    "gating_strata": [
+      2,
+      17
+    ],
+    "corroborating_strata": [
+      5,
+      7
+    ],
+    "note": "headroom only \u2014 the 2/17 drainage re-test itself is Gate F's F3, pre-registered in docs/research/f-gate-bar.json (#69) and executed by #73",
+    "rows": [
+      {
+        "stratum_id": 2,
+        "N_h": 150898,
+        "n_h": 23159,
+        "headroom": 6.52
+      },
+      {
+        "stratum_id": 17,
+        "N_h": 105302,
+        "n_h": 18472,
+        "headroom": 5.7
+      },
+      {
+        "stratum_id": 5,
+        "N_h": 118638,
+        "n_h": 19909,
+        "headroom": 5.96
+      },
+      {
+        "stratum_id": 7,
+        "N_h": 139429,
+        "n_h": 26043,
+        "headroom": 5.35
+      }
+    ]
+  }
+}

@@ -81,6 +81,14 @@ ROWS_PER_SHARD: Final = SHARD_TARGET_BYTES // _TILE_BYTES  # ~14,946
 # `dataset.materialize` reads it, so the path is named once here rather than in both.
 SELECTION_PATH: Final = "artifacts/phase_d/selection_debug_50k.csv"
 
+# --- Phase-F handoff (issue #71) ----------------------------------------------
+# The scale tier's committed selection list: 500,000 windows drawn by the *same*
+# `dataset.select` from the *same* persisted centroids and scaler, at ten times the
+# budget. Per #45 it is an independent draw — it does not nest the debug tier and
+# nothing hierarchical was built — so this is a second contract beside the first, not
+# a superset of it. #69's Gate-F bar names this path; #72 materializes it.
+SCALE_SELECTION_PATH: Final = "artifacts/phase_f/selection_scale_500k.csv"
+
 # --- Materialization attrition (issue #50) ------------------------------------
 # What happens when a *selected* window fails at full res. `accept_shortfall`: it is
 # recorded in the materialization ledger and never backfilled, so the corpus is

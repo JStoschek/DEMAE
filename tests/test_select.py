@@ -108,6 +108,54 @@ def test_allocate_floor_clamp_is_reported_not_applied():
     assert int(alloc.n_h.sum()) == 1000  # nothing was raised to the floor
 
 
+def test_allocate_headroom_is_the_kept_pool_over_the_quota():
+    alloc = select.allocate(
+        np.array([100_000, 100_000]), np.array([1.0, 1.0]), np.array([0, 0]), 1000
+    )
+    assert np.allclose(alloc.headroom, 100_000 / alloc.n_h)
+    assert all(r["headroom"] == pytest.approx(200.0, abs=0.5) for r in alloc.rows())
+
+
+def test_allocate_headroom_of_an_unallocated_stratum_is_infinite_not_its_own_size():
+    # A stratum Neyman gives nothing has an infinitely deep pool. Reporting N_h there would
+    # make the *emptiest* draw look like the thinnest one to anything taking a minimum.
+    alloc = select.allocate(
+        np.array([1_000_000, 500]), np.array([1.0, 0.0001]), np.array([0, 0]), 1000
+    )
+    assert int(alloc.n_h[1]) == 0
+    assert np.isinf(alloc.headroom[1])
+    assert alloc.rows()[1]["headroom"] is None
+    assert alloc.binding()["min_headroom_stratum"] == 0  # not the empty stratum
+
+
+def test_allocate_reports_the_coastal_cap_as_non_binding_when_coast_is_plentiful():
+    alloc = select.allocate(
+        np.array([100_000, 100_000]), np.array([1.0, 1.0]), np.array([5_000, 5_000]),
+        50_000,
+    )
+    binding = alloc.binding()
+    assert binding["coast_cap_strata_binding"] == 0
+    assert binding["floor_clamp_strata_below"] == 0
+    assert binding["coast_floor"] == alloc.coast_floor == round(0.0134 * 50_000)
+    assert binding["realized_coast_share"] == pytest.approx(0.0134)
+    assert binding["anything_binds"] is False
+
+
+def test_allocate_reports_the_coastal_cap_when_a_stratum_cannot_hold_its_share():
+    # Stratum 1 is coast-heavy (5,000 of the 6,000 coastal rows) but Neyman-poor
+    # (n_h = 100), so min(n_h, coast_h) clamps its 558-window share to 100 and the
+    # remainder spills to stratum 0 — the cap doing the job it exists for.
+    alloc = select.allocate(
+        np.array([1_000_000, 20_000]), np.array([1.0, 0.1]), np.array([1_000, 5_000]),
+        50_000,
+    )
+    binding = alloc.binding()
+    assert int(alloc.coastal[1]) == int(alloc.n_h[1]) == 100
+    assert int(alloc.coastal.sum()) == alloc.coast_floor
+    assert binding["coast_cap_strata_binding"] == 1
+    assert binding["anything_binds"] is True
+
+
 # --- fscs_select --------------------------------------------------------------
 
 
@@ -256,6 +304,161 @@ def test_per_cog_distribution_counts_windows_per_cog():
     assert dist["n_windows"] == sel.n
     assert dist["max_per_cog"] >= dist["median_per_cog"] >= 1
     assert sum(dist["histogram"].values()) == dist["n_cogs"]
+
+
+def test_per_cog_distribution_with_inventory_reports_fraction_drawn():
+    """#69's F6c wants each COG's draw as a fraction of the inventory it actually holds."""
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=120, seed=0)
+    stems, counts = np.unique(sel.cog_stems(), return_counts=True)
+    # Give every drawn COG exactly twice the inventory it yielded -> every fraction is 0.5.
+    inventory = {str(s): int(c) * 2 for s, c in zip(stems, counts)}
+
+    dist = sel.per_cog_distribution(inventory=inventory)
+    frac = dist["fraction_of_inventory"]
+    assert frac["max"] == pytest.approx(0.5)
+    assert frac["median"] == pytest.approx(0.5)
+    assert frac["n_cogs_at_or_over_half"] == dist["n_cogs"]
+
+
+def test_per_cog_distribution_separates_sizeable_cogs_from_tiny_ones():
+    """A COG holding 3 windows hits fraction 1.0 without meaning anything (#69's F6c)."""
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=120, seed=0)
+    stems, counts = np.unique(sel.cog_stems(), return_counts=True)
+    # Every COG is drawn in full, but none of them holds the sizeable floor's worth.
+    inventory = {str(s): int(c) for s, c in zip(stems, counts)}
+
+    frac = sel.per_cog_distribution(inventory=inventory)["fraction_of_inventory"]
+    assert frac["inventory_floor"] == select.FRACTION_INVENTORY_FLOOR
+    assert frac["n_cogs_fully_drawn"] == len(inventory)
+    assert frac["n_cogs_fully_drawn_sizeable"] == sum(
+        c >= select.FRACTION_INVENTORY_FLOOR for c in inventory.values()
+    )
+
+
+def test_per_cog_distribution_rejects_a_cog_missing_from_the_inventory():
+    """A drawn COG absent from the kept pool is a bug, not a zero-denominator to paper over."""
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=120, seed=0)
+    with pytest.raises(ValueError, match="absent from the kept inventory"):
+        sel.per_cog_distribution(inventory={})
+
+
+# --- Overlap with another tier (#45: incidental, reported, never engineered) ---
+
+
+def test_overlap_report_counts_shared_windows_both_ways():
+    rep = select.overlap_report(
+        np.array(["a", "b", "c", "d"], dtype=object),
+        ["c", "d", "e"],
+        n_pool=1000,
+        label="debug 50k",
+    )
+    assert rep["label"] == "debug 50k"
+    assert rep["n_overlap"] == 2
+    assert rep["share_of_this"] == pytest.approx(0.5)
+    assert rep["share_of_other"] == pytest.approx(2 / 3)
+    # Under two independent uniform draws from a 1,000-row pool: 4*3/1000.
+    assert rep["expected_if_uniform"] == pytest.approx(0.012)
+
+
+def test_overlap_report_disjoint_lists_report_zero():
+    rep = select.overlap_report(
+        np.array(["a", "b"], dtype=object), ["x"], n_pool=10, label="other"
+    )
+    assert rep["n_overlap"] == 0
+    assert rep["share_of_this"] == 0.0
+    assert rep["lift_over_uniform"] == 0.0
+
+
+# --- Re-loading the persisted list (the contract, not the seed) ---------------
+
+
+def test_selection_from_csv_round_trips_the_written_list(tmp_path):
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=120, seed=0)
+    path = select.write_selection(sel, tmp_path / "sel.csv")
+
+    reloaded = select.Selection.from_csv(
+        path, allocation=sel.allocation, fingerprint=sel.fingerprint
+    )
+    assert np.array_equal(reloaded.window_id, sel.window_id)
+    assert np.array_equal(reloaded.stratum_id, sel.stratum_id)
+    assert np.array_equal(reloaded.provenance, sel.provenance)
+    assert reloaded.budget == sel.budget
+    assert reloaded.summary()["per_cog"] == sel.summary()["per_cog"]
+
+
+def test_read_window_ids_returns_only_the_id_column(tmp_path):
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=120, seed=0)
+    path = select.write_selection(sel, tmp_path / "sel.csv")
+    assert np.array_equal(select.read_window_ids(path), sel.window_id)
+
+
+def test_selection_from_csv_rejects_a_foreign_header(tmp_path):
+    bad = tmp_path / "bad.csv"
+    bad.write_text("window_id,stratum\nw:0:0,1\n")
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    alloc = select.allocate(
+        np.array([100, 100]), np.array([1.0, 1.0]), np.array([0, 0]), 10
+    )
+    with pytest.raises(ValueError, match="header"):
+        select.Selection.from_csv(bad, allocation=alloc, fingerprint={})
+
+
+def test_allocation_at_matches_the_allocation_a_draw_derives():
+    """The report driver re-derives the quota table without paying for FSCS again."""
+    frame, centroids, scaler, geocell = _synthetic_inputs()
+    sel = select.select_windows(frame, centroids, scaler, geocell, budget=200, seed=0)
+    alloc = select.allocation_at(frame, centroids, scaler, budget=200)
+    assert np.array_equal(alloc.n_h, sel.allocation.n_h)
+    assert np.array_equal(alloc.coastal, sel.allocation.coastal)
+    assert np.allclose(alloc.sigma_h, sel.allocation.sigma_h)
+
+
+# --- The committed allocation table -------------------------------------------
+
+
+def test_write_allocation_table_matches_the_committed_d2_shape(tmp_path):
+    frame, centroids, scaler, _ = _synthetic_inputs()
+    alloc = select.allocation_at(frame, centroids, scaler, budget=200)
+    path = select.write_allocation_table(
+        alloc, tmp_path / "alloc.json", fingerprint=frame.fingerprint
+    )
+
+    got = json.loads(path.read_text())
+    committed = json.loads(_ALLOC_TABLE.read_text())
+    assert set(got) == set(committed)
+    assert set(got["rows"][0]) >= set(committed["rows"][0])
+    assert got["budget"] == 200
+    assert got["k"] == alloc.k
+    assert sum(r["n_h"] for r in got["rows"]) == 200
+
+
+# --- Kept per-COG inventory ---------------------------------------------------
+
+
+def _tiny_catalog(path: Path) -> Path:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from dataset import catalog as catalog_mod
+
+    stems = ["cogA", "cogA", "cogA", "cogB", "cogB"]
+    keep = [True, True, False, True, False]
+    parts = path / catalog_mod.PARTS_DIR
+    parts.mkdir(parents=True, exist_ok=True)
+    table = pa.table({"stem": stems, "keep": keep, "geocell": ["g0"] * 5})
+    pq.write_table(table.slice(0, 3), parts / "part-00000.parquet")
+    pq.write_table(table.slice(3), parts / "part-00001.parquet")
+    return path
+
+
+def test_kept_cog_inventory_counts_only_kept_rows(tmp_path):
+    inv = select.kept_cog_inventory(_tiny_catalog(tmp_path))
+    assert inv == {"cogA": 2, "cogB": 1}
 
 
 # --- Integration: reproduce the committed 50k allocation on the real catalog ---

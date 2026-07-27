@@ -35,9 +35,14 @@ uv run python -m dataset.materialize # full-res read of the selected windows -> 
 
 `dataset.select` is **budget-parameterized** (`--budget`, default 50,000): it re-loads
 the committed scaler and centroids and draws a deterministic selection list of
-`window_id, stratum_id, provenance`, so Phase F re-runs the same code at 200–500k against
+`window_id, stratum_id, provenance`, so a bigger tier is a bigger `--budget` against
 identical strata. The selection list *is* the determinism contract — two runs from the
 committed artifacts reproduce it byte-for-byte (`docs/research/d4-sampler.md`).
+
+Phase F spent that design: the **500,000-window scale tier** is the same command at
+`--budget 500000 --out artifacts/phase_f/selection_scale_500k.csv`, drawn from the same
+two artifacts with no re-clustering, two runs byte-identical
+(`docs/research/f-scale-draw.md`).
 
 `dataset.materialize` is the **end-to-end build** (Phase E1) and replaces the retired
 ADR-0001 TRI-quintile CLI (`dataset.build` / `dataset.pipeline`). It groups the selection

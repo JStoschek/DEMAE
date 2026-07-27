@@ -1,0 +1,221 @@
+{
+  "k": 20,
+  "budget": 500000,
+  "coast_floor": 6700,
+  "floor_clamp": 5000,
+  "floor_clamp_strata_below": 0,
+  "method": "neyman n_h proportional to N_h*sigma_h; largest-remainder to exact budget; coastal floor reserved within-stratum proportional to coast_h, capped at min(n_h, coast_h)",
+  "centroids_fingerprint": {
+    "n_kept": 3052735,
+    "gate_thresholds": {
+      "zero_fill_min": 0.75,
+      "degenerate_land_std_m": 3.0,
+      "water_drop_max": 0.3,
+      "water_affected_min": 0.05,
+      "edited_max": 0.25
+    },
+    "catalog_code_version": "ad46e96"
+  },
+  "rows": [
+    {
+      "stratum_id": 0,
+      "N_h": 186950,
+      "sigma_h": 1.0787,
+      "coast_h": 1662,
+      "n_h": 32200,
+      "coastal": 273,
+      "base": 31927,
+      "headroom": 5.81
+    },
+    {
+      "stratum_id": 1,
+      "N_h": 168835,
+      "sigma_h": 1.0413,
+      "coast_h": 3093,
+      "n_h": 28071,
+      "coastal": 508,
+      "base": 27563,
+      "headroom": 6.01
+    },
+    {
+      "stratum_id": 2,
+      "N_h": 150898,
+      "sigma_h": 0.9612,
+      "coast_h": 1036,
+      "n_h": 23159,
+      "coastal": 170,
+      "base": 22989,
+      "headroom": 6.52
+    },
+    {
+      "stratum_id": 3,
+      "N_h": 130184,
+      "sigma_h": 1.0512,
+      "coast_h": 841,
+      "n_h": 21852,
+      "coastal": 138,
+      "base": 21714,
+      "headroom": 5.96
+    },
+    {
+      "stratum_id": 4,
+      "N_h": 232598,
+      "sigma_h": 0.9858,
+      "coast_h": 1426,
+      "n_h": 36614,
+      "coastal": 234,
+      "base": 36380,
+      "headroom": 6.35
+    },
+    {
+      "stratum_id": 5,
+      "N_h": 118638,
+      "sigma_h": 1.051,
+      "coast_h": 449,
+      "n_h": 19909,
+      "coastal": 74,
+      "base": 19835,
+      "headroom": 5.96
+    },
+    {
+      "stratum_id": 6,
+      "N_h": 32229,
+      "sigma_h": 1.4269,
+      "coast_h": 0,
+      "n_h": 7343,
+      "coastal": 0,
+      "base": 7343,
+      "headroom": 4.39
+    },
+    {
+      "stratum_id": 7,
+      "N_h": 139429,
+      "sigma_h": 1.1698,
+      "coast_h": 0,
+      "n_h": 26043,
+      "coastal": 0,
+      "base": 26043,
+      "headroom": 5.35
+    },
+    {
+      "stratum_id": 8,
+      "N_h": 292363,
+      "sigma_h": 0.7929,
+      "coast_h": 2344,
+      "n_h": 37013,
+      "coastal": 385,
+      "base": 36628,
+      "headroom": 7.9
+    },
+    {
+      "stratum_id": 9,
+      "N_h": 166251,
+      "sigma_h": 1.0261,
+      "coast_h": 2306,
+      "n_h": 27238,
+      "coastal": 379,
+      "base": 26859,
+      "headroom": 6.1
+    },
+    {
+      "stratum_id": 10,
+      "N_h": 148603,
+      "sigma_h": 1.1874,
+      "coast_h": 1340,
+      "n_h": 28173,
+      "coastal": 220,
+      "base": 27953,
+      "headroom": 5.27
+    },
+    {
+      "stratum_id": 11,
+      "N_h": 50767,
+      "sigma_h": 1.2518,
+      "coast_h": 0,
+      "n_h": 10148,
+      "coastal": 0,
+      "base": 10148,
+      "headroom": 5.0
+    },
+    {
+      "stratum_id": 12,
+      "N_h": 185487,
+      "sigma_h": 1.0815,
+      "coast_h": 5935,
+      "n_h": 32032,
+      "coastal": 974,
+      "base": 31058,
+      "headroom": 5.79
+    },
+    {
+      "stratum_id": 13,
+      "N_h": 194931,
+      "sigma_h": 1.0678,
+      "coast_h": 3573,
+      "n_h": 33236,
+      "coastal": 586,
+      "base": 32650,
+      "headroom": 5.87
+    },
+    {
+      "stratum_id": 14,
+      "N_h": 143914,
+      "sigma_h": 1.0737,
+      "coast_h": 4915,
+      "n_h": 24672,
+      "coastal": 807,
+      "base": 23865,
+      "headroom": 5.83
+    },
+    {
+      "stratum_id": 15,
+      "N_h": 115886,
+      "sigma_h": 1.1335,
+      "coast_h": 4064,
+      "n_h": 20975,
+      "coastal": 667,
+      "base": 20308,
+      "headroom": 5.52
+    },
+    {
+      "stratum_id": 16,
+      "N_h": 220981,
+      "sigma_h": 0.875,
+      "coast_h": 3816,
+      "n_h": 30873,
+      "coastal": 626,
+      "base": 30247,
+      "headroom": 7.16
+    },
+    {
+      "stratum_id": 17,
+      "N_h": 105302,
+      "sigma_h": 1.0986,
+      "coast_h": 1095,
+      "n_h": 18472,
+      "coastal": 180,
+      "base": 18292,
+      "headroom": 5.7
+    },
+    {
+      "stratum_id": 18,
+      "N_h": 215052,
+      "sigma_h": 0.9005,
+      "coast_h": 2920,
+      "n_h": 30923,
+      "coastal": 479,
+      "base": 30444,
+      "headroom": 6.95
+    },
+    {
+      "stratum_id": 19,
+      "N_h": 53437,
+      "sigma_h": 1.2955,
+      "coast_h": 0,
+      "n_h": 11054,
+      "coastal": 0,
+      "base": 11054,
+      "headroom": 4.83
+    }
+  ]
+}

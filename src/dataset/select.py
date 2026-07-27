@@ -17,11 +17,21 @@ real, reproducibly:
 
 ## Budget is an argument; the fitted artifacts are inputs
 
-The 50,000-window debug tier is one call; Phase F re-runs at 200–500k against the *same*
+The 50,000-window debug tier is one call; Phase F re-runs at 500k against the *same*
 committed centroids and scaler (plan §F). So :func:`select_windows` takes ``budget`` as a
 parameter and re-derives the allocation from the frame at that budget — it never
 re-derives the strata. The committed [`d2-allocation-nh.json`](../../docs/research/d2-allocation-nh.json)
 is the frozen 50k reference this code reproduces, not a table it reads.
+
+**#71 spent that design and it held**: the 500k scale tier is this module at
+``--budget 500000``, drawn from the same two artifacts, with no new sampler and no
+hierarchical rule (#45 ruled the tiers independent draws). Plan §F's *re-clustering* knob
+was recorded **structurally inert** rather than merely declined: the centroids were fit on
+the entire gated catalog (``fit_rows`` 3,052,735), not on the debug tier, so a Phase-F
+refit would run on identical input and could only lose the cross-tier comparability the
+artifacts exist to provide — #41 having established that the *fit* is not bitwise
+reproducible across threads while ``assign`` is. See
+[`f-scale-draw.md`](../../docs/research/f-scale-draw.md).
 
 ## Determinism is the acceptance criterion
 
@@ -59,6 +69,7 @@ denser scale tier needs a cap reintroduced.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -76,11 +87,21 @@ PROV_BASE: Final = "base"
 #: A window bought by the within-stratum coastal reservation (FSCS over the coastal rows).
 PROV_COASTLINE: Final = "floor:coastline"
 
+#: The emitted list's columns — what Phase E1's manifest addendum consumes, and what
+#: :meth:`Selection.from_csv` refuses to read a file without.
+SELECTION_COLUMNS: Final = ("window_id", "stratum_id", "provenance")
+
 # --- Locked allocation constants (#42) ----------------------------------------
 
 #: The debug-tier budget. Not hard-wired anywhere below — it is the default of a
-#: parameter, because Phase F re-runs the same code at 200–500k (plan §F).
+#: parameter, because Phase F re-runs the same code at 500k (plan §F, #71).
 DEBUG_BUDGET: Final = 50_000
+
+#: The Phase-F scale-tier budget (#71) — the plan's upper bound, ten times the debug
+#: tier, drawn by *this* code from *these* artifacts. It is a second default, not a
+#: second sampler: #44 built budget as an argument precisely so this line is all the
+#: 10× costs.
+SCALE_BUDGET: Final = 500_000
 
 #: Coastal floor as a fraction of budget — the *frame rate* of coastline in the kept
 #: frame (40,815 / 3,052,735 = 1.34%), rounded to the value #42 committed so that
@@ -101,6 +122,19 @@ FLOOR_CLAMP_FRAC: Final = 0.01
 #: and this file *is* the determinism contract, re-loaded by Phase E1 rather than
 #: regenerated. CSV, sorted, so a re-run diffs byte-for-byte in git.
 SELECTION_PATH: Final = Path(config.SELECTION_PATH)
+
+#: Where the shipped scale-tier selection list lives (#71). Same contract as the debug
+#: tier's: committed, re-loaded rather than regenerated, and the thing two runs are
+#: compared byte-for-byte against.
+SCALE_SELECTION_PATH: Final = Path(config.SCALE_SELECTION_PATH)
+
+#: How the quota table was derived — copied verbatim into every emitted allocation
+#: table so the JSON states its own rule (the string ``d2-allocation-nh.json`` shipped).
+ALLOCATION_METHOD: Final = (
+    "neyman n_h proportional to N_h*sigma_h; largest-remainder to exact budget; "
+    "coastal floor reserved within-stratum proportional to coast_h, capped at "
+    "min(n_h, coast_h)"
+)
 
 #: Lloyd (full batch), matching the centroid fit and #43's pricing — MiniBatch is the
 #: named fallback only if a Phase-F budget ever makes Lloyd's cost bite (it does not
@@ -180,13 +214,40 @@ class Allocation:
     coast_floor: int
     floor_clamp: int
     floor_clamp_strata_below: int  # how many strata the (inert) clamp would raise
+    coast_cap_strata_binding: int  # strata whose coastal share hit min(n_h, coast_h)
+    coast_floor_rate: float  # the rate the reservation was taken at
 
     @property
     def k(self) -> int:
         return int(self.n_h.shape[0])
 
-    def rows(self) -> list[dict[str, int | float]]:
-        """One JSON-ready dict per stratum, in the shape of ``d2-allocation-nh.json``."""
+    @property
+    def headroom(self) -> np.ndarray:
+        """``N_h / n_h`` — how many kept windows each stratum holds per window it must yield.
+
+        The number that actually moves with the budget. Neyman shares are budget-invariant,
+        so a 10× budget is a 10× *shallower* pool: over the four flat strata ADR-0007 leans
+        on (2/5/7/17) the debug tier's ≥53× becomes ≥5.3× at 500k, and FSCS reaches
+        proportionally further from each sub-centroid. ADR-0007's Phase-F revisit trigger is
+        written against exactly this ratio on strata 2/17.
+
+        A stratum allocated nothing is ``inf``, not ``N_h``: an unallocated pool is
+        infinitely deep, and rounding it down to its own size would make it look like the
+        *thinnest* stratum to any consumer taking a minimum.
+        """
+        n_h = self.n_h.astype(np.float64)
+        return np.divide(
+            self.N_h.astype(np.float64), n_h, out=np.full(self.k, np.inf), where=n_h > 0
+        )
+
+    def rows(self) -> list[dict[str, int | float | None]]:
+        """One JSON-ready dict per stratum — ``d2-allocation-nh.json``'s columns plus headroom.
+
+        The extra column is additive on purpose: a reader written for the shipped 50k table
+        still finds every key it knows, and the two tiers' tables diff row-for-row.
+        ``headroom`` is ``null`` for an unallocated stratum, JSON having no infinity.
+        """
+        headroom = self.headroom
         return [
             {
                 "stratum_id": h,
@@ -196,9 +257,57 @@ class Allocation:
                 "n_h": int(self.n_h[h]),
                 "coastal": int(self.coastal[h]),
                 "base": int(self.base[h]),
+                "headroom": (
+                    round(float(headroom[h]), 2) if np.isfinite(headroom[h]) else None
+                ),
             }
             for h in range(self.k)
         ]
+
+    def binding(self) -> dict[str, Any]:
+        """Which of the allocation's two guards actually *bind* at this budget.
+
+        Both were measured inert at 50k, and #71 asks the scale tier to measure rather than
+        assume it — Neyman's shares are budget-invariant, so they *probably* stay inert, but
+        probably is not measured. Two distinct guards are reported:
+
+        - the ``max(500, 1%·budget)`` per-stratum clamp, which is checked and never applied
+          (:func:`allocate`), so "binds" means *it would have raised a stratum*;
+        - the coastal reservation's ``min(n_h, coast_h)`` cap, which **is** applied, so
+          "binds" means a coast-heavy but Neyman-poor stratum could not hold its share and
+          the remainder spilled elsewhere.
+
+        ``realized_coast_share`` against ``frame_coast_rate`` is the third thing to read,
+        with one precision: the reservation is a within-stratum *split* (#42 §4), so a
+        ``base`` pick is never coastal and the reservation **sets** the corpus's coastal
+        share rather than raising a floor under whatever the draw would otherwise produce.
+        A realized share at the frame's own coastal rate therefore says the split is doing
+        what it was specified to do — it is not evidence about the unreserved draw, which
+        only a second full draw could supply.
+        """
+        pool = int(self.N_h.sum())
+        headroom = self.headroom
+        thinnest = int(np.argmin(headroom))
+        return {
+            "budget": self.budget,
+            "floor_clamp": self.floor_clamp,
+            "floor_clamp_strata_below": self.floor_clamp_strata_below,
+            "min_n_h": int(self.n_h.min()),
+            "coast_floor": self.coast_floor,
+            "coast_floor_rate": self.coast_floor_rate,
+            "frame_coast_rate": round(int(self.coast_h.sum()) / pool, 6) if pool else 0.0,
+            "realized_coast_share": round(int(self.coastal.sum()) / self.budget, 6),
+            "coast_cap_strata_binding": self.coast_cap_strata_binding,
+            "min_headroom": (
+                round(float(headroom[thinnest]), 2)
+                if np.isfinite(headroom[thinnest])
+                else None
+            ),
+            "min_headroom_stratum": thinnest,
+            "anything_binds": bool(
+                self.floor_clamp_strata_below or self.coast_cap_strata_binding
+            ),
+        }
 
 
 def stratum_sigma(Z: np.ndarray, labels: np.ndarray, centers: np.ndarray) -> np.ndarray:
@@ -259,12 +368,18 @@ def allocate(
     floor_clamp_strata_below = int((n_h < floor_clamp).sum())
 
     coast_floor = int(round(coast_floor_rate * budget))
-    c_h = largest_remainder(
-        coast_h.astype(np.float64), coast_floor, cap=np.minimum(n_h, coast_h)
-    )
+    coast_cap = np.minimum(n_h, coast_h)
+    # The uncapped apportionment is computed only to *report* whether the cap bound —
+    # comparing the capped result against the cap itself cannot tell a stratum that was
+    # clamped from one that happens to sit exactly at its ceiling (every coast-free
+    # stratum does, at zero).
+    c_h_uncapped = largest_remainder(coast_h.astype(np.float64), coast_floor)
+    c_h = largest_remainder(coast_h.astype(np.float64), coast_floor, cap=coast_cap)
     base_h = n_h - c_h
 
     return Allocation(
+        coast_cap_strata_binding=int((c_h_uncapped > coast_cap).sum()),
+        coast_floor_rate=coast_floor_rate,
         N_h=N_h,
         sigma_h=sigma_h,
         coast_h=coast_h,
@@ -494,6 +609,83 @@ def _default_workers(k: int) -> int:
 # --- The selection ------------------------------------------------------------
 
 
+#: Inventory below which a COG's *fraction* drawn stops being informative. A COG holding
+#: three kept windows is "fully drawn" the moment the sampler takes three, which says
+#: nothing about depth; #69's F6c baseline reports its headline maximum over COGs holding
+#: at least this many, and the fully-drawn count is split at the same line.
+FRACTION_INVENTORY_FLOOR: Final = 32
+
+
+def _held_by(stems: np.ndarray, inventory: Mapping[str, int]) -> np.ndarray:
+    """The kept inventory of each drawn COG, in ``stems`` order — refusing an unknown COG."""
+    missing = [str(s) for s in stems if str(s) not in inventory]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} drawn COG(s) absent from the kept inventory, e.g. "
+            f"{missing[:3]} — the draw produced a source the kept pool does not hold"
+        )
+    return np.array([int(inventory[str(s)]) for s in stems], dtype=np.float64)
+
+
+def _inventory_fraction_summary(
+    frac: np.ndarray,
+    counts: np.ndarray,
+    held: np.ndarray,
+    *,
+    n_in_pool: int,
+    n_drawn: int,
+) -> dict[str, Any]:
+    """Summarize how deeply the draw reached into each COG — #69's ``F6c`` shape."""
+    sizeable = held >= FRACTION_INVENTORY_FLOOR
+    full = frac >= 1.0
+    return {
+        "mean": round(float(frac.mean()), 4),
+        "median": round(float(np.median(frac)), 4),
+        "p99": round(float(np.percentile(frac, 99)), 4),
+        "max": round(float(frac.max()), 4),
+        "inventory_floor": FRACTION_INVENTORY_FLOOR,
+        "max_among_sizeable_cogs": (
+            round(float(frac[sizeable].max()), 4) if sizeable.any() else None
+        ),
+        "n_cogs_at_or_over_half": int((frac >= 0.5).sum()),
+        "n_cogs_fully_drawn": int(full.sum()),
+        "n_cogs_fully_drawn_sizeable": int((full & sizeable).sum()),
+        "max_windows_from_a_fully_drawn_cog": (
+            int(counts[full].max()) if full.any() else 0
+        ),
+        "n_cogs_in_pool": n_in_pool,
+        "n_cogs_undrawn": n_in_pool - n_drawn,
+    }
+
+
+def read_selection_rows(path: Path | str) -> list[list[str]]:
+    """The rows of a persisted selection list, header validated.
+
+    Deliberately not `csv.reader`/pandas: the file this reads is the determinism contract
+    and its three columns never contain a quote, a comma or an escape, so a split is both
+    sufficient and impossible to mis-configure. The header check is the guard that matters
+    — it refuses a file of the wrong *kind* rather than silently mis-parsing one.
+    """
+    path = Path(path)
+    lines = path.read_text().splitlines()
+    header = lines[0].split(",") if lines else []
+    if header != list(SELECTION_COLUMNS):
+        raise ValueError(
+            f"{path} has header {header!r}; expected {list(SELECTION_COLUMNS)!r}"
+        )
+    return [ln.split(",") for ln in lines[1:] if ln]
+
+
+def read_window_ids(path: Path | str) -> np.ndarray:
+    """Just the ``window_id`` column of a persisted selection list.
+
+    What a cross-tier comparison needs: the other tier's ids carry no useful stratum or
+    provenance here, and pairing them with *this* tier's allocation to build a full
+    :class:`Selection` would state a relationship (#45 ruled out) that does not exist.
+    """
+    return np.array([r[0] for r in read_selection_rows(path)], dtype=object)
+
+
 @dataclass(frozen=True)
 class Selection:
     """The emitted selection list plus the allocation and per-COG report behind it.
@@ -509,6 +701,31 @@ class Selection:
     budget: int
     fingerprint: dict[str, Any]
 
+    @classmethod
+    def from_csv(
+        cls,
+        path: Path | str,
+        *,
+        allocation: Allocation,
+        fingerprint: dict[str, Any],
+    ) -> "Selection":
+        """Re-load a persisted selection list — the artifact *is* the contract (#43/#44).
+
+        Every report about a tier is then a function of the committed CSV rather than of
+        an in-memory run, so it can be regenerated at any time without paying for FSCS
+        again. The ``allocation`` is handed in because the quota table is derived from the
+        frame, not stored in the list; :func:`allocation_at` re-derives it in seconds.
+        """
+        rows = read_selection_rows(path)
+        return cls(
+            window_id=np.array([r[0] for r in rows], dtype=object),
+            stratum_id=np.array([int(r[1]) for r in rows], dtype=np.int64),
+            provenance=np.array([r[2] for r in rows], dtype=object),
+            allocation=allocation,
+            budget=allocation.budget,
+            fingerprint=dict(fingerprint),
+        )
+
     @property
     def n(self) -> int:
         return int(self.window_id.shape[0])
@@ -517,17 +734,36 @@ class Selection:
         """The source COG stem of each selected window (``window_id`` is ``stem:row:col``)."""
         return np.array([window_id_stem(w) for w in self.window_id], dtype=object)
 
-    def per_cog_distribution(self) -> dict[str, Any]:
+    def per_cog_distribution(
+        self, inventory: Mapping[str, int] | None = None
+    ) -> dict[str, Any]:
         """Realized windows-per-COG distribution — the metric #42 requires at every tier.
 
         #42 retired ``PER_TILE_WINDOW_CAP`` as inert at the debug tier (~2/COG) but binds
         the sampler to *measure* it, so Phase F can decide on evidence — not the untested
         64 — whether the denser scale tier needs a cap. Reported as the summary a cap
         threshold would be read off: counts, the tail, and the densest COGs.
+
+        Pass ``inventory`` (:func:`kept_cog_inventory`) to add the half of the picture a
+        raw count cannot give. #69 retired the cap of 64 as *unfixable* rather than merely
+        stale, because the ceiling on a COG is its own kept inventory — at most 256 windows
+        — so 44-from-a-COG means nothing until you know whether that COG held 50 or 250.
+        The fraction-of-inventory distribution is the form #69's ``F6c`` registered, and a
+        drawn COG missing from ``inventory`` raises: it would mean the draw produced a
+        source the kept pool does not contain.
         """
         stems, counts = np.unique(self.cog_stems(), return_counts=True)
+        held = _held_by(stems, inventory) if inventory is not None else None
         order = np.argsort(counts)[::-1]
-        return {
+
+        def cog_entry(i: int) -> dict[str, Any]:
+            entry: dict[str, Any] = {"stem": str(stems[i]), "windows": int(counts[i])}
+            if held is not None:
+                entry["inventory"] = int(held[i])
+                entry["fraction"] = round(float(counts[i] / held[i]), 4)
+            return entry
+
+        out: dict[str, Any] = {
             "n_windows": self.n,
             "n_cogs": int(stems.size),
             "mean_per_cog": round(float(counts.mean()), 4),
@@ -535,17 +771,24 @@ class Selection:
             "max_per_cog": int(counts.max()),
             "p99_per_cog": int(np.percentile(counts, 99)),
             "histogram": {int(v): int(c) for v, c in zip(*np.unique(counts, return_counts=True))},
-            "densest_cogs": [
-                {"stem": str(stems[i]), "windows": int(counts[i])} for i in order[:10]
-            ],
+            "densest_cogs": [cog_entry(i) for i in order[:10]],
         }
+        if held is not None:
+            frac = counts / held
+            out["fraction_of_inventory"] = _inventory_fraction_summary(
+                frac, counts, held, n_in_pool=len(inventory or {}), n_drawn=int(stems.size)
+            )
+            out["fraction_of_inventory"]["highest_fraction_cogs"] = [
+                cog_entry(i) for i in np.argsort(frac)[::-1][:10]
+            ]
+        return out
 
     def provenance_counts(self) -> dict[str, int]:
         vals, counts = np.unique(self.provenance, return_counts=True)
         return {str(v): int(c) for v, c in zip(vals, counts)}
 
-    def summary(self) -> dict[str, Any]:
-        """Everything the d4 write-up and Phase E need that is not the list itself."""
+    def summary(self, inventory: Mapping[str, int] | None = None) -> dict[str, Any]:
+        """Everything the d4/f-scale write-ups and Phase E/F need that is not the list itself."""
         return {
             "budget": self.budget,
             "n_selected": self.n,
@@ -554,7 +797,8 @@ class Selection:
             "floor_clamp": self.allocation.floor_clamp,
             "floor_clamp_strata_below": self.allocation.floor_clamp_strata_below,
             "provenance_counts": self.provenance_counts(),
-            "per_cog": self.per_cog_distribution(),
+            "per_cog": self.per_cog_distribution(inventory),
+            "binding": self.allocation.binding(),
             "allocation": self.allocation.rows(),
             "frame_fingerprint": dict(self.fingerprint),
             "determinism": (
@@ -562,6 +806,42 @@ class Selection:
                 "pinned single-threaded but not relied on for reproducibility (#43)"
             ),
         }
+
+
+def _allocate_labelled(
+    Z: np.ndarray,
+    labels: np.ndarray,
+    coastline: np.ndarray,
+    centroids: centroids_mod.Centroids,
+    budget: int,
+) -> Allocation:
+    """The quota table for an already-standardized, already-labelled frame."""
+    k = centroids.k
+    sigma = stratum_sigma(Z, labels, centroids.centers)
+    N_h = np.bincount(labels, minlength=k).astype(np.int64)
+    coast_h = np.array([int(coastline[labels == h].sum()) for h in range(k)], dtype=np.int64)
+    return allocate(N_h, sigma, coast_h, budget)
+
+
+def allocation_at(
+    frame: frame_mod.Frame,
+    centroids: centroids_mod.Centroids,
+    scaler: frame_mod.Scaler,
+    *,
+    budget: int,
+) -> Allocation:
+    """The per-stratum quota table at ``budget`` — everything :func:`select_windows` does
+    except the draw itself.
+
+    Standardize, assign, allocate: seconds, and no sub-k-means anywhere. This is the seam
+    the tier reports are built on. A report that re-ran the draw to recover its own quota
+    table would cost an hour at the scale tier and — worse — would be describing a *fresh*
+    draw rather than the committed one; pairing this with :meth:`Selection.from_csv` keeps
+    every number a function of the artifact on disk.
+    """
+    Z = np.ascontiguousarray(frame.standardized(scaler).astype(np.float32))
+    labels = centroids_mod.assign(Z, centroids)
+    return _allocate_labelled(Z, labels, frame.coastline, centroids, budget)
 
 
 def select_windows(
@@ -597,13 +877,7 @@ def select_windows(
     Z = np.ascontiguousarray(frame.standardized(scaler).astype(np.float32))
     labels = centroids_mod.assign(Z, centroids)
     k = centroids.k
-
-    sigma = stratum_sigma(Z, labels, centroids.centers)
-    N_h = np.bincount(labels, minlength=k).astype(np.int64)
-    coast_h = np.array(
-        [int(frame.coastline[labels == h].sum()) for h in range(k)], dtype=np.int64
-    )
-    alloc = allocate(N_h, sigma, coast_h, budget)
+    alloc = _allocate_labelled(Z, labels, frame.coastline, centroids, budget)
 
     jobs = []
     for h in range(k):
@@ -638,21 +912,81 @@ def select_windows(
 # --- Reading the geo-cell axis off the catalog --------------------------------
 
 
+def _kept_column(catalog_dir: Path | str, column: str) -> np.ndarray:
+    """One catalog column, narrowed to the kept rows and row-aligned with the kept frame.
+
+    The ``keep`` mask is applied exactly as :func:`frame.kept_frame` applies it, which is
+    what makes every column read through here line up row-for-row with the frame.
+    """
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(
+        Path(catalog_dir) / catalog.PARTS_DIR, columns=["keep", column]
+    )
+    keep = table.column("keep").to_numpy(zero_copy_only=False).astype(bool)
+    return table.column(column).to_numpy(zero_copy_only=False)[np.flatnonzero(keep)]
+
+
 def kept_geocell(catalog_dir: Path | str = Path("data/catalog_gated")) -> np.ndarray:
     """The kept frame's ``geocell`` column, row-aligned with :func:`frame.kept_frame`.
 
     Read straight off the gated catalog rather than re-derived from ``window_id``: the
     catalog already owns the one definition of a window's geo-cell (``dataset.geometry``
-    via ``dataset.catalog``), and re-parsing it here would be a second one that could
-    drift. The ``keep`` mask is applied identically to :func:`frame.kept_frame`, so the
-    two line up row-for-row.
+    via ``dataset.catalog``), and re-parsing it here would be a second one that could drift.
     """
-    import pyarrow.parquet as pq
+    return _kept_column(catalog_dir, "geocell")
 
-    catalog_dir = Path(catalog_dir)
-    table = pq.read_table(catalog_dir / catalog.PARTS_DIR, columns=["keep", "geocell"])
-    keep = table.column("keep").to_numpy(zero_copy_only=False).astype(bool)
-    return table.column("geocell").to_numpy(zero_copy_only=False)[np.flatnonzero(keep)]
+
+def kept_cog_inventory(
+    catalog_dir: Path | str = Path("data/catalog_gated"),
+) -> dict[str, int]:
+    """How many kept windows each source COG holds — the denominator a per-COG count needs.
+
+    Budget-invariant: it is a property of the catalog and the Phase-C gates, so the same
+    dict serves every tier. #69's ``F6b`` bounds each COG's realized count by it, and
+    ``F6c`` reports the realized count as a fraction of it — which is the only way to read
+    "44 windows from one COG" as either alarming or unremarkable.
+    """
+    vals, counts = np.unique(_kept_column(catalog_dir, "stem"), return_counts=True)
+    return {str(v): int(c) for v, c in zip(vals, counts)}
+
+
+# --- Overlap between tiers (#45: incidental, reported, never engineered) -------
+
+
+def overlap_report(
+    window_id: Iterable[str],
+    other: Iterable[str],
+    *,
+    n_pool: int,
+    label: str,
+) -> dict[str, Any]:
+    """How much this selection shares with another tier's — a *finding*, not a target.
+
+    #45 ruled the scale draw **independent**: the debug tier does not nest inside it and no
+    hierarchical rule exists. Whatever the two lists share is therefore incidental, and
+    reporting it carries no obligation to grow or shrink it. It is still worth knowing,
+    because it is not a coin flip — FSCS is deterministic and coverage-seeking, so both
+    tiers keep resolving to the same nearest-the-sub-centroid representatives.
+    ``expected_if_uniform`` (``n_this·n_other/n_pool``, the overlap two *uniform* draws
+    from the kept pool would average) makes that readable: a lift far above 1.0 is the
+    sampler agreeing with itself, not a nesting rule leaking in.
+    """
+    this = {str(w) for w in window_id}
+    that = {str(w) for w in other}
+    shared = this & that
+    expected = len(this) * len(that) / n_pool if n_pool > 0 else 0.0
+    return {
+        "label": label,
+        "n_this": len(this),
+        "n_other": len(that),
+        "n_pool": int(n_pool),
+        "n_overlap": len(shared),
+        "share_of_this": round(len(shared) / len(this), 6) if this else 0.0,
+        "share_of_other": round(len(shared) / len(that), 6) if that else 0.0,
+        "expected_if_uniform": round(expected, 4),
+        "lift_over_uniform": round(len(shared) / expected, 3) if expected > 0 else 0.0,
+    }
 
 
 def run(
@@ -686,7 +1020,7 @@ def write_selection(selection: Selection, path: Path | str = SELECTION_PATH) -> 
     """Write the selection list as sorted CSV — the committed determinism contract."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["window_id,stratum_id,provenance"]
+    lines = [",".join(SELECTION_COLUMNS)]
     lines += [
         f"{w},{s},{p}"
         for w, s, p in zip(selection.window_id, selection.stratum_id, selection.provenance)
@@ -695,11 +1029,42 @@ def write_selection(selection: Selection, path: Path | str = SELECTION_PATH) -> 
     return path
 
 
-def write_summary(selection: Selection, path: Path | str) -> Path:
+def write_summary(
+    selection: Selection,
+    path: Path | str,
+    *,
+    inventory: Mapping[str, int] | None = None,
+) -> Path:
     """Write the JSON summary the d4 write-up reads (provenance + per-COG + allocation)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(selection.summary(), indent=2) + "\n")
+    path.write_text(json.dumps(selection.summary(inventory), indent=2) + "\n")
+    return path
+
+
+def write_allocation_table(
+    allocation: Allocation, path: Path | str, *, fingerprint: Mapping[str, Any]
+) -> Path:
+    """Write the per-stratum quota table in the shape of ``d2-allocation-nh.json``.
+
+    One shape per tier, so the 50k and 500k tables diff column-for-column rather than
+    needing a reader that knows two formats. ``fingerprint`` rides along because the table
+    is only meaningful against the strata it was allocated over — the same
+    refusal-on-drift discipline #40/#41 built into the artifacts themselves.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "k": allocation.k,
+        "budget": allocation.budget,
+        "coast_floor": allocation.coast_floor,
+        "floor_clamp": allocation.floor_clamp,
+        "floor_clamp_strata_below": allocation.floor_clamp_strata_below,
+        "method": ALLOCATION_METHOD,
+        "centroids_fingerprint": dict(fingerprint),
+        "rows": allocation.rows(),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
     return path
 
 
@@ -707,18 +1072,25 @@ def write_summary(selection: Selection, path: Path | str) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m dataset.select`` — draw the debug tier and persist the list.
+    """``python -m dataset.select`` — draw a tier and persist the list.
 
     Reads the committed scaler and centroids (never re-fits — that is what keeps Phase F
     comparable), assigns, allocates at ``--budget``, runs FSCS across ``--workers``
     processes, and writes the sorted CSV plus a summary JSON. It touches no COG.
+
+    Both shipped tiers are this one command at two budgets — the debug tier (#44) at
+    ``--budget 50000`` and the scale tier (#71) at ``--budget 500000 --out
+    artifacts/phase_f/selection_scale_500k.csv``. That was the design's claim and #71 is
+    where it is spent, so ``--out`` is deliberately *not* derived from ``--budget``: the
+    two lists are separate committed contracts and neither may silently overwrite the other.
     """
     import argparse
 
     p = argparse.ArgumentParser(
         prog="python -m dataset.select",
-        description="Draw the Phase-D selection list from the committed artifacts "
-        f"(budget-parameterized; debug tier {DEBUG_BUDGET:,}, issue #44).",
+        description="Draw a selection list from the committed artifacts "
+        f"(budget-parameterized; debug tier {DEBUG_BUDGET:,} #44, "
+        f"scale tier {SCALE_BUDGET:,} #71).",
     )
     p.add_argument("--catalog-dir", type=Path, default=Path("data/catalog_gated"))
     p.add_argument("--budget", type=int, default=DEBUG_BUDGET)

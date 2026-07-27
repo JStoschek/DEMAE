@@ -78,6 +78,19 @@ GitHub issue #1.
   path. Phase E consumes the file rather than regenerating it, because multithreaded Lloyd is
   not reproducible even at a fixed seed. Distinct from the **manifest**, which indexes what
   actually survived materialization ([ADR-0005 §5](docs/adr/0005-sampling-design.md#5-determinism--the-persisted-artifact-is-the-contract-never-the-seed)).
+  Two are committed and **neither contains the other** — the debug tier's
+  `artifacts/phase_d/selection_debug_50k.csv` and the scale tier's
+  `artifacts/phase_f/selection_scale_500k.csv` are *independent draws* at two budgets
+  ([#45](https://github.com/JStoschek/DEMAE/issues/45)); their 30,998-window overlap is
+  incidental, not a nesting rule ([`f-scale-draw.md`](docs/research/f-scale-draw.md)).
+- **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
+  one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
+  budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the
+  debug tier and **4.39–7.90×** at the scale tier; over the four flat strata (2/5/7/17)
+  [ADR-0007](docs/adr/0007-accept-degenerate-flatness-gate-flat-strata.md) leg 3 leans on,
+  its **≥53×** becomes **≥5.35×**. Attrition *rates* reproduce across tiers by
+  construction; headroom does not, which is what that ADR's Phase-F revisit trigger on
+  strata 2/17 is written against.
 - **Neyman allocation** — the rule splitting a tier's budget across strata, `n_h ∝ N_h·σ_h`
   (stratum size × mean distance to its centroid), apportioned to the exact budget by largest
   remainder. It deliberately over-samples rare, varied terrain — a **1.8× per-row premium** —
