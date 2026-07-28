@@ -165,11 +165,23 @@ into Phase 1 as *fired*. The ADR has been amended to say so.
 [ADR-0006](../adr/0006-accept-edm-flm-hollowing-stratum19.md) is untouched — nothing here
 re-tested it.
 
-**What to do about it is not decided here, and deliberately so.** Sizing the fix belongs to
-a fresh effort with its own evidence; the attribution above is its starting point, and it
-says the flatness screen is not the binding constraint. The knob that is — how deeply the
-sampler reaches within a stratum — had no entry in the project's knob table until this phase
-added one.
+**The shortfall was reviewed and accepted; the corpus ships as built.** That decision is
+[ADR-0008](../adr/0008-accept-f3-drainage-shortfall-strata-2-17.md), and it rests on four
+things: the gap is **1,737 tiles, 0.347% of the corpus**; across the four flat strata measured,
+`r_h` ranges 0.189–0.301 around the 0.25 target and stratum **5 sits further from it than
+either stratum that fired** — so repairing 2 and 17 would leave the worst one untouched behind
+a *passing* gate; the drainage target is an unverified proxy (§3.1); and no evidence exists
+that the gap reaches a trained model.
+
+**The bar was not moved.** It stands at 0.25 and this corpus misses it. What was decided is
+whether to act on a true finding, not whether the finding is true — and the answer was no.
+ADR-0008 carries a revisit trigger tied to downstream evidence: if a Phase-2 probe shows
+channel networks reconstructed measurably worse in low-relief strata than elsewhere, it
+reopens. The fix does not get more expensive with time — roughly 174 MB, against 21,415 and
+14,103 eligible drainage tiles still sitting untouched in the pool.
+
+The knob that *is* binding — how deeply the sampler reaches within a stratum — had no entry in
+the project's knob table until this phase added one. It stays declared and unsized.
 
 ---
 

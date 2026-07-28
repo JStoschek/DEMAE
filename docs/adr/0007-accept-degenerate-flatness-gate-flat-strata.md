@@ -1,7 +1,7 @@
 # ADR 0007 — Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17
 
-- **Status:** Accepted — **Phase-F revisit trigger fired; disposition open** (see [Amendments](#amendments))
-- **Amended by:** Gate F, 2026-07-28 — corpus card ticket ([#75](https://github.com/JStoschek/DEMAE/issues/75)), on the verdict returned by [#74](https://github.com/JStoschek/DEMAE/issues/74)
+- **Status:** Accepted — **Phase-F revisit trigger fired, reviewed, and dispositioned** by [ADR-0008](0008-accept-f3-drainage-shortfall-strata-2-17.md) (see [Amendments](#amendments))
+- **Amended by:** Gate F, 2026-07-28 — corpus card ticket ([#75](https://github.com/JStoschek/DEMAE/issues/75)), on the verdict returned by [#74](https://github.com/JStoschek/DEMAE/issues/74); disposition closed the same day by [ADR-0008](0008-accept-f3-drainage-shortfall-strata-2-17.md)
 - **Date:** 2026-07-24
 - **Context ticket:** "Decide: loosen the degenerate flatness gate for the flat strata, or accept the concentration?" ([issue #66](https://github.com/JStoschek/DEMAE/issues/66)) — the culminating decision of the **flatness-gate wayfinder map** ([#62](https://github.com/JStoschek/DEMAE/issues/62))
 - **Seeded by:** Gate E's **FAIL** ([#54](https://github.com/JStoschek/DEMAE/issues/54)) on the E2.5 attrition-by-stratum criterion — specifically the `degenerate` (flatness, `land_std < 3 m`) firing on the four flat strata **2, 5, 7, 17** (within-stratum drop 30.1% / 51.9% / 31.7% / 29.7% = 3.04–5.32× the 9.8% corpus rate), the confounded second half of the same FAIL whose `edited` × 19 half is settled by [ADR-0006](0006-accept-edm-flm-hollowing-stratum19.md)
@@ -261,6 +261,16 @@ map's last word rather than its restart. Nothing here loosens, tightens or re-sc
 evidence a fresh map starts from is
 [`f-gate-verdict.md` §5.3](../research/f-gate-verdict.md), which carries the attribution
 above — **the flatness knob is the wrong one to size first.**
+
+**Dispositioned later the same day by [ADR-0008](0008-accept-f3-drainage-shortfall-strata-2-17.md):
+the shortfall is accepted and nothing is redrawn.** The decision rests on magnitude (1,737
+tiles, 0.347% of the corpus), on the pattern across all four measured strata — stratum 5 sits
+*further* from the target than either stratum that fired, so repairing 2 and 17 would leave
+the worst one untouched behind a passing gate — on the drainage proxy being unverified, and on
+the downstream consequence being unmeasured. **This ADR's own accept is unaffected either
+way**: the flatness screen stands at 3.0 m, and `F3`'s exhaustion figures confirm it was never
+the binding constraint. ADR-0008 carries a downstream revisit trigger in place of another
+re-measurement one.
 
 ## Alternatives considered
 
