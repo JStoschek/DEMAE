@@ -102,6 +102,20 @@ GitHub issue #1.
   descriptor space instead of sampling it randomly. Ties resolve by a **10° geo-cell
   round-robin that falls through** to the next-nearest window — without the fall-through the
   quota under-fills, because two sub-centroids in one dense pocket resolve to the same row.
+- **Realized share** (`r_h`) and **exhaustion** (`e_h`) — the pair that says *why* a terrain
+  family came out thin, and they must be read together. `r_h` is the share of a stratum's
+  **shipped** tiles that belong to the family; `e_h` is the share of the **surviving pool** of
+  that family the draw actually consumed. `r_h` near the kept-pool proportional share means the
+  sampler drew proportionally and declined an available tail — a **sampler** limit. `r_h` near
+  `e_h`'s ceiling means the survivors ran out — a **gate** limit. The distinction is not
+  cosmetic: it decides which knob a Finding sends to a fresh map, and at Gate F it inverted the
+  obvious answer — `F3` fired on the flatness gate's revisit trigger, but `e_h` of 0.185 / 0.213
+  showed the gate was **not** the binding constraint
+  ([#74](https://github.com/JStoschek/DEMAE/issues/74),
+  [`f-gate-verdict.md`](docs/research/f-gate-verdict.md)). Note they are not independent:
+  `r_h = e_h · tail_h / n_h`, which is why a bar conjoining "deficient **and** exhausted" is
+  unsatisfiable once `n_h` approaches `tail_h`, and why the decomposition is *published*
+  rather than gated.
 - **Per-tile standardization** — the default normalization: subtract the tile
   mean, divide by the tile std, so the model learns *terrain shape* invariant to
   absolute altitude. Mean+std are stored so reconstructions can be inverted.

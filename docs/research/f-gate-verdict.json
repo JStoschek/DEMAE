@@ -1,0 +1,101 @@
+{
+  "artifact": "f-gate-verdict",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/74",
+  "map": "https://github.com/JStoschek/DEMAE/issues/67",
+  "what_this_is": "The two measurements the Gate F review made to adjudicate calls #73 handed up. It does not re-run the bar; #73's report stands as committed and its criterion outcomes are unchanged. The verdict itself is prose, in f-gate-verdict.md.",
+  "adjudicated": {
+    "F8_granularity": {
+      "question": "F8's registered tolerance is `exact`. Can a read-back satisfy it, or is the 4-ULP miss an artifact of a block size the bar never registered?",
+      "n_shards": 34,
+      "n_tiles": 499934,
+      "elapsed_s": 277.5,
+      "recorded": {
+        "global_mean": 955.6728901295354,
+        "global_std": 1012.1607171908565
+      },
+      "builder_accumulators": {
+        "land_sum": 23917383275742.0,
+        "land_sqsum": 4.849632882968011e+16,
+        "land_count": 25026746623
+      },
+      "by_granularity": {
+        "block_1": {
+          "role": "the builder's own order",
+          "land_sum": 23917383275742.0,
+          "land_sqsum": 4.849632882968011e+16,
+          "land_count": 25026746623,
+          "global_mean": 955.6728901295354,
+          "global_std": 1012.1607171908565,
+          "mean_ulps_from_recorded": 0,
+          "std_ulps_from_recorded": 0,
+          "sum_bit_identical_to_builder": true,
+          "count_identical_to_builder": true,
+          "sqsum_ulps_from_builder": 0,
+          "F8_fires": false
+        },
+        "block_512": {
+          "role": "#73's order \u2014 the control",
+          "land_sum": 23917383275742.0,
+          "land_sqsum": 4.8496328829680136e+16,
+          "land_count": 25026746623,
+          "global_mean": 955.6728901295354,
+          "global_std": 1012.160717190857,
+          "mean_ulps_from_recorded": 0,
+          "std_ulps_from_recorded": 4,
+          "sum_bit_identical_to_builder": true,
+          "count_identical_to_builder": true,
+          "sqsum_ulps_from_builder": 3,
+          "F8_fires": true
+        }
+      },
+      "answer": "satisfiable \u2014 the corpus reproduces its recorded statistic bit-identically at the builder's granularity; the control reproduces #73's 4-ULP miss, so the block size is the whole difference"
+    },
+    "F7_drops_by_cause": {
+      "question": "F7 missed its pre-registered expectation of ~20 drops at 66. Is the flatness mechanism really as wide as the pooled table suggests?",
+      "degenerate_threshold_m": 3.0,
+      "n_dropped": 66,
+      "status_composition": {
+        "degenerate": 62,
+        "zero_fill": 4
+      },
+      "pooled_max_land_std": 6.747008699960763,
+      "by_status": {
+        "degenerate": {
+          "n": 62,
+          "land_std_min": 3.0010074040785013,
+          "land_std_median": 3.068773232255918,
+          "land_std_max": 3.4598762356594612,
+          "below_threshold": 0,
+          "within_m_of_threshold": {
+            "0.001": 0,
+            "0.005": 4,
+            "0.01": 7,
+            "0.05": 24,
+            "0.1": 42,
+            "0.5": 62,
+            "1.0": 62
+          }
+        },
+        "zero_fill": {
+          "n": 4,
+          "land_std_min": 3.581964091885685,
+          "land_std_median": 4.4582796179721615,
+          "land_std_max": 6.747008699960763,
+          "below_threshold": 0,
+          "within_m_of_threshold": {
+            "0.001": 0,
+            "0.005": 0,
+            "0.01": 0,
+            "0.05": 0,
+            "0.1": 0,
+            "0.5": 0,
+            "1.0": 1
+          }
+        }
+      },
+      "answer": "no \u2014 the pooled tail is `zero_fill`, a different mechanism on water-affected windows. The flatness drops are bounded far tighter, consistent with an ordinary recompute disagreement sitting across a threshold rather than with the catalog and the builder disagreeing about the terrain."
+    }
+  },
+  "verdict": "FAIL",
+  "verdict_basis": "No Defect open (F1b's null is false by construction on a terrain-threshold attrition; F8 reproduces exactly at the builder's granularity). One Finding fired: F3. The pre-registered roll-up gives no partial credit."
+}

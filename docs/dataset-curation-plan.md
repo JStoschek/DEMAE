@@ -210,6 +210,29 @@ distribution, high-latitude pixel anisotropy policy.
 - **Anisotropy metric**: deferred with an explicit trigger — revisit if downstream tasks
   involve oriented fabrics (dunes, drumlins) `[no verified evidence at 6.7 km]`.
 
+> **Phase F ran, and Gate F returned FAIL** — map [#67](https://github.com/JStoschek/DEMAE/issues/67),
+> verdict [#74](https://github.com/JStoschek/DEMAE/issues/74), recorded in
+> [`f-gate-verdict.md`](research/f-gate-verdict.md). What this section got right and wrong:
+>
+> - **Budget: 500k, the upper bound.** Drawn, materialized (47 GB, 499,934 tiles) and
+>   validated against a bar pre-registered before the corpus existed.
+> - **"Re-run D with a bigger budget" held literally** — the tier really was a `--budget`
+>   flag against the same persisted centroids and scaler ([#71](https://github.com/JStoschek/DEMAE/issues/71)).
+> - **The re-clustering knob is retired structurally inert and kept declared.** `fit_rows`
+>   equals today's kept frame, so a refit runs on identical input: it cannot find strata
+>   the committed fit missed, while guaranteeing the loss of cross-tier comparability.
+> - **The corpus is faithfully built and the design is not.** Every build-fidelity criterion
+>   passes, including the first in this project to read a pixel (`F1d`). `F3` — ADR-0007's
+>   drainage revisit trigger — **fired**: `r_2` = 0.2097, `r_17` = 0.2065 against 0.25.
+>   **ADR-0007's "accept-for-now" is therefore not confirmed at scale.**
+> - **The binding constraint is the sampler, not the gate.** Exhaustion is only 0.185 / 0.213
+>   — the surviving drainage tail could have covered the shortfall 23.0× / 17.5× over. The
+>   knob that needs sizing is **within-stratum FSCS coverage depth**, and §9 below had no row
+>   for it.
+> - **The three deferred items above were deliberately not built.** Each one's promotion
+>   trigger needs evidence that cannot exist until pretraining runs. They stand as recorded
+>   deferrals with their triggers intact; `split` remains declared-and-null.
+
 ---
 
 ## 9. Knob table (what's amendable, and what would change it)
@@ -222,7 +245,8 @@ distribution, high-latitude pixel anisotropy policy.
 | allocation | Neyman + floor + boosts | Neyman verified; floor/boost sizes project | validation report imbalance |
 | WBM water cap | 0.30 drop / 0.05 flag | none published — project | A1 prevalence + attrition table |
 | EDM/FLM cap | 0.25 drop | none published — project | same |
-| degenerate flatness screen (`land_std` cap) | 3.0 m global; no per-stratum override | ADR-0002 §2 (near-constant tiles carry no MAE-learnable signal); none published — project | expected-ratio model shows excess beyond structure **and** characterization shows informative loss (ran: ADR-0007, both negative → kept 3.0 m) |
+| degenerate flatness screen (`land_std` cap) | 3.0 m global; no per-stratum override | ADR-0002 §2 (near-constant tiles carry no MAE-learnable signal); none published — project | expected-ratio model shows excess beyond structure **and** characterization shows informative loss (ran: ADR-0007, both negative → kept 3.0 m). **Gate F fired ADR-0007's revisit trigger** ([#74](https://github.com/JStoschek/DEMAE/issues/74)) — but see the FSCS row: exhaustion measured 0.185 / 0.213, so the gate is **not** the binding constraint |
+| **within-stratum FSCS coverage depth** | **undeclared until now** — FSCS draws coverage-balanced in the standardized 6-metric space, with no parameter governing how deep it reaches into a sparse region | **`F3` at 500k** ([#74](https://github.com/JStoschek/DEMAE/issues/74)): `r_h` came in at 1.20× / 1.21× the kept-pool proportional share where 1.44× / 1.47× was needed, leaving 21,415 / 14,103 surviving drainage tiles untouched | added **because `F3` fired and the payload could not name it** — the [#54](https://github.com/JStoschek/DEMAE/issues/54) "knob table is incomplete" gap, repeated. Sizing it is the fresh map's first task; a Finding names the knob, never the new value |
 | scoring source | ×8 overview | calibration A3 | any metric ρ < 0.9 → full-res in-region pass |
 | dedup | grid-guaranteed zero overlap | SSL4EO precedent exceeded | jittered/overlapping windows introduced |
 | debug budget | 50k | plateau evidence: ample | — |

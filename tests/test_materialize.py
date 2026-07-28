@@ -18,7 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from dataset import catalog as catalog_mod
-from dataset import config, manifest, materialize, shards
+from dataset import config, manifest, materialize, normalize, shards
 from dataset.tiling import SyntheticCogReader
 
 # Four 672x672 COGs — a 3x3 window grid each, so a whole "corpus" is 36 windows.
@@ -330,6 +330,55 @@ def test_global_stats_are_the_corpus_wide_land_mean_and_std(build):
     allland = np.concatenate(land)
     assert result.global_mean == pytest.approx(allland.mean(), rel=1e-9)
     assert result.global_std == pytest.approx(allland.std(), rel=1e-6)
+
+
+def test_global_stats_reproduce_bit_identically_at_the_builders_granularity(build):
+    """Gate F's ``F8`` registers the tolerance **exact**, and this is what makes it satisfiable.
+
+    The test above allows ``rel=1e-6`` because it re-derives the statistic its own way. ``F8``
+    does not get that latitude: it compares two float64s with ``!=``. #74 found the criterion
+    is satisfied only when the read-back accumulates at the granularity the builder used —
+    one tile at a time, in shard order, which is the order
+    :func:`dataset.materialize.run`'s loop produces because it folds each tile's moments in
+    beside the ``writer.add`` that appends it.
+
+    #73's report read the shards back in 512-tile blocks and reported ``global_std`` 4 ULP
+    out, which fired ``F8`` as a Defect on a corpus that was correct. So this pins the
+    guarantee that made that a false alarm rather than a finding: **replay the builder's
+    order and the numbers are bit-identical, not merely close.**
+    """
+    result = _run(build)
+    land_sum = land_sqsum = 0.0
+    land_count = 0
+    for row in sorted(_manifest(build.out_dir), key=lambda r: (r["shard_id"], r["row_index"])):
+        shard = np.load(
+            shards.shard_path(build.out_dir / "shards", row["shard_id"]), mmap_mode="r"
+        )
+        s, q, c = normalize.land_moments(np.asarray(shard[row["row_index"]]))
+        land_sum += s
+        land_sqsum += q
+        land_count += c
+    mean, std = materialize.global_stats(land_sum, land_sqsum, land_count)
+    assert mean == result.global_mean
+    assert std == result.global_std
+
+
+def test_global_stats_resolve_a_three_ulp_difference_in_the_accumulator(build):
+    """Why the granularity above is load-bearing rather than a detail.
+
+    A synthetic fixture cannot reach the regime where summation order is observable: it
+    shows up once the sum of squares passes float64's exact-integer range (~9.0e15), and the
+    scale corpus sits at 4.85e16 where the shipped corpus's two passes landed 3 ULP apart.
+    What *is* testable anywhere is the sensitivity that turns that into a fired criterion —
+    :func:`~dataset.materialize.global_stats` does not absorb a last-place difference in its
+    input, it propagates one. The numbers are the ones #74 measured.
+    """
+    count = 25_026_746_623
+    total = 23_917_383_275_742.0
+    a = materialize.global_stats(total, 4.849632882968011e16, count)
+    b = materialize.global_stats(total, 4.8496328829680136e16, count)
+    assert a[0] == b[0]  # the mean never depended on the sum of squares
+    assert a[1] != b[1]  # the std does, and `exact` is decided here
 
 
 def test_loader_reads_the_built_corpus(build):
