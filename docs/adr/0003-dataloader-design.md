@@ -157,6 +157,13 @@ So under `global`, a tile's *absolute altitude* carries roughly **42×** the var
 *terrain shape*. Under a pixel-MSE MAE objective the loss is dominated by predicting the tile's mean
 elevation, and landform structure — the thing DEMAE exists to learn — is a small residual on top.
 
+> **Re-measured on the shipped 500 k corpus (2026-07-28, [#75](https://github.com/JStoschek/DEMAE/issues/75)).**
+> The table above is the **debug tier's**. Against the scale tier's own `μ = 955.67`,
+> `σ = 1012.16`: median within-tile relief **24.2 m → 0.024** normalized, **82.0%** of tiles
+> under 0.10, ratio **41.6×**. The characterization reproduces at scale, and the shipped
+> figures — not these — are what
+> [`f-honesty-notes.md`](../research/f-honesty-notes.md) §4.8 quotes to downstream users.
+
 This is a legitimate ablation arm, not a defect: `per_tile` deliberately discards absolute altitude
 and `global` deliberately keeps it, and the plan's expectation is already that per-tile wins. It is
 recorded here so that **Phase 1 does not read a normalized tile with `std ≈ 0.02` as a loader

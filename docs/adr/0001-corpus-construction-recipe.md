@@ -155,6 +155,10 @@ bounds** for inverting reconstructions.
 - **Honesty note for the model card:** the corpus has coverage gaps over a few withheld
   countries (absent prefixes) and a deliberate rugged-oversampled, terrain-diverse (not
   geographically uniform) distribution.
+  *(Written up 2026-07-28 against the shipped 500 k corpus —
+  [`f-honesty-notes.md`](../research/f-honesty-notes.md) §2, §4.4, §4.7. The withheld-country
+  gap is recorded there as **unmeasurable from this side**, not merely unmeasured: an absent
+  prefix is indistinguishable from ocean.)*
 
 ## Amendments
 

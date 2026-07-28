@@ -129,6 +129,15 @@ GitHub issue #1.
   against different constants — and the mode puts roughly **42×** more variance in between-tile
   altitude than in within-tile relief, so a normalized tile with `std ≈ 0.02` is correct
   behaviour, not a loader bug ([ADR-0003 Amendment 1](docs/adr/0003-dataloader-design.md#amendments)).
+- **Corpus card** — the project's one artifact written for a reader **outside** it:
+  [`f-honesty-notes.md`](docs/research/f-honesty-notes.md), the plan's E3 honesty notes
+  recorded against the shipped 500 k tier. Not a ticket report — it is organized by *what a
+  consumer could get wrong* rather than by what Phase F measured, and a Phase-4 model card is
+  meant to lift from it directly. Its numbers are **derived, never typed**: the driver
+  re-computes them from committed artifacts into `f-honesty-notes.json` and the prose quotes
+  that, because a stale number in a card is one no downstream reader can catch. Caveats with
+  no measurable size (the withheld-country gap) are pinned as explicit nulls with a stated
+  reason, since an absent entry and a forgotten one look identical.
 - **Manifest** — the per-tile index: one row per tile **actually on disk**, holding the
   storage join (`shard_id`, `row_index`), the per-tile land `mean`/`std`, the geography,
   the `stratum_id` and `provenance` copied from the selection list, and the frozen metric

@@ -104,6 +104,16 @@ trade worth making.
 starved; and the one principled loosening recovers 6% at the cost of a full re-run. The
 gate's high-alpine bite is **correct behaviour**, not a defect to repair.
 
+> **Recorded for downstream users (2026-07-28).** This accept is summarized for corpus
+> consumers in [`f-honesty-notes.md`](../research/f-honesty-notes.md) §4.2 — including the
+> part that is a real cost: the alpine terrain this gate removes is the terrain that was
+> hardest to measure, so what is missing is not a random sample of mountains.
+>
+> **This ADR is otherwise untouched by Phase F.** Nothing at 500 k re-tested stratum 19's
+> hollowing, so its accept stands exactly as decided — unlike
+> [ADR-0007](0007-accept-degenerate-flatness-gate-flat-strata.md), whose own revisit trigger
+> fired at Gate F.
+
 ## Consequences
 
 - **The gate is unchanged and no pipeline compute is spent.** `edited_max = 0.25` and the

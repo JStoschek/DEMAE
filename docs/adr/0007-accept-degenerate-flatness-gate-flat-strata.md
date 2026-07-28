@@ -1,6 +1,7 @@
 # ADR 0007 — Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17
 
-- **Status:** Accepted
+- **Status:** Accepted — **Phase-F revisit trigger fired; disposition open** (see [Amendments](#amendments))
+- **Amended by:** Gate F, 2026-07-28 — corpus card ticket ([#75](https://github.com/JStoschek/DEMAE/issues/75)), on the verdict returned by [#74](https://github.com/JStoschek/DEMAE/issues/74)
 - **Date:** 2026-07-24
 - **Context ticket:** "Decide: loosen the degenerate flatness gate for the flat strata, or accept the concentration?" ([issue #66](https://github.com/JStoschek/DEMAE/issues/66)) — the culminating decision of the **flatness-gate wayfinder map** ([#62](https://github.com/JStoschek/DEMAE/issues/62))
 - **Seeded by:** Gate E's **FAIL** ([#54](https://github.com/JStoschek/DEMAE/issues/54)) on the E2.5 attrition-by-stratum criterion — specifically the `degenerate` (flatness, `land_std < 3 m`) firing on the four flat strata **2, 5, 7, 17** (within-stratum drop 30.1% / 51.9% / 31.7% / 29.7% = 3.04–5.32× the 9.8% corpus rate), the confounded second half of the same FAIL whose `edited` × 19 half is settled by [ADR-0006](0006-accept-edm-flm-hollowing-stratum19.md)
@@ -192,6 +193,9 @@ the #54 verdict warned in advance it "may well be no-change."
   against its own catalog and re-registered bar"*) and (ii) the actually-selected corpus can
   be checked for drainage representation in strata 2/17. Accept here means "sub-threshold
   and unstarved at debug scale — re-verify at scale," not "fine forever."
+  *(Trigger fired 2026-07-28 — [Amendment 1](#amendment-1-2026-07-28--the-phase-f-revisit-trigger-fired):
+  Gate F's `F3` returned `r_2` = 0.2097 / `r_17` = 0.2065 against 0.25. The re-test this
+  bullet demanded has run and did not clear.)*
 - **The MAE trains on kept flat tiles that retain drainage structure.** Only near-constant
   surfaces (`land_std < 3 m`) are excluded, per ADR-0002 §2; the dissected low-relief tiles
   that survive the cap in strata 2/17 remain in the training pool. This is the intended
@@ -214,6 +218,49 @@ the #54 verdict warned in advance it "may well be no-change."
   `degenerate_land_std_m = 3.0` as the *committed baseline* are fixed inputs; this decision
   is about whether the gate's *design* should change going forward, not whether Gate E scored
   it correctly.
+
+## Amendments
+
+### Amendment 1 (2026-07-28) — the Phase-F revisit trigger fired
+
+**Source:** Gate F's verdict ([#74](https://github.com/JStoschek/DEMAE/issues/74)), recorded
+by the corpus-card ticket ([#75](https://github.com/JStoschek/DEMAE/issues/75)) on the
+[Phase-F map](https://github.com/JStoschek/DEMAE/issues/67).
+**Supersedes:** nothing. No decision text is changed and no threshold moves. This records
+that a condition **this ADR itself attached** to its accept has now been tested and not met.
+
+**What fired.** The Consequences section flagged the 2/17 drainage loss for re-test at the
+full-scale tier, in as many words: *"sub-threshold and unstarved at debug scale — re-verify
+at scale," not "fine forever."* Gate F pre-registered that re-test as `F3` before the 500 k
+corpus existed ([`f-gate-bar.md`](../research/f-gate-bar.md)) and executed it blind
+([`f-validation-report.md`](../research/f-validation-report.md)). It **fired as a Finding**,
+and it is the only gating criterion that survived review — Gate F's verdict is **FAIL** on
+this and nothing else.
+
+| stratum | realized drainage share `r_h` | bar | exhaustion `e_h` |
+|---|---|---|---|
+| 2 | **0.2097** | 0.25 | 0.185 |
+| 17 | **0.2065** | 0.25 | 0.213 |
+
+**The accept is therefore not confirmed at scale.** Its trigger follows the corpus into
+Phase 1 as *fired*, and the shipped corpus card
+([`f-honesty-notes.md`](../research/f-honesty-notes.md) §3.1) states this to downstream users.
+
+**What the measurement says about the knob — and why this ADR does not turn it.** The
+obvious reading is that this ADR's flatness screen depleted the drainage pool. The
+exhaustion figures refute it: the draw took only **18.5%** and **21.3%** of the *surviving*
+drainage tail, leaving enough untouched to cover the shortfall **23.0×** and **17.5×** over.
+The binding constraint is **sampler reach within a stratum**, not the screen — a knob that
+had no row in the plan's knob table until Phase F added one.
+
+**Disposition belongs to a fresh effort, not to this amendment.** The Phase-F map's
+destination made acting on a fired criterion out of scope by construction, and the
+[#54](https://github.com/JStoschek/DEMAE/issues/54) precedent is that a gate's verdict is a
+map's last word rather than its restart. Nothing here loosens, tightens or re-scopes the
+`degenerate` gate; what is recorded is that this ADR's own condition has come due. The
+evidence a fresh map starts from is
+[`f-gate-verdict.md` §5.3](../research/f-gate-verdict.md), which carries the attribution
+above — **the flatness knob is the wrong one to size first.**
 
 ## Alternatives considered
 

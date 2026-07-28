@@ -15,7 +15,7 @@ existing ADR, surface it rather than silently overriding.
 | [0004](0004-frozen-metric-vector.md) | Frozen metric vector (Phase B / Gate B) | Accepted |
 | [0005](0005-sampling-design.md) | Sampling design — stratification, allocation, within-stratum selection (Phase D / Gate E) | Accepted |
 | [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |
-| [0007](0007-accept-degenerate-flatness-gate-flat-strata.md) | Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17 | Accepted |
+| [0007](0007-accept-degenerate-flatness-gate-flat-strata.md) | Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17 | Accepted — **Phase-F revisit trigger fired** (Gate F `F3`); disposition open, see Amendment 1 |
 
 ## Supersession
 

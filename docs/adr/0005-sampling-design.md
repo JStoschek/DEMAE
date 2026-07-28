@@ -311,6 +311,8 @@ criterion chosen after seeing the numbers can be argued either way.
   rare rugged terrain: the corpus is *terrain-diverse by design, not geo-uniform*. This is
   the single most misreadable property of the design and belongs in the model card
   ([#75](https://github.com/JStoschek/DEMAE/issues/75)).
+  *(Written 2026-07-28 — [`f-honesty-notes.md`](../research/f-honesty-notes.md) §2, where it
+  is placed ahead of every caveat rather than inside the list, on this bullet's reasoning.)*
 - **Two coverage facts follow from the design, not from a defect.** 400 of 425 kept-pool
   geo-cells are represented at 50k (the 25 misses hold 77 kept windows in total), and 4 of
   20 strata contain no coastal rows at all, so the coastal floor spans 16.

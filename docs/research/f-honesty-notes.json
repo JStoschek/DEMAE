@@ -1,0 +1,321 @@
+{
+  "artifact": "f-honesty-notes",
+  "ticket": "https://github.com/JStoschek/DEMAE/issues/75",
+  "map": "https://github.com/JStoschek/DEMAE/issues/67",
+  "what_this_is": "The numbers quoted by f-honesty-notes.md, the corpus card. Every value is either extracted by key from an artifact another ticket committed, or recomputed here from the shipped manifest. None is typed into the prose by hand, so a Phase-4 model card lifting this document can re-derive it rather than trust it.",
+  "corpus": {
+    "n_tiles_shipped": 499934,
+    "n_selected": 500000,
+    "n_dropped_at_materialization": 66,
+    "dataset_version": "bcbd6484d8116199c5c1160e21ea0284",
+    "selection_list_md5": "90d74c896d1fa04f7079b8491781c21e",
+    "catalog_version": "32818cc224caedb9f4d5c2fda70cf614",
+    "code_version": "43d26cc",
+    "tile_px": 224,
+    "storage_dtype": "int16",
+    "snapshot_date": "2026-07-27",
+    "clip_bounds_m": [
+      -500.0,
+      9000.0
+    ],
+    "attrition_contract": "accept_shortfall",
+    "pixel_integrity": {
+      "criterion": "F1d",
+      "n_compared": 499934,
+      "n_over_tolerance": 0,
+      "rel_tol": 0.5,
+      "median_rel_diff": 8.102872766295239e-05,
+      "note": "the first Gate criterion in this project to open a shard and read pixels. It compares each tile's stored imagery against the metrics the manifest claims for it \u2014 a join check would have passed regardless."
+    },
+    "distinctness": {
+      "criterion": "F6a",
+      "n_selection_distinct": 500000,
+      "n_manifest_distinct": 499934
+    }
+  },
+  "stratification": {
+    "n_strata": 20,
+    "design": "docs/adr/0005-sampling-design.md",
+    "warning": "the corpus is stratified by terrain descriptor on purpose and is NOT a uniform sample of Earth's land surface. Rare terrain is deliberately over-represented relative to its geographic extent, so any geographic statistic computed from this corpus \u2014 how much of the world is mountainous, where terrain of a given type occurs \u2014 will be wrong."
+  },
+  "gate_f": {
+    "verdict": "FAIL",
+    "verdict_basis": "No Defect open (F1b's null is false by construction on a terrain-threshold attrition; F8 reproduces exactly at the builder's granularity). One Finding fired: F3. The pre-registered roll-up gives no partial credit.",
+    "n_criteria_registered": 18,
+    "n_criteria_gating": 13,
+    "n_criteria_emitted": 19,
+    "emitted_but_not_registered": [
+      "F3_p75_precision_sensitivity"
+    ],
+    "gating_fired_at_report": [
+      "F1b_drop_selectivity",
+      "F3_drainage_representation",
+      "F8_normalization_statistic"
+    ],
+    "findings_fired": [
+      "F3_drainage_representation"
+    ],
+    "defects_fired_at_report": [
+      "F1b_drop_selectivity",
+      "F8_normalization_statistic"
+    ],
+    "defects_open_at_verdict": [],
+    "set_aside_at_verdict": {
+      "F1b_drop_selectivity": "its null model \u2014 attrition is random with respect to terrain \u2014 was already contradicted by F7's own pre-registered derivation, since 62 of 66 drops come from a flatness threshold and a flatness threshold is a terrain threshold. A contradiction between two committed clauses, not a post-hoc reading. Invisible at Gate E only because D=2 has no power; D came in at 66.",
+      "F8_normalization_statistic": "a harness artifact, demonstrated rather than argued: the builder folds each tile's moments in beside the write that appends it, so its addition order is shard order. Read back per-tile the statistic reproduces bit-identically (0 ULP); read back in #73's 512-tile blocks it lands 4 ULP out."
+    }
+  },
+  "drainage_finding": {
+    "criterion": "F3_drainage_representation",
+    "class": "finding",
+    "fired": true,
+    "min_share": 0.25,
+    "gating_strata": [
+      "2",
+      "17"
+    ],
+    "corroborating_strata": [
+      "5",
+      "7"
+    ],
+    "per_stratum": {
+      "2": {
+        "gates": true,
+        "n_shipped": 23153,
+        "n_drainage_shipped": 4856,
+        "realized_share_r_h": 0.2097352394938021,
+        "exhaustion_e_h": 0.18484260210878917,
+        "surviving_tail_untouched": 0.8151573978912108,
+        "tail_headroom_over_shortfall": 22.971305980155538
+      },
+      "17": {
+        "gates": true,
+        "n_shipped": 18459,
+        "n_drainage_shipped": 3811,
+        "realized_share_r_h": 0.20645755458042148,
+        "exhaustion_e_h": 0.21273864016969968,
+        "surviving_tail_untouched": 0.7872613598303003,
+        "tail_headroom_over_shortfall": 17.546500777604976
+      },
+      "5": {
+        "gates": false,
+        "n_shipped": 19905,
+        "n_drainage_shipped": 3762,
+        "realized_share_r_h": 0.18899773926149208,
+        "exhaustion_e_h": 0.17703529411764707,
+        "surviving_tail_untouched": 0.8229647058823529,
+        "tail_headroom_over_shortfall": 14.402305950175002
+      },
+      "7": {
+        "gates": false,
+        "n_shipped": 26043,
+        "n_drainage_shipped": 7835,
+        "realized_share_r_h": 0.30084859655185653,
+        "exhaustion_e_h": 0.20311082307193778,
+        "surviving_tail_untouched": 0.7968891769280622,
+        "tail_headroom_over_shortfall": null
+      }
+    },
+    "attribution": "the flatness screen is not the binding constraint. Exhaustion is the share of the *surviving* drainage tail the draw actually took; at 0.185 and 0.213 the sampler left roughly four fifths of it untouched, so the shortfall is sampler reach rather than a depleted pool.",
+    "precision_sensitivity": {
+      "note": "identical rule at the full-precision p75; published, never a verdict",
+      "would_fire_at_full_precision": true
+    }
+  },
+  "flatness_screen": {
+    "threshold_m": 3.0,
+    "what_it_removes": "windows whose land pixels vary by less than 3 m \u2014 near-featureless surfaces such as flat sea-level plain and ice-sheet interior, which carry almost no terrain structure for a reconstruction objective to learn",
+    "within_stratum_drop_rates_at_gate_e": {
+      "strata": [
+        2,
+        5,
+        7,
+        17
+      ],
+      "within_stratum_drop": [
+        0.301,
+        0.519,
+        0.317,
+        0.297
+      ],
+      "corpus_rate": 0.098,
+      "ratio_to_corpus_rate": [
+        3.08,
+        5.32,
+        3.25,
+        3.04
+      ],
+      "source": "docs/adr/0007-accept-degenerate-flatness-gate-flat-strata.md"
+    },
+    "disposition": "docs/adr/0007-accept-degenerate-flatness-gate-flat-strata.md",
+    "materialization_drops": {
+      "n_dropped": 66,
+      "by_status": {
+        "degenerate": 62,
+        "zero_fill": 4
+      },
+      "dropped_min_land_std_m": 3.0010074040785013,
+      "dropped_median_land_std_m": 3.070642610472743,
+      "retained_median_land_std_m": 24.21875806158264,
+      "note": "these are recompute disagreements sitting across the 3 m threshold, not a second screen: the catalog scored the window above 3 m and the builder's own recompute landed below. F7 gates the rate and it passes."
+    }
+  },
+  "edited_pixels": {
+    "stratum": 19,
+    "label": "high alpine",
+    "within_stratum_drop": 0.181,
+    "ratio_to_corpus_rate": 12.1,
+    "corpus_rate": 0.015,
+    "n_dropped": 11787,
+    "n_would_be_members": 65225,
+    "severe_external_infill_share": 0.94,
+    "disposition": "docs/adr/0006-accept-edm-flm-hollowing-stratum19.md",
+    "note": "consciously accepted: the dropped terrain is real high-alpine, and 94% of it sits in the severe external-infill class \u2014 surface an MAE would learn as genuine terrain when it is interpolation."
+  },
+  "coverage": {
+    "cell_deg": 10,
+    "catalog_cells_occupied": 472,
+    "pool_cells_occupied": 425,
+    "corpus_cells_reached": 425,
+    "pool_cells_unreached": 0,
+    "debug_tier_unreached": 25,
+    "max_tiles_in_a_cell": 4098,
+    "median_tiles_per_cell": 1117.0,
+    "hollow_cells": {
+      "n": 47,
+      "cell_ids": [
+        "+000_-060",
+        "+040_+070",
+        "+050_-010",
+        "+060_-060",
+        "+070_-010",
+        "+070_-040",
+        "+080_+080",
+        "+090_-020",
+        "+130_+010",
+        "+130_+020",
+        "+140_+000",
+        "+140_+020",
+        "+150_+020",
+        "+150_-060",
+        "+160_+000",
+        "+160_+010",
+        "+170_+000",
+        "+170_+010",
+        "+170_-010",
+        "+170_-030",
+        "-010_+080",
+        "-010_-050",
+        "-020_-010",
+        "-020_-050",
+        "-030_-030",
+        "-050_-060",
+        "-070_+030",
+        "-090_-030",
+        "-090_-040",
+        "-110_+080",
+        "-130_-030",
+        "-140_+070",
+        "-140_-010",
+        "-140_-020",
+        "-140_-030",
+        "-150_-030",
+        "-160_+000",
+        "-160_-010",
+        "-160_-030",
+        "-170_+000",
+        "-170_+010",
+        "-170_-010",
+        "-180_+000",
+        "-180_+020",
+        "-180_-010",
+        "-180_-040",
+        "-180_-070"
+      ],
+      "cause": "all are >=95% zero_fill atoll and open-water cells \u2014 Marshall Islands, Micronesia, Tuvalu, French Polynesia, Seychelles. A 1-degree source tile exists because a speck of land falls inside it, but at 224 px (~6.7 km) every window is >=75% sea, so the ocean gate removed all of them.",
+      "consequence": "low-lying tropical atoll terrain is effectively absent from the corpus. This is a missing terrain family, not a map artifact, and no budget recovers it \u2014 the windows never entered the pool."
+    },
+    "withheld_countries": {
+      "n": null,
+      "measured": false,
+      "why_unmeasurable": "GLO-30 Public withholds tiles over a few specific countries (authorised-user access only). A withheld cell is simply an absent prefix in the bucket, and fully-ocean areas are absent for the same reason, so the two are indistinguishable without an external list this project does not hold. The gap is real, its size is unknown, and no number here bounds it.",
+      "source": "docs/research/copernicus-glo30-recon.md"
+    }
+  },
+  "spatial_redundancy": {
+    "cog_deg": 1,
+    "n_cogs_in_pool": 24118,
+    "n_cogs_drawn_from": 22906,
+    "max_inventory_per_cog": 256,
+    "windows_overlap": false,
+    "mean_windows_per_cog": 21.825460578014493,
+    "median_windows_per_cog": 14.0,
+    "max_windows_per_cog": 233,
+    "mean_fraction_of_inventory": 0.22906306244125252,
+    "median_fraction_of_inventory": 0.15234375,
+    "n_cogs_at_or_over_half": 2788,
+    "n_cogs_fully_drawn": 423,
+    "debug_tier_n_at_or_over_half": 0,
+    "overlap_with_debug_tier": {
+      "label": "debug tier (50k, #44)",
+      "n_this": 500000,
+      "n_other": 50000,
+      "n_pool": 3052735,
+      "n_overlap": 30998,
+      "share_of_this": 0.061996,
+      "share_of_other": 0.61996,
+      "expected_if_uniform": 8189.3777,
+      "lift_over_uniform": 3.785
+    },
+    "hazard": "windows do not share pixels \u2014 the grid is non-overlapping \u2014 but two windows from the same 1-degree tile share geology, climate, radar acquisition pass and the same void-fill and editing history. With 423 tiles drawn dry and 2,788 more at half or above, a random train/validation split puts immediate neighbours on both sides of the boundary and validation loss reads better than it should.",
+    "split_column_state": "declared and null \u2014 Phase 2 fills the geographic hold-out"
+  },
+  "normalization": {
+    "measured_on": "the shipped 500k manifest \u2014 not #70's debug-tier figures",
+    "n_tiles": 499934,
+    "global_mean_m": 955.6728901295354,
+    "global_std_m": 1012.1607171908565,
+    "normalization_stat_source": "tier_specific",
+    "shipped_default_mode": "per_tile_standardize",
+    "median_tile_std_m": 24.218693733215332,
+    "median_tile_std_normalized": 0.02392771555137184,
+    "flat_tile_cut": 0.1,
+    "frac_tiles_under_cut": 0.8201182556097405,
+    "between_tile_altitude_spread_m": 1007.6321437437448,
+    "altitude_over_relief_ratio": 41.60555291889267,
+    "debug_tier_reference": {
+      "source": "#70 / ADR-0003 Amendment 1, measured on the 49,998-tile debug tier",
+      "median_tile_std_normalized": 0.024,
+      "frac_tiles_under_cut": 0.82,
+      "altitude_over_relief_ratio": 42.0
+    }
+  },
+  "dsm_canopy": {
+    "measured": false,
+    "why": "GLO-30 is a Digital Surface Model: elevations include vegetation canopy and buildings, not bare earth. Published validation finds land cover drives elevation error more than slope does. Nothing in this corpus filters or flags it.",
+    "vegetation_column": "deferred \u2014 not built",
+    "promotion_trigger": "Phase-2 probes showing canopy-biased reconstructions",
+    "mitigation": "this note is the entire mitigation. No canopy column exists in the manifest and no windows were removed on canopy grounds."
+  },
+  "high_latitude_anisotropy": {
+    "policy": "accepted, not corrected \u2014 no reprojection, no latitude cap",
+    "worst_pixel_aspect_ratio": 1.55,
+    "worst_near_latitude_deg": 50,
+    "ground_sample_distance_m": {
+      "east_west": [
+        24,
+        31
+      ],
+      "north_south": 30.9
+    },
+    "manifest_column": "lat_band",
+    "source": "docs/adr/0001-corpus-construction-recipe.md",
+    "anisotropy_metric": "deferred \u2014 not built",
+    "promotion_trigger": "downstream tasks involving oriented fabrics (dunes, drumlins)"
+  },
+  "not_here": {
+    "split": "declared and null \u2014 see spatial_redundancy for the hazard",
+    "vegetation_column": "deferred with a Phase-2 trigger",
+    "anisotropy_metric": "deferred with a downstream-task trigger"
+  }
+}
