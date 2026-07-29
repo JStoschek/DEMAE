@@ -133,6 +133,11 @@ src/dataset/      # the Phase-0 pipeline package (stage-per-module)
   loader.py       # stage 6 — torch read path (imports torch lazily)
   concurrency.py  # the bounded, order-preserving parallel-read primitive (#38)
   provenance.py   # git SHA + snapshot date stamped into every artifact
+src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
+  config.py       # the frozen RunConfig — every plan §2-§8 knob + the config hash
+  fingerprint.py  # dataset_version / selection md5 / split md5 / git SHA
+  data.py         # split-aware Dataset; asserts no test geocell reaches a train batch
+  header.py       # `python -m pretrain` — the config + fingerprint header a run records
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records
 Dockerfile        # pinned ETL environment for a rented vast.ai box

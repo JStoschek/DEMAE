@@ -101,6 +101,15 @@ GitHub issue #1.
   move `dataset_version`: that hashes `(tile_id, content_hash)` and `build_params` alone.
   What the blocking does and does not buy is measured, not asserted
   ([`p77-split.md`](docs/research/p77-split.md) §3).
+- **Split containment** — the invariant a Phase-1 Dataset asserts **at construction**: no tile
+  of one split sits inside a block held out for another — no train tile in a `test` geocell, none
+  in a `val` COG ([#89](https://github.com/JStoschek/DEMAE/issues/89), plan §15.2). Checked
+  against the union of two block lists, because neither subsumes the other: the blocks *derived*
+  from the manifest's own `split` column (which catches a relabelled tile inside a still-held-out
+  region) and the *committed* block lists (which catch a whole test geocell relabelled `train`,
+  where nothing left in the column looks held out). It fails loudly rather than warning: a leak is
+  invisible in the loss, the recon grids and the probe, and surfaces only in Phase 2 as an
+  evaluation on regions the encoder has already seen — unrepairable without re-pretraining.
 - **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
   one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
   budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the
@@ -231,6 +240,25 @@ GitHub issue #1.
   ([#45](https://github.com/JStoschek/DEMAE/issues/45)) — and each carries its own ledger,
   corpus card and `dataset_version`. "smoke" is a way of running the driver
   (`--limit-cogs` into a scratch directory), not a third shipped tier.
+- **Run config** — the frozen object holding every Phase-1 recipe knob from plan §2-§8 at its
+  cited default (`pretrain.config.RunConfig`, [#89](https://github.com/JStoschek/DEMAE/issues/89)).
+  Every run R0-R5 *is this object with a knob moved*, which is what makes an ablation a diff:
+  nothing downstream reads a recipe number from anywhere else. It round-trips to a plain dict —
+  a partial dict fills the rest from the plan, so an ablation's config file names only what it
+  changes — and hashes to a **config hash**, the W&B tag plan §15.7 asks for. That hash covers
+  the *recipe* and deliberately not the four **environment** fields — the run's label and the
+  three paths saying where the corpus and the split artifacts are mounted: §11 resumes on a
+  fresh vast.ai instance where the corpus lives at another path, and a hash that moved with the
+  mount point would read every resume as a config mismatch. `init.checkpoint` is a path and is
+  *not* environment: which checkpoint a continual arm warm-starts from is the arm.
+- **Data fingerprint** — the block every checkpoint and every W&B run carries, saying *which
+  corpus, which selection, which split, which code*: `dataset_version`, the selection-list md5
+  (quoted from `corpus_meta.json`, since that is the value the corpus was actually built from),
+  the **split md5**, and the git SHA. All four are content hashes of committed artifacts, never
+  descriptions. A split that is not there is recorded as an explicit **absent** *with a stated
+  reason* rather than raised — the fingerprint shipped before the split did — and "committed"
+  requires both halves: the assignment artifact exists *and* the manifest column is filled on
+  every row. A partly filled column is the dangerous shape and reads as absent.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
