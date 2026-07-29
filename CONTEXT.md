@@ -281,6 +281,26 @@ GitHub issue #1.
   (ADR-0003), and the load-bearing property is that **one draw carries both the image and its
   land mask**: the two drifting apart does not crash and does not show in a loss curve, it
   simply points the ocean weighting at a rotated copy of where the ocean used to be.
+- **norm_pix** — per-patch target normalization: the reconstruction target for a patch is that
+  patch standardized by its **own** mean and variance, so the model is scored on internal relief
+  rather than on where the patch sits within the tile (`pretrain.loss`,
+  [#92](https://github.com/JStoschek/DEMAE/issues/92), plan §4). On elevation it is local
+  detrending, and with `per_tile` input normalization on top of it the model neither sees nor
+  reconstructs absolute altitude anywhere — the intended Phase-1 objective, terrain shape only.
+  It is ON by default and **R3 ablates it OFF**, which is a genuinely open question rather than
+  a formality, so the OFF path is characterized and not merely reachable.
+- **Variance floor** — the lower bound on that per-patch variance before it is divided by, 1e-4
+  in per-tile-standardized units against the reference implementation's 1e-6. It exists because
+  the corpus's degenerate-flatness screen runs per **tile**, so a near-flat *patch* — playa,
+  lake surface, residual ocean — survives curation, and dividing it by its own near-zero
+  variance amplifies quantization noise into the loss. The floor bounds that at 100× and
+  inverts the shape of the failure: below the floor, a flatter patch now scores *less*, so
+  near-flat patches sink to the bottom of the per-patch loss distribution instead of dominating
+  its top. The **fp32 guard** is the same concern from the other side — in bf16 a patch with
+  genuine relief can measure as exactly flat — and it binds the caller too: a target arriving
+  narrower than fp32 is refused, because no upcast returns a variance already rounded away.
+  Both are config knobs, and §4's standing instruction is to read the per-patch distribution
+  before concluding anything about the model.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
