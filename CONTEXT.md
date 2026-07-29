@@ -32,7 +32,9 @@ GitHub issue #1.
   Copernicus COG; when ambiguous, say "COG" for the source and "tile" for the crop.)*
 - **Window** — a 224×224 pixel region read from a COG before it becomes a tile.
 - **Land mask** — dropping ocean / zero-elevation areas so the model doesn't waste
-  capacity reconstructing flat sea.
+  capacity reconstructing flat sea. Derived per tile *before* normalization (ADR-0003 §4) and
+  carried beside the image in the sample dict — not static metadata: anything that moves the
+  image geometrically has to move the mask the same way (see **Dihedral augmentation**).
 - **TRI** — Terrain Ruggedness Index; a cheap per-window ruggedness score. Phase 0
   ([ADR-0001](docs/adr/0001-corpus-construction-recipe.md) §4) used it as the *single*
   stratification axis; **[ADR-0004](docs/adr/0004-frozen-metric-vector.md) supersedes
@@ -267,6 +269,18 @@ GitHub issue #1.
   Masking lives in the *model*, never in the loader (ADR-0003), is drawn per sample and afresh
   every step, and takes an optional generator so the val loss can pin its mask and stay
   comparable across epochs. The ratio itself is a config knob — R2 ablates 90%.
+- **Dihedral augmentation** — the whole of Phase 1's augmentation policy: one of the 8 elements
+  of the dihedral group (four 90° rotations × {identity, mirror}) per sample, and nothing else
+  (`pretrain.augment`, [#91](https://github.com/JStoschek/DEMAE/issues/91), plan §6). Overhead
+  terrain has no canonical orientation, so the group is free label-preserving variety; **no**
+  RandomResizedCrop (rescaling changes the effective GSD of a modality where scale is
+  physically meaningful — scale augmentation waits for GSDPE in Phase 4) and **no** intensity
+  jitter (harmful in MAE's own ablation, and meaningless on standardized elevation). Both
+  omissions are deliberate deviations from the MAE default, so a config asking for them is
+  refused rather than ignored. It is a **wrapper around** the read path, never an edit to it
+  (ADR-0003), and the load-bearing property is that **one draw carries both the image and its
+  land mask**: the two drifting apart does not crash and does not show in a loss curve, it
+  simply points the ocean weighting at a rotated copy of where the ocean used to be.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
