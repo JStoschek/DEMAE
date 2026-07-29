@@ -679,7 +679,7 @@ def main(argv: list[str] | None = None) -> int:
         n_cells=args.n_cells, seed=args.seed,
     )
     out = write_assignment(plan.tile_id, plan.labels, args.out)
-    digest = md5(out)
+    digest = file_md5(out)
     blocks = write_blocks(plan, args.blocks, assignment_md5=digest)
 
     totals, shares = plan.totals(), plan.shares()

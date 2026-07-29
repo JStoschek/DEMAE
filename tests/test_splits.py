@@ -384,6 +384,103 @@ def test_plan_splits_never_draws_val_from_a_test_geocell():
     assert val_cells.isdisjoint(plan.test.ids)
 
 
+# --- the CLI, end to end ------------------------------------------------------
+
+
+def _cli_manifest(path):
+    """A 432-tile manifest the CLI can draw from at its *own* defaults.
+
+    ``main`` exposes ``--n-cells`` and the two fractions but not the size band or the
+    separation floor, so a corpus that only works at hand-picked band values would not
+    exercise the command as users run it. This one is sized to satisfy the defaults: 27
+    geocells on a 40-degree grid (nearest pair ~3,400 km, clear of the 1,000 km floor),
+    16 tiles each, so at ``--test-fraction 0.2`` a cell is 0.186 of the test budget --
+    inside ``[0.025, 0.25]``. Every COG holds all four strata, so no draw can miss one.
+    """
+    from dataset import manifest as manifest_mod
+
+    rows, i = [], 0
+    for lat0 in (-40, 0, 40):
+        for lon0 in range(-160, 161, 40):
+            for g in range(2):
+                for t in range(8):
+                    rows.append(
+                        manifest_mod.TileRecord(
+                            tile_id=f"T{i:04d}", shard_id=i // 64, row_index=i,
+                            source_cog=f"C{lon0:+04d}{lat0:+03d}G{g}",
+                            win_row0=0, win_col0=224 * t,
+                            lon=lon0 + 0.5 * g + 0.1 * t, lat=float(lat0),
+                            lat_band="0-50" if abs(lat0) < 50 else "50-60",
+                            geocell_id=f"{lon0:+04d}_{lat0:+04d}",
+                            mean=1.0, std=2.0, land_frac=1.0, stratum_id=(t + g) % 4,
+                            provenance="base", slope_mean=1.0, local_relief=2.0, texture=0.1,
+                            elevation_relief_ratio=0.4, mean_elevation=100.0,
+                            geomorphon_entropy=2.0, edm_edited_frac=0.0, flm_fill_frac=0.0,
+                            wbm_water_frac=0.0, water_affected=False, coastline=False,
+                            content_hash=i + 1,
+                        )
+                    )
+                    i += 1
+    manifest_mod.write_manifest(rows, path)
+    return path
+
+
+def _cli_argv(tmp_path, *extra):
+    return [
+        "--manifest", str(tmp_path / "manifest.parquet"),
+        "--out", str(tmp_path / "split.csv"),
+        "--blocks", str(tmp_path / "blocks.json"),
+        "--n-cells", "4", "--test-fraction", "0.2", "--val-fraction", "0.1",
+        *extra,
+    ]
+
+
+def test_cli_draws_the_split_and_writes_both_artifacts(tmp_path, capsys):
+    """Without ``--fill``: both artifacts land, and the manifest is untouched."""
+    _cli_manifest(tmp_path / "manifest.parquet")
+
+    assert splits.main(_cli_argv(tmp_path)) == 0
+
+    csv, blocks = tmp_path / "split.csv", tmp_path / "blocks.json"
+    assignment = splits.read_assignment(csv)
+    assert len(assignment) == 432
+    assert set(assignment.values()) == set(splits.SPLITS)
+
+    doc = json.loads(blocks.read_text())
+    # the md5 the blocks carry is the assignment's own -- the bug this test was written for
+    # left `main` raising NameError here, after the CSV and before anything else
+    assert doc["assignment_md5"] == materialize.file_md5(csv)
+    assert doc["n_tiles"] == 432
+    assert len(doc["test"]["cells"]) == 4
+    assert f"md5 {doc['assignment_md5']}" in capsys.readouterr().out
+
+    # the manifest's column is the irreversible half, and stays null without --fill
+    assert set(pq.read_table(tmp_path / "manifest.parquet")["split"].to_pylist()) == {None}
+
+
+def test_cli_with_fill_writes_the_manifest_column_to_match_the_assignment(tmp_path, capsys):
+    _cli_manifest(tmp_path / "manifest.parquet")
+
+    assert splits.main(_cli_argv(tmp_path, "--fill")) == 0
+
+    table = pq.read_table(tmp_path / "manifest.parquet")
+    assignment = splits.read_assignment(tmp_path / "split.csv")
+    assert table["split"].to_pylist() == [assignment[t] for t in table["tile_id"].to_pylist()]
+    assert "filled:" in capsys.readouterr().out
+
+
+def test_cli_is_deterministic_across_runs(tmp_path):
+    """Same corpus, same seed, byte-identical artifacts -- run it twice and diff."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        _cli_manifest(d / "manifest.parquet")
+        assert splits.main(_cli_argv(d)) == 0
+
+    assert (a / "split.csv").read_bytes() == (b / "split.csv").read_bytes()
+    assert (a / "blocks.json").read_bytes() == (b / "blocks.json").read_bytes()
+
+
 # --- against the shipped corpus (skipped where data/ is absent) ---------------
 
 _MANIFEST = Path("data/corpus_500k/manifest.parquet")
