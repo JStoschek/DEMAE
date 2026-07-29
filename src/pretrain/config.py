@@ -171,7 +171,7 @@ class Masking(_Frozen):
 
 @dataclass(frozen=True)
 class Loss(_Frozen):
-    """The objective and its two DEM-specific guards (plan §4)."""
+    """The objective, its two DEM-specific guards, and its ocean weighting (plan §4)."""
 
     #: §4 — per-patch target normalization ON: on elevation it doubles as local detrending, so
     #: each 480 m patch is judged on its internal relief. R3 (#84) ablates it OFF.
@@ -187,9 +187,13 @@ class Loss(_Frozen):
     #: ablation.
     masked_patches_only: bool = True
     #: §4 — ocean/invalid pixels contribute zero and the patch renormalizes by valid count
-    #: (the loader's `land_mask`, ADR-0003 §4). Implemented by #96.
+    #: (the loader's `land_mask`, ADR-0003 §4). Implemented by #96, and *enforced*: with this set,
+    #: :meth:`pretrain.loss.MaeLoss.forward` refuses to score a batch that arrives without
+    #: weights, rather than quietly training the unweighted objective under this flag.
     ocean_weighted: bool = True
-    #: §4 — a masked patch below this valid fraction leaves the loss entirely.
+    #: §4 — a masked patch below this valid fraction leaves the loss entirely, rather than being
+    #: weighted down; :func:`pretrain.loss._active_patches` argues the threshold. 0 switches it
+    #: off, and an all-ocean patch is excluded either way.
     min_valid_patch_frac: float = 0.25
 
     def __post_init__(self) -> None:

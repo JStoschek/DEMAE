@@ -301,6 +301,33 @@ GitHub issue #1.
   narrower than fp32 is refused, because no upcast returns a variance already rounded away.
   Both are config knobs, and §4's standing instruction is to read the per-patch distribution
   before concluding anything about the model.
+- **Ocean weighting** — the pixel-level layer under the patch-level loss mask: ocean and void
+  pixels carry **zero weight**, each patch renormalizes by its own **valid-pixel count**, and the
+  `norm_pix` mean and variance compute over valid pixels only (`pretrain.loss`,
+  [#96](https://github.com/JStoschek/DEMAE/issues/96), plan §4). Each of those has its own
+  reason: without the renormalization a half-ocean patch is scored as if it were half as wrong as
+  it is, and without valid-only statistics the "local relief" a patch is judged on is really the
+  land/ocean step — the largest gradient in the tile and no part of terrain. The weights come from
+  the loader's `land_mask` (`raw != 0`, derived before normalization, ADR-0003 §4). Precedent is
+  thin and the honest framing is that the published pattern is **curation, not weighting**
+  (MAESSTRO drops any patch containing a missing value); this corpus already curated hard in
+  Phase 0, so this is a correctness patch on the residual rather than a novelty claim.
+- **Minimum valid patch fraction** — a masked patch with under **25%** valid pixels leaves the
+  loss entirely, rather than being weighted down. Below that there is too little terrain left to
+  learn from and the renormalization amplifies whatever noise remains; an all-ocean patch
+  therefore contributes exactly zero, not a NaN out of the 0/0. It is a config knob, and 0
+  switches the threshold off without switching off the requirement that a scored patch contain
+  something. Note what this makes the loss's returned per-patch `weight` grid: not just which
+  patches were masked, but **how much of a batch the ocean took out of the objective**.
+- **Image / mask drift** — the named silent failure of ocean weighting, and the reason
+  `pretrain.loss` carries an alignment check rather than a comment. The weights and their targets
+  reach the loss by two routes (`patchify(land_mask)` and `patchify(image)`) and are held in step
+  only by the dihedral draw being used twice. Drift produces 0/1 weights, plausible per-patch
+  valid counts, a descending loss and no crash — it simply scores a rearranged copy of where the
+  ocean was. It is detectable because ocean is the *exact-zero* fill and both normalizers are
+  affine, so every invalid pixel in a tile leaves normalization carrying one identical value; a
+  mask that no longer selects exactly that set has drifted. The check is **off the hot path** (it
+  syncs the device and breaks the compile graph) and belongs to the R0 pre-flight and the tests.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

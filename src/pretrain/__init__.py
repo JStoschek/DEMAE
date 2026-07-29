@@ -27,12 +27,16 @@ trains against:
   model rather than the loader exactly as ADR-0003 assumes.
 - :mod:`pretrain.augment` — plan §6's augmentation, the full dihedral group and nothing else,
   as a wrapper *around* the read path rather than an edit to it. One draw per sample carries
-  both the image and its ``land_mask``, which is what keeps #96's ocean weighting pointed at
+  both the image and its ``land_mask``, which is what keeps the ocean weighting pointed at
   the pixels it thinks it is weighting.
 - :mod:`pretrain.loss` — §4's objective over what the model returns: MSE on the masked patches
   only, against per-patch-normalized targets, with the two guards that stop a near-flat DEM
-  patch from being scored on its own quantization noise. It also carries the pixel-weight seam
-  #96 extends and the per-patch values §4 asks to be logged.
+  patch from being scored on its own quantization noise, and the per-patch values §4 asks to be
+  logged. #96 adds the layer under that: ocean and void pixels carry zero weight, each patch
+  renormalizes by its valid-pixel count, and a masked patch with under 25% valid terrain leaves
+  the loss entirely. Because those weights and their targets arrive by two different routes, the
+  module also carries the check that they still describe the same pixels — the one #96 failure
+  mode that is invisible in every curve.
 
 ``python -m pretrain`` prints the config + fingerprint header a real run would record.
 
