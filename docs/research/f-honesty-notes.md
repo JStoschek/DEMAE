@@ -301,15 +301,25 @@ Two consequences:
    information. Reasoning about sample efficiency or scaling behaviour on the raw count will
    over-estimate what you have.
 
-2. **Train/validation leakage — the concrete hazard.** The manifest ships a `split` column
-   that is **declared and null**; filling it with a geographic hold-out is Phase 2's job and
-   has not been done. So the obvious thing to do is split randomly — and with 423 source
-   tiles fully drawn and 2,788 more past half, a random split puts immediate neighbours on
-   both sides of the boundary. **Your validation loss will read better than it should, and
-   nothing in the numbers will show you why.**
+2. **Train/validation leakage — the concrete hazard.** The obvious thing to do is split
+   randomly — and with 423 source tiles fully drawn and 2,788 more past half, a random split
+   puts immediate neighbours on both sides of the boundary. **Your validation loss will read
+   better than it should, and nothing in the numbers will show you why.**
 
    **Split by `geocell_id` or by `source_cog`, not at random.** Both columns are in the
    manifest for this purpose.
+
+   *(Amended 2026-07-28, [#77](https://github.com/JStoschek/DEMAE/issues/77).* When this
+   card first shipped, the `split` column was **declared and null** and this note told you
+   to do the blocking yourself. **It is now filled** — `train` / `val` / `test`, drawn as
+   whole 10° geocells and whole source COGs, committed as
+   `artifacts/phase1/split_scale_500k.csv` and argued in
+   [`p77-split.md`](p77-split.md). Use it: it is the split this project's own results are
+   reported against. What blocking does and does not buy is measured there rather than
+   asserted — the median test tile sits 97 km from the nearest training tile, but the
+   nearest sits 3 km away across a cell boundary, and val is blocked only at the ~110 km
+   source-COG scale. `dataset_version` did not change; the fingerprint does not cover this
+   column.*)
 
 ### 4.7 High-latitude pixels are not square, by decision
 
@@ -371,7 +381,7 @@ promote it, and none of those triggers can fire until pretraining runs.
 
 | | state | what would build it |
 |---|---|---|
-| **`split` column** | declared, all null | Phase 2 fills a geographic hold-out. Until then see §4.6 — do not split randomly. |
+| **`split` column** | **filled** (#77) — 95.02 / 2.00 / 2.98% train / val / test | was "declared, all null"; now drawn geographically, see §4.6 and [`p77-split.md`](p77-split.md) |
 | **vegetation / canopy column** | not built | Phase-2 probes showing canopy-biased reconstructions (§4.1) |
 | **anisotropy metric** | not built | downstream tasks involving oriented terrain fabrics — dunes, drumlins (§4.7) |
 

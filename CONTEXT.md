@@ -83,6 +83,24 @@ GitHub issue #1.
   `artifacts/phase_f/selection_scale_500k.csv` are *independent draws* at two budgets
   ([#45](https://github.com/JStoschek/DEMAE/issues/45)); their 30,998-window overlap is
   incidental, not a nesting rule ([`f-scale-draw.md`](docs/research/f-scale-draw.md)).
+- **Split assignment** — the committed `tile_id, split` list that fills the manifest's
+  `split` column, plus the block lists it was drawn as
+  (`artifacts/phase1/split_scale_500k.csv` + `split_blocks_500k.json`,
+  [#77](https://github.com/JStoschek/DEMAE/issues/77)). Third artifact in the same
+  contract family as the selection list and the ledger: **the file is what later phases
+  re-read**, not this code re-run. Drawn once per tier and **never randomly** — the corpus
+  card's §4.6 autocorrelation warning is binding — as `test` (whole 10° geocells, the
+  Phase-2 evaluation regions, untouched by pretraining), `val` (whole source COGs from
+  non-test cells) and `train` (everything else). A **block** is whatever unit is held out
+  whole — a geocell for `test`, a COG for `val` — and the unit is the honesty claim: the
+  corpus card allows nothing finer than a COG, because two windows from one COG are
+  neighbours, not independent samples. Both hold-outs are chosen to minimize
+  **relative stratum shortfall** against the corpus composition, a scale-free measure that
+  prices a *missing* terrain family at a whole unit however rare it is — which is why
+  total-variation distance is reported but never optimized. Filling the column does not
+  move `dataset_version`: that hashes `(tile_id, content_hash)` and `build_params` alone.
+  What the blocking does and does not buy is measured, not asserted
+  ([`p77-split.md`](docs/research/p77-split.md) §3).
 - **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
   one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
   budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the
@@ -129,6 +147,14 @@ GitHub issue #1.
   against different constants — and the mode puts roughly **42×** more variance in between-tile
   altitude than in within-tile relief, so a normalized tile with `std ≈ 0.02` is correct
   behaviour, not a loader bug ([ADR-0003 Amendment 1](docs/adr/0003-dataloader-design.md#amendments)).
+  **Third consequence, for whoever runs the ablation:** the shipped scale-tier pair
+  (955.67 / 1012.16 m) was accumulated over *every* tile, including the 4.98% of land pixels
+  the **split assignment** later held out, so it is contaminated by `val` and `test`.
+  Measured rather than bounded ([`p77-split.md`](docs/research/p77-split.md) §5): the
+  train-only pair is **952.75 / 1013.43 m**, a −0.31% / +0.13% shift. `corpus_meta.json`
+  keeps the shipped pair — moving it would move a number four committed artifacts quote for
+  a third of a percent — so a train-only ablation should read the train-only pair from
+  `p77-split.json` and say which one it used.
 - **Corpus card** — the project's one artifact written for a reader **outside** it:
   [`f-honesty-notes.md`](docs/research/f-honesty-notes.md), the plan's E3 honesty notes
   recorded against the shipped 500 k tier. Not a ticket report — it is organized by *what a
@@ -150,8 +176,9 @@ GitHub issue #1.
   column is `stratum_id` (a k=20 label), not the TRI-era `stratum` (a ruggedness
   quintile), and `tri` is gone. Denormalizing makes the manifest
   **self-contained**: reading the corpus needs no second file. **Region is recorded** so a
-  geographic hold-out split is possible in Phase 2 (the split itself is not a Phase-0
-  decision).
+  geographic hold-out split is possible (the split itself is not a Phase-0 decision; the
+  scale tier's `split` column was filled in Phase 1 by
+  [#77](https://github.com/JStoschek/DEMAE/issues/77), the debug tier's is still null).
 - **Materialization** — the pass that turns the selection list into the corpus: read each
   selected window at full resolution, screen it, store it as int16, index it. Run by
   `dataset.materialize` (Phase E1), which is the only stage that reads full-res pixels in

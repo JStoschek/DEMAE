@@ -112,6 +112,16 @@ ATTRITION_CONTRACT: Final = "accept_shortfall"
 # the debug tier's dataset_version, which four committed Gate-E artifacts quote.
 NORMALIZATION_STAT_SOURCE: Final = "tier_specific"
 
+# --- Phase-1 handoff: the geographic split (issue #77, plan §9) ---------------
+# The committed split assignment, and the block lists it was drawn as. Same contract
+# philosophy as the selection lists above: the emitted `tile_id, split` pairs are what
+# every later phase re-reads, not this code re-run. Named here so `dataset.splits` writes
+# them and the Phase-1 training config quotes their md5 from one place. The assignment is
+# *tier-specific* — it is drawn against the 500k manifest's own geography, and the debug
+# tier has no split (nothing has asked it for one).
+SPLIT_ASSIGNMENT_PATH: Final = "artifacts/phase1/split_scale_500k.csv"
+SPLIT_BLOCKS_PATH: Final = "artifacts/phase1/split_blocks_500k.json"
+
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
 # The cache-locally-not-stream policy (and why it differs from the COG reads) is

@@ -1,9 +1,12 @@
 # ADR 0002 — Storage format & tile-manifest schema (Phase 0)
 
-- **Status:** Accepted
+- **Status:** Accepted — §3a's `split` row **amended** (nothing superseded); see [Amendments](#amendments)
 - **Date:** 2026-07-13
 - **Context ticket:** "Decide storage format + tile-manifest schema" (GitHub issue #5), Phase-0 wayfinder map (#1)
 - **Builds on:** [ADR 0001 — Corpus-construction recipe](0001-corpus-construction-recipe.md)
+- **Amended by:** Phase 1, 2026-07-28 ([issue #77](https://github.com/JStoschek/DEMAE/issues/77)) — the
+  reserved `split` column is filled for the **scale tier** in Phase **1**, not Phase 2, and the
+  assignment ships as a committed artifact. See [Amendments](#amendments)
 
 ## Context
 
@@ -173,3 +176,42 @@ Every added column already exists per-window in the gated catalog, joinable by w
 - **Loader:** the `stratum` → `stratum_id` rename touches the loader — it reads that column and re-exposes it in the training sample. That is a two-line rename (`src/dataset/loader.py`), not a read-path redesign; the sample key is likewise `stratum_id`.
 - **Self-contained corpus:** the manifest + `corpus_meta.json` now fully describe the build with no dependency on the catalog at consumption time.
 - **`split` reserved:** kept declared, typed `string`, nullable, written null for the whole 50k tier — an honest forward hook (Phase 2 will fill it), unlike the dropped `tri`. *(Phase F, 2026-07-28: the hook now carries a **measured hazard**. At 500 k the draw takes 23% of a source COG's inventory on average, with 2,788 COGs at half or more and 423 drawn dry, so a random train/val split puts neighbouring windows on both sides. [`f-honesty-notes.md`](../research/f-honesty-notes.md) §4.6 tells downstream users to split on `geocell_id` or `source_cog` until Phase 2 fills this column.)*
+
+## Amendments
+
+### Amendment 1 (2026-07-28) — the `split` column is filled in Phase 1, for the scale tier
+
+**Source:** Phase-1 wayfinder map ([#76](https://github.com/JStoschek/DEMAE/issues/76)), ticket
+[#77](https://github.com/JStoschek/DEMAE/issues/77). **Supersedes:** nothing about the *schema* —
+`split` is still a nullable `string`, still the last column, and the type never moved. What changes
+is the sentence attached to it: §3 and §3a both say "Phase-2 fills the geographic hold-out", and
+that is now wrong about **who** and **when**.
+
+#### What changed, and why the phase moved
+
+The column is filled by `dataset.splits` in **Phase 1**, before pretraining rather than after it,
+because a split that arrives in Phase 2 arrives too late to be honest. The Phase-1 plan needs a
+held-out `val` pool for masked-recon loss and the kNN probe *during* pretraining (§10), and it needs
+`test` regions that pretraining provably never saw (§14) — both of which require the assignment to
+exist before the first run, not after. Phase 2 remains the *consumer* of the `test` cells; it is no
+longer their author.
+
+**Only the scale tier is filled.** `data/corpus_500k/manifest.parquet` carries `train` / `val` /
+`test`; the 50k debug tier's column stays null, because nothing has asked it for a split and a
+second assignment would be a second contract to keep in step.
+
+#### What does not change
+
+- **`dataset_version` does not move.** It hashes schema version + sorted `(tile_id, content_hash)` +
+  `build_params` (§3), none of which the column touches. The shipped `bcbd6484…` is byte-identical
+  across the fill, checked before and after.
+- **The hazard §3a recorded stands** — it is the *reason* for the design, not a thing the fill
+  retires. The split is geographically blocked precisely because the corpus card's §4.6 numbers say
+  a random one leaks. The card's advice to downstream users (split on `geocell_id` or `source_cog`)
+  is now discharged by the shipped column rather than left to them.
+- **The artifact, not the code, is the contract** — as for the selection list and the ledger.
+  `artifacts/phase1/split_scale_500k.csv` (`tile_id, split`, md5 in `split_blocks_500k.json`) is what
+  later phases re-read; `dataset.splits` re-running is a check, not the source of truth.
+
+The design, the judgement calls it required, and the two plan claims it corrected are argued in
+[`p77-split.md`](../research/p77-split.md).

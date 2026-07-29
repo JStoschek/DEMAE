@@ -64,7 +64,7 @@ MANIFEST_SCHEMA = pa.schema(
         ("water_affected", pa.bool_()),
         ("coastline", pa.bool_()),
         ("content_hash", pa.uint64()),
-        ("split", pa.string()),  # null this tier; Phase-2 fills the geographic hold-out
+        ("split", pa.string()),  # written null; `dataset.splits` fills it (#77, ADR-0002 Am. 1)
     ]
 )
 
@@ -74,7 +74,10 @@ class TileRecord:
     """One manifest row — the full provenance + storage join for a tile.
 
     Field order mirrors ``MANIFEST_SCHEMA`` (v2, issue #48). ``split`` keeps its
-    default so it stays optional; every other field is required.
+    default so it stays optional: materialization writes it null and
+    :func:`dataset.splits.fill_manifest_split` fills it afterwards, in one pass over the
+    finished corpus (#77) — a tile's split is a property of the corpus's geography, which
+    does not exist until every tile does.
     """
 
     tile_id: str

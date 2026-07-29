@@ -348,7 +348,7 @@ def spatial_redundancy(report: dict[str, Any], draw: dict[str, Any]) -> dict[str
             "at half or above, a random train/validation split puts immediate neighbours on "
             "both sides of the boundary and validation loss reads better than it should."
         ),
-        "split_column_state": "declared and null — Phase 2 fills the geographic hold-out",
+        "split_column_state": "filled by #77 — train/val/test, geographically blocked",
     }
 
 
@@ -449,7 +449,7 @@ def main() -> None:
             "promotion_trigger": "downstream tasks involving oriented fabrics (dunes, drumlins)",
         },
         "not_here": {
-            "split": "declared and null — see spatial_redundancy for the hazard",
+            "split": "filled by #77 — whole geocells (test) and whole COGs (val); see spatial_redundancy for the hazard it answers",
             "vegetation_column": "deferred with a Phase-2 trigger",
             "anisotropy_metric": "deferred with a downstream-task trigger",
         },

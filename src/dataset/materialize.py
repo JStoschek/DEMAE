@@ -822,7 +822,7 @@ def _tile_record(
         water_affected=catalog_row["water_affected"],
         coastline=catalog_row["coastline"],
         content_hash=ref.content_hash,
-        split=None,  # reserved; Phase 2 fills the geographic hold-out
+        split=None,  # filled after the build by `dataset.splits` (#77)
     )
 
 

@@ -31,6 +31,7 @@ uv run python -m dataset.frame       # fit + persist the standardization scaler 
 uv run python -m dataset.centroids   # fit + persist the k=20 stratum centroids (#41)
 uv run python -m dataset.select      # allocate + FSCS -> artifacts/phase_d/selection_debug_50k.csv
 uv run python -m dataset.materialize # full-res read of the selected windows -> data/corpus_50k/
+uv run python -m dataset.splits      # geographic train/val/test split -> artifacts/phase1/ (#77)
 ```
 
 `dataset.select` is **budget-parameterized** (`--budget`, default 50,000): it re-loads
@@ -43,6 +44,12 @@ Phase F spent that design: the **500,000-window scale tier** is the same command
 `--budget 500000 --out artifacts/phase_f/selection_scale_500k.csv`, drawn from the same
 two artifacts with no re-clustering, two runs byte-identical
 (`docs/research/f-scale-draw.md`).
+
+`dataset.splits` is the one Phase-1 stage in this list: it fills the manifest's `split`
+column once, geographically blocked and **never randomly** (the corpus card's §4.6
+warning), and commits the assignment as `artifacts/phase1/split_scale_500k.csv` plus the
+geocell/COG block lists. `--fill` is opt-in; the draw itself is safe to repeat and
+reproduces byte-for-byte (`docs/research/p77-split.md`).
 
 `dataset.materialize` is the **end-to-end build** (Phase E1) and replaces the retired
 ADR-0001 TRI-quintile CLI (`dataset.build` / `dataset.pipeline`). It groups the selection
