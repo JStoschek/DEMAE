@@ -19,7 +19,18 @@ made executable. This ticket (#89) lays the three foundations everything else st
   single check standing between DEMAE and silently pretraining on its own Phase-2 evaluation
   regions, a failure that would be invisible in every loss curve.
 
+On top of them, #90 lands the model itself:
+
+- :mod:`pretrain.model` — the MAE forward pass. A timm-blocks ViT encoder over the 49 visible
+  tokens, a shallow decoder over all 196, and the 75% masking that sits between them, in the
+  model rather than the loader exactly as ADR-0003 assumes.
+
 ``python -m pretrain`` prints the config + fingerprint header a real run would record.
+
+Note what this module re-exports and what it does not: :mod:`~pretrain.model` and
+:mod:`~pretrain.data` are imported from their own modules, because both pull in torch at import
+time and ``python -m pretrain`` — the header, which is pure config — should keep working on a
+box that has no CUDA stack at all.
 """
 
 from .config import RunConfig

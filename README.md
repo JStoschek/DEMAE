@@ -137,6 +137,7 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   config.py       # the frozen RunConfig — every plan §2-§8 knob + the config hash
   fingerprint.py  # dataset_version / selection md5 / split md5 / git SHA
   data.py         # split-aware Dataset; asserts no test geocell reaches a train batch
+  model.py        # the MAE forward pass — ViT encoder, shallow decoder, in-model masking
   header.py       # `python -m pretrain` — the config + fingerprint header a run records
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records

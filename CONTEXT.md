@@ -259,6 +259,14 @@ GitHub issue #1.
   reason* rather than raised — the fingerprint shipped before the split did — and "committed"
   requires both halves: the assignment artifact exists *and* the manifest column is filled on
   every row. A partly filled column is the dangerous shape and reads as absent.
+- **Visible tokens** — the 49 of 196 patches the encoder actually sees at 75% masking
+  (`pretrain.model`, [#90](https://github.com/JStoschek/DEMAE/issues/90)). This is the ~4x
+  pretraining discount the whole Phase-1 budget rests on, and it is why the **mask count**,
+  not just the ratio, is fixed at model construction: a count that varied per batch would make
+  every tensor shape in the model data-dependent and defeat `torch.compile(dynamic=False)`.
+  Masking lives in the *model*, never in the loader (ADR-0003), is drawn per sample and afresh
+  every step, and takes an optional generator so the val loss can pin its mask and stay
+  comparable across epochs. The ratio itself is a config knob — R2 ablates 90%.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

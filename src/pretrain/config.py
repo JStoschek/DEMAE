@@ -52,6 +52,18 @@ ENVIRONMENT: Final = {_ENVIRONMENT_KEY: True}
 CONFIG_HASH_CHARS: Final = 16
 
 
+def masked_token_count(n_patches: int, ratio: float) -> int:
+    """How many tokens a ratio hides — 147 of 196 at 0.75 (plan §3).
+
+    Lives at module scope because two places need the same answer and must not derive it
+    twice: :attr:`RunConfig.masked_tokens`, and :class:`pretrain.model.MaskedAutoencoder`,
+    which fixes the count at construction so `torch.compile(dynamic=False)` sees static
+    shapes (§7.3). A second copy of ``round(ratio * n)`` is a rounding disagreement waiting
+    to happen at some ratio nobody tested.
+    """
+    return int(round(ratio * n_patches))
+
+
 class _Frozen:
     """What every frozen piece of the config shares: a re-validating :meth:`replace`."""
 
@@ -463,7 +475,7 @@ class RunConfig(_Frozen):
     def masked_tokens(self) -> int:
         """Tokens hidden per sample. Fixed by construction at a fixed ratio, which is what
         keeps shapes static for `torch.compile(dynamic=False)` (§7.3)."""
-        return int(round(self.masking.ratio * self.architecture.n_patches))
+        return masked_token_count(self.architecture.n_patches, self.masking.ratio)
 
     # --- serialization
 
