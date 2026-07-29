@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from pretrain.config import RunConfig
+from pretrain.config import Architecture, RunConfig
 
 
 # --- The plan's cited defaults (§2-§8) ----------------------------------------
@@ -265,3 +265,63 @@ def test_two_continual_arms_from_two_checkpoints_do_not_share_a_hash():
     arm = cfg.replace(init=cfg.init.replace(mode="imagenet_mae", checkpoint="mae_vit_base.pth"))
     other = arm.replace(init=arm.init.replace(checkpoint="something_else.pth"))
     assert arm.config_hash != other.config_hash != cfg.config_hash
+
+
+# --- §8's continual arm (#102) -------------------------------------------------
+
+
+def test_the_r4_preset_is_r5_with_the_initialization_moved():
+    """R4 differs from R5 by the init, the schedule, and the positional axis order — no more.
+
+    The last of those is the one nobody would think to check: mmselfsup's fixed sin-cos PE is
+    the transpose of MAE's, and the weights R4 loads learned mmselfsup's
+    ([P102](../docs/research/p102-mmselfsup-mae-layout.md) §4).
+    """
+    r4 = RunConfig.vit_base_continual("openmmlab_mae_vit_b.pth")
+    r5 = RunConfig.vit_base()
+
+    assert r4.run_id == "R4"
+    assert r4.init.mode == "imagenet_mae"
+    assert r4.init.checkpoint == "openmmlab_mae_vit_b.pth"
+    assert r4.init.patch_embed_adapt == "sum"  # §8 is specific: sum, not mean
+    assert r4.architecture.pos_encoding == "sincos2d_rowfirst"
+    assert r5.architecture.pos_encoding == "sincos2d"  # R5's is untouched
+
+    # §12's R4 row, and §6's *rule* (5% warmup) rather than R1's 20 at a third the length.
+    assert (r4.schedule.epochs, r4.schedule.warmup_epochs) == (150, 8)
+    assert r4.schedule.milestones == (50, 100)  # 200 and 400 are past the end and drop
+
+    # The encoder shape, the decoder, the batch arithmetic and the LR are R5's exactly: the arm
+    # only means something if the recipe is held fixed.
+    assert r4.architecture.replace(pos_encoding="sincos2d") == r5.architecture
+    assert (r4.effective_batch, r4.lr) == (r5.effective_batch, r5.lr)
+    for group in ("masking", "loss", "runtime"):
+        assert getattr(r4, group) == getattr(r5, group)
+
+
+def test_the_r4_preset_takes_overrides_like_every_other_preset():
+    r4 = RunConfig.vit_base_continual("ckpt.pth", run_id="R4-mean")
+    assert r4.run_id == "R4-mean"
+    assert r4.init.checkpoint == "ckpt.pth"
+
+
+def test_the_positional_axis_order_is_part_of_the_recipe_hash():
+    # Two runs that read the same corpus with two different spatial conventions are two runs.
+    cfg = RunConfig.vit_base()
+    moved = cfg.replace(
+        architecture=cfg.architecture.replace(pos_encoding="sincos2d_rowfirst")
+    )
+    assert moved.config_hash != cfg.config_hash
+
+
+def test_an_unknown_positional_encoding_is_refused():
+    with pytest.raises(ValueError, match="unknown pos_encoding"):
+        Architecture(pos_encoding="learned")
+    # And it survives the dict round-trip, which is how an ablation's config file arrives.
+    with pytest.raises(ValueError, match="unknown pos_encoding"):
+        RunConfig.from_dict({"architecture": {"pos_encoding": "sincos2d_colfirst"}})
+
+
+def test_the_r4_config_round_trips_through_a_plain_dict():
+    r4 = RunConfig.vit_base_continual("openmmlab_mae_vit_b.pth")
+    assert RunConfig.from_dict(r4.to_dict()) == r4

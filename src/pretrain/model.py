@@ -46,8 +46,17 @@ them could only ever disagree with the config it was loaded under. GSD-aware PE 
 at a single 30 m GSD it has nothing to condition on.
 
 One thing in :func:`sincos2d_pos_embed` looks like a mistake and is not — the halves run
-column-then-row, matching MAE's, because §8's continual arm loads weights that learned that
-ordering. Its docstring has the whole argument.
+column-then-row, which is MAE's own order and not the obvious one. Its docstring has the whole
+argument.
+
+**Corrected 2026-07-29 (#102).** That default used to be justified here by "§8's continual arm
+loads weights that learned that ordering", and for the checkpoint §8 now names, *that is false*:
+mmselfsup's fixed sin-cos embedding is the row/column transpose of MAE's
+([P102](../../docs/research/p102-mmselfsup-mae-layout.md) §4). The ordering is therefore an
+:class:`~pretrain.config.Architecture` knob, MAE's remains the default for every scratch run, and
+R4 sets the other. The original reasoning — that from scratch the two orders are a harmless
+relabelling *and* that a warm start makes them anything but — was right; only the direction was
+wrong, and no test could have caught it because the claim was about a file nobody had read.
 """
 
 from __future__ import annotations
@@ -103,34 +112,60 @@ class MaeOutput(NamedTuple):
     ids_restore: Tensor
 
 
-def sincos2d_pos_embed(dim: int, grid_px: int) -> Tensor:
+#: The two legal axis orderings for :func:`sincos2d_pos_embed`, keyed by the value
+#: :attr:`Architecture.pos_encoding <pretrain.config.Architecture>` carries. Both put the same
+#: functions at the same frequencies on the two axes; they differ only in which half of the
+#: width holds which axis, which makes them each other's transpose over the patch grid.
+AXIS_ORDERS: Final = {"sincos2d": "col_row", "sincos2d_rowfirst": "row_col"}
+
+
+def sincos2d_pos_embed(dim: int, grid_px: int, *, axis_order: str = "col_row") -> Tensor:
     """Fixed 2D sin-cos positional embeddings for a CLS token plus a grid (§2.3).
 
     Returns ``(1, 1 + grid_px**2, dim)``: a leading row of **zeros for the CLS token**, which
     has no position — giving it one is a quiet way to make the pooled feature depend on where
     the grid starts — then one row per patch in the row-major order :meth:`patchify` cuts in.
 
-    Half the width encodes the column and half the row, each half the usual
+    Half the width encodes one axis and half the other, each half the usual
     sin/cos-over-geometric-frequencies pair, so ``dim`` must be divisible by 4.
 
-    **Column first, then row, is not arbitrary and must not be "tidied".** It is the order MAE
-    produces, via a `np.meshgrid(w, h)` whose default ``'xy'`` indexing makes its first
-    argument vary along the columns — a detail its own variable names (`emb_h` built from
-    `grid[0]`) actively obscure. From scratch the two orders are a relabelling and nothing
-    would ever surface the difference; §8's continual arm warm-starts a ViT-B from the official
-    ImageNet MAE checkpoint, whose weights learned *that* ordering, and feeding them the
-    transposed one would silently degrade the run that exists to answer "does warm-starting
-    help?". `test_the_positional_encoding_matches_maes_own_construction` is what pins it.
+    ## Which axis goes in the first half, and why it is a parameter
+
+    ``axis_order="col_row"`` — the default — puts the **column** in the first half. That is
+    MAE's own order, produced by a `np.meshgrid(w, h)` whose default ``'xy'`` indexing makes
+    its first argument vary along the columns, a detail its own variable names (`emb_h` built
+    from `grid[0]`) actively obscure. `test_the_positional_encoding_matches_maes_own_construction`
+    pins it.
+
+    ``axis_order="row_col"`` is the transpose, and it exists because **the checkpoint §8's
+    continual arm warm-starts from does not use MAE's order**. mmselfsup's
+    `build_2d_sincos_position_embedding` calls `torch.meshgrid`, whose default is ``'ij'`` and
+    not ``'xy'``, so its first half — named `out_w` — carries the *row*
+    ([P102](../../docs/research/p102-mmselfsup-mae-layout.md) §4, verified numerically).
+
+    From scratch the two orders are a harmless relabelling that no test would surface. Warm
+    starting, they are not: the weights learned one of them, and handing them the other makes
+    the encoder read every tile as its own transpose. So the order is chosen by config rather
+    than fixed here, and :func:`pretrain.init.load_mmselfsup_mae_encoder` asserts the model's
+    buffer against the checkpoint's own `pos_embed` tensor before it copies any weight.
     """
     if dim % 4:
         raise ValueError(f"sin-cos 2D needs dim divisible by 4, got {dim}")
-    # One quarter of the width per (axis, function) pair: col-sin, col-cos, row-sin, row-cos.
+    # Read off `AXIS_ORDERS` rather than spelled again: the legal set has one home, so the config
+    # vocabulary, the mapping and this check cannot drift into three slightly different lists.
+    if axis_order not in set(AXIS_ORDERS.values()):
+        raise ValueError(
+            f"unknown axis_order {axis_order!r} ({' | '.join(sorted(set(AXIS_ORDERS.values())))})"
+        )
+    # One quarter of the width per (axis, function) pair: sin and cos of the first axis, then
+    # sin and cos of the second.
     omega = 1.0 / 10_000 ** (torch.arange(dim // 4, dtype=torch.float64) / (dim // 4))
     coords = torch.arange(grid_px, dtype=torch.float64)
     row, col = torch.meshgrid(coords, coords, indexing="ij")
+    axes = (col, row) if axis_order == "col_row" else (row, col)
     halves = [
         torch.cat([torch.sin(angle), torch.cos(angle)], dim=1)
-        for angle in (torch.outer(axis.reshape(-1), omega) for axis in (col, row))
+        for angle in (torch.outer(axis.reshape(-1), omega) for axis in axes)
     ]
     grid = torch.cat(halves, dim=1).to(torch.float32)  # (grid_px**2, dim), row-major
     return torch.cat([torch.zeros(1, dim), grid], dim=0).unsqueeze(0)
@@ -217,8 +252,15 @@ class MaskedAutoencoder(nn.Module):
             )
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, encoder_dim))
+        #: Which half of the width carries which axis. A config value rather than a constant
+        #: because §8's warm start loads weights that learned mmselfsup's ordering, not MAE's
+        #: (P102 §4) — and because our positional buffers are *derived from the config*, so a
+        #: §11 resume on a fresh box has to be able to rebuild the same one.
+        axis_order = AXIS_ORDERS[arch.pos_encoding]
         self.register_buffer(
-            "pos_embed", sincos2d_pos_embed(encoder_dim, self.grid_px), persistent=False
+            "pos_embed",
+            sincos2d_pos_embed(encoder_dim, self.grid_px, axis_order=axis_order),
+            persistent=False,
         )
         self.blocks = nn.ModuleList(
             Block(
@@ -246,7 +288,10 @@ class MaskedAutoencoder(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
         self.register_buffer(
             "decoder_pos_embed",
-            sincos2d_pos_embed(decoder_dim, self.grid_px),
+            # The same ordering as the encoder's, always: the decoder is fresh so no weight
+            # constrains it, but a model whose two halves disagreed about which axis is which
+            # would be reconstructing patch (i, j) from position (j, i).
+            sincos2d_pos_embed(decoder_dim, self.grid_px, axis_order=axis_order),
             persistent=False,
         )
         self.decoder_blocks = nn.ModuleList(
@@ -402,6 +447,24 @@ class MaskedAutoencoder(nn.Module):
 
     # --- the forward pass
 
+    def embed_tokens(self, imgs: Tensor) -> Tensor:
+        """``(N, n_patches, encoder_dim)`` — patches projected and given their position.
+
+        The one place a token acquires a position, shared by the masked and unmasked passes
+        below. Two copies of "embed, then add the PE" is how one of them ends up adding
+        ``pos_embed`` including the CLS row, and only the reconstructions would show it.
+        """
+        self._check_tiles(imgs)
+        return self.patch_embed(imgs) + self.pos_embed[:, 1:, :]
+
+    def _transform(self, tokens: Tensor) -> Tensor:
+        """CLS in front, every block, final norm: ``(N, 1 + tokens, encoder_dim)``."""
+        cls_token = (self.cls_token + self.pos_embed[:, :1, :]).expand(tokens.shape[0], -1, -1)
+        x = torch.cat([cls_token, tokens], dim=1)
+        for block in self.blocks:
+            x = block(x)
+        return self.norm(x)
+
     def forward_encoder(
         self, imgs: Tensor, *, generator: torch.Generator | None = None
     ) -> tuple[Tensor, Tensor, Tensor]:
@@ -412,17 +475,22 @@ class MaskedAutoencoder(nn.Module):
         and each surviving token still knows where it came from.
 
         Public so the two halves can be driven apart, but note what it is *not*: it always
-        masks. §10.3's kNN probe wants a frozen encoder over all 196 tokens, so it cannot use
-        this as-is — that unmasked path belongs to #99, which owns the probe harness.
+        masks. Callers wanting frozen features over the whole tile want :meth:`encode`.
         """
-        self._check_tiles(imgs)
-        x = self.patch_embed(imgs) + self.pos_embed[:, 1:, :]
-        x, mask, ids_restore = random_masking(x, self.n_visible, generator=generator)
-        cls_token = (self.cls_token + self.pos_embed[:, :1, :]).expand(x.shape[0], -1, -1)
-        x = torch.cat([cls_token, x], dim=1)
-        for block in self.blocks:
-            x = block(x)
-        return self.norm(x), mask, ids_restore
+        tokens, mask, ids_restore = random_masking(
+            self.embed_tokens(imgs), self.n_visible, generator=generator
+        )
+        return self._transform(tokens), mask, ids_restore
+
+    def encode(self, imgs: Tensor) -> Tensor:
+        """Every token, nothing hidden: ``(N, 1 + n_patches, encoder_dim)``.
+
+        The frozen-feature view of a tile, and the *only* path here with no RNG in it at all —
+        which is what makes it usable as a measurement. #102's behavioural check reads it to
+        ask whether a warm-started encoder computes structure or garbage, and §10.3's kNN probe
+        wants the same tensor (the probe harness itself is #99's; this is just the pass).
+        """
+        return self._transform(self.embed_tokens(imgs))
 
     def forward_decoder(self, latent: Tensor, ids_restore: Tensor) -> Tensor:
         """Refill the hidden positions and reconstruct every patch: ``(N, n_patches, 256)``.

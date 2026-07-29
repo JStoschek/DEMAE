@@ -37,13 +37,22 @@ trains against:
   the loss entirely. Because those weights and their targets arrive by two different routes, the
   module also carries the check that they still describe the same pixels — the one #96 failure
   mode that is invisible in every curve.
+- :mod:`pretrain.init` — §8's warm start, the one thing R4 does that no other run does: read an
+  externally trained ImageNet MAE encoder in, collapse its RGB patch embed to one elevation
+  channel by summing, and leave the decoder fresh. Selected by a config flag, so the scratch
+  path has no branch in it. Most of the module is refusal: the state dicts do not match
+  key-for-key, so the mapping is written out and asserted total in *both* directions, and every
+  layout convention taken from mmselfsup is a checked claim with a source link rather than an
+  inference from a shape (#102, #103). That policy earned its keep immediately — their positional
+  embedding is the transpose of MAE's.
 
 ``python -m pretrain`` prints the config + fingerprint header a real run would record.
 
 Note what this module re-exports and what it does not: :mod:`~pretrain.model`,
-:mod:`~pretrain.data`, :mod:`~pretrain.augment` and :mod:`~pretrain.loss` are imported from
-their own modules, because each pulls in torch at import time and ``python -m pretrain`` — the
-header, which is pure config — should keep working on a box that has no CUDA stack at all.
+:mod:`~pretrain.data`, :mod:`~pretrain.augment`, :mod:`~pretrain.loss` and
+:mod:`~pretrain.init` are imported from their own modules, because each pulls in torch at import
+time and ``python -m pretrain`` — the header, which is pure config — should keep working on a
+box that has no CUDA stack at all.
 """
 
 from .config import RunConfig

@@ -79,6 +79,38 @@ def test_the_decoder_predicts_every_patch_not_only_the_masked_ones(vit_s, batch)
     assert vit_s(batch).pred.shape[1] == 196
 
 
+# --- The unmasked pass (what a probe and #102's behavioural check read) --------
+
+
+def test_encode_returns_every_token_with_no_masking(vit_s, batch):
+    latent = vit_s.encode(batch)
+    assert latent.shape == (BATCH, 197, 384)  # CLS + all 196, not CLS + 49
+
+
+def test_encode_draws_no_mask_so_it_repeats_exactly(vit_s, batch):
+    # `forward_encoder` deliberately varies every call; a frozen-feature reader needs the
+    # opposite, and a probe whose features moved between two calls would be measuring the RNG.
+    with torch.no_grad():
+        assert torch.equal(vit_s.encode(batch), vit_s.encode(batch))
+
+
+def test_encode_and_the_masked_encoder_share_one_embedding_step(vit_s, batch):
+    # The risk in adding a second entry point is a second copy of "embed, then add the PE".
+    # Both paths route through `embed_tokens`, so zeroing the encoder PE has to move both.
+    saved = vit_s.pos_embed.clone()
+    try:
+        with torch.no_grad():
+            before = vit_s.encode(batch)
+            masked_before, _, _ = vit_s.forward_encoder(batch, generator=_generator(21))
+            vit_s.pos_embed.zero_()
+            after = vit_s.encode(batch)
+            masked_after, _, _ = vit_s.forward_encoder(batch, generator=_generator(21))
+    finally:
+        vit_s.pos_embed.copy_(saved)
+    assert not torch.allclose(before, after)
+    assert not torch.allclose(masked_before, masked_after)
+
+
 # --- Masking ------------------------------------------------------------------
 
 
@@ -232,6 +264,52 @@ def test_the_positional_encoding_matches_maes_own_construction():
     axes = np.meshgrid(np.arange(14, dtype=np.float32), np.arange(14, dtype=np.float32))
     reference = np.concatenate([mae_1d(192, axes[0]), mae_1d(192, axes[1])], axis=1)
     assert np.allclose(sincos2d_pos_embed(384, 14)[0, 1:].numpy(), reference, atol=1e-6)
+
+
+def test_the_axis_order_is_a_knob_and_the_two_orders_are_one_transpose():
+    """#102's finding: mmselfsup's sin-cos PE is MAE's with the two axis halves swapped.
+
+    Recorded here as a property of *our* constructor — that the second order is reachable and
+    is exactly the transpose. That mmselfsup's own function produces it is
+    `tests/test_pretrain_init.py`'s job, since that is a claim about the checkpoint's source
+    ([P102](../docs/research/p102-mmselfsup-mae-layout.md) §4).
+    """
+    grid = 14
+    mae_order = sincos2d_pos_embed(384, grid)
+    row_first = sincos2d_pos_embed(384, grid, axis_order="row_col")
+    assert not torch.allclose(mae_order, row_first)
+
+    patches = mae_order[:, 1:].reshape(1, grid, grid, 384).transpose(1, 2)
+    transposed = torch.cat([mae_order[:, :1], patches.reshape(1, grid * grid, 384)], dim=1)
+    assert torch.allclose(row_first, transposed, atol=1e-6)
+    # Same functions, same frequencies — only which half carries which axis moves.
+    assert torch.allclose(
+        mae_order.flatten().sort().values, row_first.flatten().sort().values, atol=1e-6
+    )
+
+
+def test_an_unknown_axis_order_is_refused():
+    with pytest.raises(ValueError, match="axis_order"):
+        sincos2d_pos_embed(384, 14, axis_order="col_major")
+
+
+def test_the_axis_order_reaches_both_positional_buffers_from_the_config():
+    # R4 warm-starts weights that learned the row-first ordering, so the model has to be able
+    # to hold that convention — and hold it in *both* buffers, or the encoder and the decoder
+    # would disagree about which axis is which halfway through one forward pass.
+    cfg = RunConfig.vit_base()
+    row_first = cfg.replace(
+        architecture=cfg.architecture.replace(pos_encoding="sincos2d_rowfirst")
+    )
+    model = MaskedAutoencoder.from_config(row_first)
+    assert torch.equal(model.pos_embed, sincos2d_pos_embed(768, 14, axis_order="row_col"))
+    assert torch.equal(
+        model.decoder_pos_embed, sincos2d_pos_embed(512, 14, axis_order="row_col")
+    )
+    # And the default is unmoved: R1/R5 keep MAE's own ordering.
+    assert torch.equal(
+        MaskedAutoencoder.from_config(cfg).pos_embed, sincos2d_pos_embed(768, 14)
+    )
 
 
 def test_the_positional_encoding_is_fixed_not_learned(vit_s):

@@ -328,6 +328,35 @@ GitHub issue #1.
   affine, so every invalid pixel in a tile leaves normalization carrying one identical value; a
   mask that no longer selects exactly that set has drifted. The check is **off the hot path** (it
   syncs the device and breaks the compile graph) and belongs to the R0 pre-flight and the tests.
+- **Continual init** — warm-starting R4's ViT-B encoder from an externally trained ImageNet MAE
+  instead of from scratch (`pretrain.init`, [#102](https://github.com/JStoschek/DEMAE/issues/102),
+  plan §8). It is **a config flag, not a code path**: `init.mode` is `scratch` for R1/R2/R3/R5 and
+  `imagenet_mae` for R4, and the scratch runs go through the same call, which does nothing. The
+  checkpoint is OpenMMLab's Apache-2.0 reproduction, not Meta's official release — [P101](docs/research/p101-mae-checkpoint-licence.md)
+  found the official file's licence ambiguous in a way that cannot be resolved by asking, and an
+  unresolvable ambiguity under a released artifact is the wrong kind of risk to carry. Three
+  things happen: the RGB patch-embed kernel is collapsed to one channel by **summing** (not
+  averaging — summing reproduces the 3-channel convolution exactly on a matched input, averaging
+  reproduces a third of it, so the pretrained blocks downstream receive the activation scale they
+  were trained on), the decoder is left fresh, and every encoder parameter is asserted to have
+  been populated by name. No `strict=False` anywhere: a load that silently skips half the weights
+  trains fine, descends, and produces an R4 that performs like R1 — which is the one question the
+  arm exists to answer.
+- **Layout convention** — the answer to "which tensor goes in which slot, and in what order",
+  for a warm start. The rule, set by [#103](https://github.com/JStoschek/DEMAE/issues/103) and
+  discharged by [P102](docs/research/p102-mmselfsup-mae-layout.md): **read it from the source
+  implementation and write it down as a checked claim with a link — never infer it from tensor
+  shapes.** "Their `qkv` is fused q,k,v, untransposed, per `<link>`" is checkable; "a (2304, 768)
+  tensor fits a (2304, 768) slot" is not evidence of anything. The class of bug this guards is
+  weights landing in right-shaped wrong slots: every name populates, every shape matches, every
+  assertion passes, and the encoder computes garbage. It is not hypothetical — mmselfsup's fixed
+  sin-cos positional embedding turned out to be the **row/column transpose** of MAE's, because
+  `torch.meshgrid` defaults to `'ij'` and `np.meshgrid` to `'xy'`. From scratch the two orders are
+  a harmless relabelling no test would surface; warm-starting, the weights learned one of them.
+  Where an oracle exists it beats a claim — the loader reconstructs the checkpoint's own
+  `pos_embed` and compares 151,296 floats before copying a single weight — and where one does
+  not, the honest position is that a **behavioural** check has measured power and usually less
+  than hoped (P102 §6.1: two of eight scrambles caught).
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

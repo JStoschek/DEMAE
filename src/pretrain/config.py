@@ -52,6 +52,19 @@ ENVIRONMENT: Final = {_ENVIRONMENT_KEY: True}
 CONFIG_HASH_CHARS: Final = 16
 
 
+#: §2.3's positional encodings, both fixed 2D sin-cos and differing *only* in which half of the
+#: width carries which axis — they are each other's transpose over the patch grid.
+#: ``sincos2d`` is MAE's own order (column first) and the default everywhere. ``sincos2d_rowfirst``
+#: is mmselfsup's (row first), and it exists because §8's continual arm warm-starts from
+#: mmselfsup's checkpoint, whose weights learned that order: `torch.meshgrid` defaults to ``'ij'``
+#: where `np.meshgrid` defaults to ``'xy'``, and MAE and mmselfsup each wrote the obvious code in
+#: their own library ([P102](../../docs/research/p102-mmselfsup-mae-layout.md) §4). Named here
+#: rather than in :mod:`pretrain.model` because this module is the torch-free one and a run's
+#: recipe knobs have one home; `pretrain.model.AXIS_ORDERS` maps these onto the constructor's
+#: argument and a test pins that the two lists agree.
+POS_ENCODINGS: Final = ("sincos2d", "sincos2d_rowfirst")
+
+
 def masked_token_count(n_patches: int, ratio: float) -> int:
     """How many tokens a ratio hides — 147 of 196 at 0.75 (plan §3).
 
@@ -120,9 +133,15 @@ class Architecture(_Frozen):
     in_chans: int = len(dataset_config.INPUT_CHANNELS)
     #: §2.3 — fixed 2D sin-cos, MAE's default. GSD-aware PE (Scale-MAE) is deferred to Phase 4:
     #: the corpus is single-GSD by construction, so GSDPE has nothing to condition on yet.
+    #: One of :data:`POS_ENCODINGS`: the second value is the same encoding with the two axis
+    #: halves swapped, and it exists for §8's warm start alone (see :data:`POS_ENCODINGS`).
     pos_encoding: str = "sincos2d"
 
     def __post_init__(self) -> None:
+        if self.pos_encoding not in POS_ENCODINGS:
+            raise ValueError(
+                f"unknown pos_encoding {self.pos_encoding!r} (§2.3: {list(POS_ENCODINGS)})"
+            )
         if self.img_px % self.patch_px:
             raise ValueError(f"patch_px {self.patch_px} does not divide img_px {self.img_px}")
         for what, dim, heads in (
@@ -379,7 +398,16 @@ class Init(_Frozen):
 
     #: §8 — the main and release runs start from scratch: "elevation-only, from scratch,
     #: reproducible" is part of the project's positioning. `imagenet_mae` is R4's continual
-    #: arm (#86/#102), ViT-B only — no official ViT-S MAE checkpoint exists.
+    #: arm (#86/#102), ViT-B only — no ViT-S MAE checkpoint exists at any provenance.
+    #:
+    #: **This is the flag §8 asks the two arms to differ by.** R4 and R5 run the same code path:
+    #: `pretrain.init.initialize_from_config` is a no-op at `scratch` and the warm start at
+    #: `imagenet_mae`, so nothing about the scratch runs moves to make the continual one
+    #: possible. The checkpoint named is OpenMMLab's Apache-2.0 reproduction, not the official
+    #: release — plan §8's 2026-07-29 amendment, evidence in
+    #: [P101](../../docs/research/p101-mae-checkpoint-licence.md). The name is kept as
+    #: `imagenet_mae` rather than renamed to its publisher: what the mode selects is "an
+    #: ImageNet MAE encoder", and :attr:`checkpoint` is what says whose.
     mode: str = "scratch"
     #: Hashed, unlike the other paths in this config: *which* checkpoint an arm warm-starts
     #: from is the arm, so two continual runs from two checkpoints must not tag one W&B run.
@@ -430,12 +458,46 @@ class RunConfig(_Frozen):
     init: Init = field(default_factory=Init)
 
     def __post_init__(self) -> None:
-        # The one constraint no single group can see: §8's continual arm is ViT-B only, and it
+        # The constraints no single group can see. §8's continual arm is ViT-B only, and it
         # needs a checkpoint to continue from.
         if self.init.mode == "imagenet_mae" and self.init.checkpoint is None:
             raise ValueError("init.mode 'imagenet_mae' needs init.checkpoint (§8)")
 
     # --- presets
+
+    @classmethod
+    def vit_base_continual(cls, checkpoint: str, **changes) -> RunConfig:
+        """R4 — the ViT-B/16 continual arm, warm-started from an ImageNet MAE (§8, §12).
+
+        :meth:`vit_base` with four knobs moved, and the fourth is the one nobody would think to
+        move:
+
+        1. ``init.mode = 'imagenet_mae'`` with ``checkpoint`` — the arm itself.
+        2. **150 epochs**, §12's R4 row, against R5's 400.
+        3. ``warmup_epochs = 8``, because §6's rule is *5% of the schedule* and inheriting R1's
+           20 would make it 13% of a schedule a third the length. The rule is the cited thing;
+           the 20 is what the rule produces at 400 epochs.
+        4. ``pos_encoding = 'sincos2d_rowfirst'``, because mmselfsup's fixed sin-cos positional
+           embedding is the **transpose** of MAE's and these weights learned mmselfsup's
+           ([P102](../../docs/research/p102-mmselfsup-mae-layout.md) §4). Nothing about the
+           weights would tell you: every name and every shape matches under either ordering.
+           :func:`pretrain.init.load_mmselfsup_mae_encoder` refuses a model whose buffer
+           disagrees with the checkpoint's own `pos_embed`, so this cannot be forgotten
+           silently — but it is set here so the R4 config is right by construction, and so a
+           §11 resume rebuilds the same buffer from the same config.
+
+        Everything else is R5's, deliberately: the whole point of the arm is that the *recipe*
+        is held fixed and only the initialization moves.
+        """
+        base = cls.vit_base().replace(
+            run_id="R4",
+            init=Init(mode="imagenet_mae", checkpoint=checkpoint),
+            schedule=Schedule(epochs=150, warmup_epochs=8),
+        )
+        base = base.replace(
+            architecture=base.architecture.replace(pos_encoding="sincos2d_rowfirst")
+        )
+        return base.replace(**changes) if changes else base
 
     @classmethod
     def vit_base(cls, **changes) -> RunConfig:

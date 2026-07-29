@@ -44,6 +44,11 @@ def format_header(config: RunConfig, fingerprint: DataFingerprint) -> str:
         "",
         f"encoder          {a.encoder_dim}d x {a.encoder_depth} ({a.encoder_heads} heads), "
         f"patch {a.patch_px}, {a.n_patches} tokens, in_chans {a.in_chans}",
+        # `pos_encoding` earns a line of its own because R4 and R5 differ by it and by almost
+        # nothing else (#102): mmselfsup's sin-cos embedding is the transpose of MAE's, so the
+        # continual arm holds a different spatial convention from every scratch run. A knob two
+        # arms disagree on unseen is the thing this header exists to make visible.
+        f"positional       {a.pos_encoding}",
         f"decoder          {a.decoder_dim}d x {a.decoder_depth} ({a.decoder_heads} heads) "
         f"-> {a.patch_dim} per patch",
         f"masking          {config.masking.ratio:.0%} {config.masking.strategy} — "
