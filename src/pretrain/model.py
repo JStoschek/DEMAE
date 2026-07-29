@@ -413,7 +413,7 @@ class MaskedAutoencoder(nn.Module):
 
         Public so the two halves can be driven apart, but note what it is *not*: it always
         masks. §10.3's kNN probe wants a frozen encoder over all 196 tokens, so it cannot use
-        this as-is — that unmasked path belongs to #94, which owns the probe.
+        this as-is — that unmasked path belongs to #99, which owns the probe harness.
         """
         self._check_tiles(imgs)
         x = self.patch_embed(imgs) + self.pos_embed[:, 1:, :]
