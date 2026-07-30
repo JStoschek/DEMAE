@@ -464,6 +464,51 @@ GitHub issue #1.
   but a **half-written one that loads**: a resume from it comes back with weights partly from
   the previous step, and nothing about the run looks wrong. The temporary name is hidden and
   outside the discovery glob, because a hard kill leaves it behind with no chance to clean up.
+- **Fixed val mask seed** — the committed seed the val pass masks under
+  (`pretrain.config.VAL_MASK_SEED`, plan §10.1 and §15's checklist item 3). MAE's masking is a
+  fresh random draw per sample per step, so a val loss scored under fresh masks moves for
+  reasons that have nothing to do with the model, and comparing two epochs compares two
+  measurements. Pinning the draw is what makes the number comparable epoch to epoch, across
+  runs, and across ablation arms — and it is half of what §10's standing decision rule
+  adjudicates on (the kNN probe trend is the other half). Deliberately **not** `runtime.seed`:
+  re-seeding a run to sample the same recipe twice must not move the ruler. The pass takes an
+  *explicit* generator rather than seeding the ambient RNG, so measuring a run cannot perturb
+  the masks its next training step draws.
+- **Per-patch loss distribution** — plan §4's log (the issue calls it §10.4; §10.4 is the throughput dashboard), and the only thing that can answer §4's
+  variance-floor rule: *if the top tail is dominated by near-flat patches, raise the floor before
+  concluding anything about the model.* That is a question about the **joint** distribution of
+  loss and flatness, so `pretrain.monitor.LossHistogram` cross-tabs the two — a run can have 40%
+  near-flat patches whose tail is all real terrain, or 4% that are the whole tail, and those call
+  for opposite actions. Binned logarithmically because the structure is at both ends, and
+  accumulated over the val pass only: reading per-patch tensors in the training loop is a device
+  sync per step for a diagnostic read once an epoch. The bottom bin is load-bearing on its own —
+  a **broken `norm_pix` target** puts every patch in it, which is the one collapse the alarms
+  structurally cannot catch (see **Alarm**).
+- **Alarm** — a §10.1 failure condition wired to fire, as opposed to written down
+  (`pretrain.alarms`). Four: *collapse toward zero* (the broken-`norm_pix` symptom), *val rising
+  while train falls* (overfitting, plausible here because the corpus card §4.6 warns the
+  effective dataset is smaller than 500k), *a plateau at high loss inside the first 20 epochs*
+  (an LR or normalization bug, adjudicated where §6's warmup reaches peak LR), and the
+  **loader wait fraction** over ~10%. Each carries an epoch, a message with the numbers that
+  fired it, and an action — `stop` or `watch` — which is advice: nothing kills a run on its own
+  reading of a threshold. Thresholds are fractions of the run's **own first epoch**, never
+  absolutes, because the loss scale is a recipe knob (R3 ablates `norm_pix` off and scores
+  something else entirely). The stated cost of that choice: a run already broken at epoch 0 has
+  a broken baseline and no ratio against it fires — which is what the per-patch distribution's
+  bottom bin covers instead.
+- **Metrics sink** — `pretrain.sink`, whose interface is `RunLogger` (`MemoryLogger` in
+  process, `WandbLogger` against W&B, `open_run_logger` to build one): the one seam every
+  monitoring payload goes through
+  (plan §11: *the box holds nothing unique*). Payload-typed — a number, a `Histogram` or an
+  `Image` — because two of its three consumers do not emit scalars: #98's reconstruction grids
+  and #99's probe trends write into it beside #97's losses, on one shared **step axis, which is
+  the epoch**. Built against W&B's **offline** mode by default: a local run directory, no
+  account, no network, `wandb sync` later — which decouples the code from the ops account and is
+  the better test target anyway. Online is the same code with one environment field moved. Every
+  run carries §15.7's four tags — git SHA, config hash, selection-list md5, split md5 — derived
+  from the config and the fingerprint rather than typed, and an uncommitted split tags as
+  `split:absent` rather than going missing, because the two are indistinguishable afterwards and
+  the absent case is the dangerous one.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

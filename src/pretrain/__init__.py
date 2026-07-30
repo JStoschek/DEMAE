@@ -73,6 +73,27 @@ levers, and the command that applies them:
   these are the numbers that gate is read in. #97 builds the dashboard and the ~10% alarm on
   top of them.
 
+#97 is the scalar layer of plan §10 — what a run *reports*, and what fires when the numbers go
+wrong. MAE gives few in-flight signals, so these are the ones that exist:
+
+- :mod:`pretrain.sink` — where every number, histogram and rendered grid goes (§11), and the
+  seam #98's reconstruction grids and #99's probe trends write into as well. Payload-typed
+  rather than ``dict[str, float]`` precisely because two of its three consumers do not emit
+  scalars, and the step axis is the **epoch**, shared. Built against W&B's **offline** mode: no
+  account, no network, so the whole logging path is exercisable without waiting on #80's ops
+  deliverable, and the online target is one config field away.
+- :mod:`pretrain.alarms` — §10.1's three conditions as things that fire rather than sentences in
+  a document: collapse toward zero (the broken-`norm_pix`-target symptom), val rising while train
+  falls, and a plateau at high loss in the first 20 epochs — plus §10.4's ~10% loader-wait
+  threshold. Pure functions over trajectories, so each one is fired on a synthetic curve built
+  to trigger it and held quiet on one built not to. Thresholds are fractions of the run's own
+  first epoch, because the loss scale is a recipe knob (R3 ablates `norm_pix` off).
+- :mod:`pretrain.monitor` — the epoch boundary: the **fixed-mask-seed val pass** that makes
+  §10.1's val loss comparable at all, §4's per-patch loss distribution cross-tabbed against
+  patch flatness (which is what §4's variance-floor rule is actually adjudicated on, and a mean
+  cannot answer), the throughput panel over #95's counters, and the alarms checked on the epoch
+  series. ``python -m pretrain.monitor --epochs N`` runs it against a real corpus.
+
 ``python -m pretrain`` prints the config + fingerprint header a real run would record;
 ``python -m pretrain.train --steps N`` runs the bare loop. **``python -m pretrain.launch`` is
 how a run is actually started** (:mod:`pretrain.launch`): a config file plus repeatable

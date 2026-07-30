@@ -15,8 +15,7 @@ import sys
 
 import pytest
 
-from pretrain.config import Architecture, RunConfig
-
+from pretrain.config import VAL_MASK_SEED, Architecture, Monitoring, RunConfig, Runtime
 
 # --- The plan's cited defaults (§2-§8) ----------------------------------------
 
@@ -255,6 +254,12 @@ def test_only_the_environment_fields_are_left_out_of_the_hash():
         "data.corpus_dir",
         "data.split_assignment_path",
         "data.split_blocks_path",
+        # #97: where the metrics go — which project, whose account, which directory, online or
+        # offline — is the ops account (#80) and the box, not the objective.
+        "monitoring.wandb_mode",
+        "monitoring.wandb_project",
+        "monitoring.wandb_entity",
+        "monitoring.wandb_dir",
     }
 
 
@@ -325,3 +330,68 @@ def test_an_unknown_positional_encoding_is_refused():
 def test_the_r4_config_round_trips_through_a_plain_dict():
     r4 = RunConfig.vit_base_continual("openmmlab_mae_vit_b.pth")
     assert RunConfig.from_dict(r4.to_dict()) == r4
+
+
+# --- §10 Monitoring (#97) ------------------------------------------------------
+
+
+def test_the_val_mask_seed_is_committed_and_is_not_the_run_seed():
+    # §15.3 asks for a *committed* fixed val mask seed. The property that makes the val loss
+    # comparable is that it does not move when anything else does — including a re-seeded
+    # training stream, which is the obvious thing to reach for when sampling a recipe twice.
+    m = RunConfig().monitoring
+    assert m.val_mask_seed == VAL_MASK_SEED
+    assert m.val_mask_seed != RunConfig().runtime.seed
+    reseeded = RunConfig().replace(runtime=Runtime(seed=RunConfig().runtime.seed + 1))
+    assert reseeded.monitoring.val_mask_seed == m.val_mask_seed
+
+
+def test_the_monitoring_thresholds_are_the_ones_10_1_and_10_5_are_written_against():
+    m = RunConfig().monitoring
+    assert m.plateau_by_epoch == 20  # §10.1: "a plateau at high loss in the first 20 epochs"
+    assert m.loader_wait_alarm == 0.10  # §10.4 / §7.5: the stop-and-fix threshold
+
+
+def test_the_measurement_is_recipe_and_the_sink_is_environment():
+    # Two runs scoring val under different masks, or alarming at different loss levels, are two
+    # experiments; two runs reporting to two W&B projects are one.
+    cfg = RunConfig()
+    remeasured = cfg.replace(monitoring=cfg.monitoring.replace(val_mask_seed=1))
+    realarmed = cfg.replace(monitoring=cfg.monitoring.replace(loader_wait_alarm=0.2))
+    resunk = cfg.replace(
+        monitoring=cfg.monitoring.replace(wandb_mode="online", wandb_project="somewhere-else")
+    )
+    assert len({cfg.config_hash, remeasured.config_hash, realarmed.config_hash}) == 3
+    assert resunk.config_hash == cfg.config_hash
+    assert resunk.to_dict() != cfg.to_dict()  # but still recorded
+
+
+def test_the_monitoring_group_round_trips_and_refuses_a_typo():
+    cfg = RunConfig.from_dict({"monitoring": {"wandb_mode": "disabled"}})
+    assert cfg.monitoring.wandb_mode == "disabled"
+    assert RunConfig.from_dict(cfg.to_dict()) == cfg
+    with pytest.raises(ValueError, match="unknown monitoring knob"):
+        RunConfig.from_dict({"monitoring": {"wandb_online": True}})
+
+
+@pytest.mark.parametrize(
+    "changes, match",
+    [
+        ({"wandb_mode": "local"}, "unknown wandb_mode"),
+        ({"per_patch_tail_quantile": 1.0}, "per_patch_tail_quantile"),
+        ({"collapse_frac": 0.0}, "collapse_frac"),
+        # Below 1 every epoch of a healthy run is a "sudden collapse", so the alarm would fire
+        # continuously from step one and be turned off within the hour.
+        ({"collapse_drop_factor": 0.5}, "must exceed 1"),
+        ({"overfit_patience": 0}, "overfit_patience"),
+        ({"overfit_min_rise": -0.1}, "overfit_min_rise"),
+        ({"plateau_by_epoch": 0}, "epoch counts"),
+        ({"plateau_window": 0}, "epoch counts"),
+        ({"plateau_frac": 0.0}, "plateau_frac"),
+        ({"plateau_min_improvement": -1.0}, "plateau_min_improvement"),
+        ({"loader_wait_alarm": 1.0}, "loader_wait_alarm"),
+    ],
+)
+def test_a_threshold_that_could_not_fire_is_refused(changes, match):
+    with pytest.raises(ValueError, match=match):
+        Monitoring(**changes)

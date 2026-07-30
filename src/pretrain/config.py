@@ -40,9 +40,19 @@ from typing import Any, Final
 from dataset import config as dataset_config
 
 #: Marks a field as *where the run happens* rather than *what it does*: recorded in the
-#: config, excluded from :attr:`RunConfig.config_hash`. Four fields carry it — ``run_id`` and
-#: the three paths in :class:`Data` — and marking a fifth is a decision, not a convenience,
-#: because every field marked here is a knob two different recipes could disagree on unseen.
+#: config, excluded from :attr:`RunConfig.config_hash`. Eight fields carry it — ``run_id``, the
+#: three paths in :class:`Data`, and the four W&B settings in :class:`Monitoring` — and marking
+#: a ninth is a decision, not a convenience, because every field marked here is a knob two
+#: different recipes could disagree on unseen.
+#:
+#: The four :class:`Monitoring` ones were added by #97 with the same argument the paths carry,
+#: and it is worth stating rather than inheriting: *which* W&B project a run reports to, under
+#: which account, in which directory, and whether it reports online or offline are all facts
+#: about the box and the ops account (#80), not about the objective. Plan §11's resume on a
+#: fresh vast.ai instance and the offline-then-online switch §10 is built against would both
+#: read as a recipe change otherwise. What the run *measured* — the fixed val mask seed and
+#: every alarm threshold — is hashed, because two runs that alarm at different loss levels are
+#: not the same experiment.
 _ENVIRONMENT_KEY: Final = "environment"
 ENVIRONMENT: Final = {_ENVIRONMENT_KEY: True}
 
@@ -63,6 +73,12 @@ CONFIG_HASH_CHARS: Final = 16
 #: recipe knobs have one home; `pretrain.model.AXIS_ORDERS` maps these onto the constructor's
 #: argument and a test pins that the two lists agree.
 POS_ENCODINGS: Final = ("sincos2d", "sincos2d_rowfirst")
+
+#: §11's sink modes, and they are W&B's own strings rather than a translation of them:
+#: ``offline`` writes a local run directory with no account and no network, ``online`` streams
+#: to the project #80 provisions, ``disabled`` makes every log call a no-op. The default is
+#: ``offline`` — see :class:`Monitoring`.
+WANDB_MODES: Final = ("offline", "online", "disabled")
 
 
 def masked_token_count(n_patches: int, ratio: float) -> int:
@@ -427,6 +443,148 @@ class Init(_Frozen):
             )
 
 
+# --- §10 Monitoring -----------------------------------------------------------
+
+#: §15.3's **committed** fixed val masking seed, and the reason it is a named constant rather
+#: than a number in a default: the checklist item is "the fixed val mask seed is committed", so
+#: it wants one value with one home that a reader can point at. Deliberately *not*
+#: :attr:`Runtime.seed` — the val mask must not move when a run re-seeds its training stream to
+#: get a second sample of the same recipe, or the two runs' val losses stop being comparable,
+#: which is the entire property §10.1 asks for. The digits read as "DEAE §10.1".
+#:
+#: (#97's issue body cites this as checklist item **4**; the plan's item 4 is kill-and-resume
+#: (#94) and item 3 is "Fixed val panel … and fixed val mask seed committed". The plan is the
+#: source, so §15.3 is what this and every other reference here cites.)
+VAL_MASK_SEED: Final = 0xDEAE_10_1
+
+
+@dataclass(frozen=True)
+class Monitoring(_Frozen):
+    """What a run reports every epoch, what fires on it, and where it goes (plan §10, §11).
+
+    Two kinds of field, split by the hash. The **measurement** — the val mask seed and every
+    alarm threshold — is recipe: two runs that score val under different masks, or that alarm
+    at different loss levels, are not the same experiment and must not share a
+    :attr:`RunConfig.config_hash`. The **sink** — the four ``wandb_*`` fields — is environment,
+    for the reasons :data:`ENVIRONMENT` gives.
+
+    Every threshold below is a judgment call and none of them is cited: plan §10.1 names three
+    *conditions* ("sudden collapse toward zero", "val rising while train falls", "a plateau at
+    high loss in the first 20 epochs") and no numbers at all. The numbers are here, with the
+    argument for each on the field, because a condition with no threshold is a sentence in a
+    document rather than something that fires — which is the distinction this whole group
+    exists to close.
+    """
+
+    #: §10.1, §15.3 — the seed the val pass masks under. See :data:`VAL_MASK_SEED`.
+    #:
+    #: There is deliberately **no** ``val_every_epochs`` beside it. §10.1 says "train loss + val
+    #: loss **every epoch**" without qualification, and a cadence knob would take §4's
+    #: per-patch distribution and the val-side collapse alarm off the intervening epochs with
+    #: it — a gap in the diagnosis to save one inference pass over ~10k tiles.
+    val_mask_seed: int = VAL_MASK_SEED
+
+    # --- §4's per-patch loss distribution
+    #: The "top tail" of the per-patch loss distribution that §4's rule adjudicates: *if the
+    #: top tail is dominated by near-flat patches, raise the variance floor before concluding
+    #: anything about the model.* The top decile is a tail wide enough to be estimated from one
+    #: val pass and narrow enough that "dominated by" means something.
+    per_patch_tail_quantile: float = 0.90
+
+    # --- §10.1's three alarms
+    #: **Collapse toward zero.** Expressed as a fraction of the run's *first* recorded epoch
+    #: loss rather than as an absolute number, because the loss scale is a recipe knob: with
+    #: `norm_pix` on the target is unit-variance per patch and an untrained model sits near
+    #: 1.0, while R3 (#84) ablates it off and scores raw metres-in-sigma. A run 50x below where
+    #: it started is not learning terrain; it is the broken-`norm_pix`-target symptom
+    #: (transformers issue 29416), where the target measures as identically flat and predicting
+    #: zero is exactly right.
+    collapse_frac: float = 0.02
+    #: The *sudden* half of the same condition. A real MAE curve drops fast in warmup and then
+    #: decays for hundreds of epochs; a 10x fall between two consecutive epochs is not a
+    #: learning rate finding its feet, it is the target changing underneath the model.
+    collapse_drop_factor: float = 10.0
+    #: **Val rising while train falls.** How many **epochs** past the val minimum the loss has
+    #: to have stayed above it. Ten epochs is 2.5% of the 400-epoch schedule — long enough that
+    #: the noise in a ~10k-tile val pass cannot trip it, short enough to leave hundreds of
+    #: epochs of GPU time to save. Measured in epochs rather than in val *points* so the number
+    #: keeps meaning what this docstring says whatever cadence a run scores val on.
+    overfit_patience: int = 10
+    #: How far above its own best val loss has to have risen before that patience counts.
+    #: Without it a run that has genuinely converged — val flat at its minimum, train still
+    #: creeping down — alarms as overfitting, which is the one false positive that would teach
+    #: people to ignore this alarm.
+    overfit_min_rise: float = 0.02
+
+    #: **A plateau at high loss in the first 20 epochs**, §10.1's LR/normalization-bug signal.
+    #: The epoch it is adjudicated at; §6's warmup is 20 epochs, so this reads the curve exactly
+    #: where the LR first reaches its peak and a model that is going to learn has started to.
+    plateau_by_epoch: int = 20
+    #: "High" — still within 10% of where the run started. A model whose LR is wrong or whose
+    #: normalization is broken sits at the loss of predicting each patch's own mean and does not
+    #: leave; one that is training has taken a visible bite out of that by epoch 20.
+    plateau_frac: float = 0.90
+    #: "Plateau" — the relative improvement over :attr:`plateau_window` that counts as movement.
+    plateau_min_improvement: float = 0.01
+    #: How many epochs back "still improving" is measured over. Five is short enough to read
+    #: inside §6's 20-epoch warmup and long enough that one noisy epoch does not clear the bar.
+    plateau_window: int = 5
+
+    # --- §10.4's throughput dashboard
+    #: §7.5 and §10.4's stop-and-fix threshold: fraction of wall-clock the step spends waiting
+    #: for the loader. The loader is the plan's #1 named risk — DailyMAE got 5.8x end-to-end
+    #: from IO alone — and 10% is the point past which the GPU dollars are buying idle time.
+    loader_wait_alarm: float = 0.10
+
+    # --- §11's sink (environment, not recipe)
+    #: `offline` writes the whole run to a local directory with no account and no network, and
+    #: is the default *and the test target*: it keeps this code off the critical path of #80's
+    #: ops provisioning, and R0 (#81) is where a real project first receives a run. `disabled`
+    #: drops the sink entirely, for a unit test or a laptop.
+    wandb_mode: str = field(default="offline", metadata=ENVIRONMENT)
+    #: The W&B project runs report into. #80's ops deliverable; the default is a placeholder
+    #: that an offline run never contacts and R0 (#81) is where a real one is first used.
+    wandb_project: str = field(default="demae-phase1", metadata=ENVIRONMENT)
+    #: The W&B team/user the project lives under. ``None`` means the account's default, which
+    #: is what an offline run has.
+    wandb_entity: str | None = field(default=None, metadata=ENVIRONMENT)
+    #: Where offline runs are written. ``None`` means the process's working directory, i.e.
+    #: `./wandb/`, which is W&B's own default.
+    wandb_dir: str | None = field(default=None, metadata=ENVIRONMENT)
+
+    def __post_init__(self) -> None:
+        if self.wandb_mode not in WANDB_MODES:
+            raise ValueError(f"unknown wandb_mode {self.wandb_mode!r} (one of {WANDB_MODES})")
+        if not 0.0 < self.per_patch_tail_quantile < 1.0:
+            raise ValueError(
+                f"per_patch_tail_quantile {self.per_patch_tail_quantile} must lie in (0, 1)"
+            )
+        if not 0.0 < self.collapse_frac < 1.0:
+            raise ValueError(f"collapse_frac {self.collapse_frac} must lie in (0, 1)")
+        if self.collapse_drop_factor <= 1.0:
+            raise ValueError(
+                f"collapse_drop_factor {self.collapse_drop_factor} must exceed 1 — below it "
+                "every epoch of a healthy run is a 'sudden collapse'"
+            )
+        if self.overfit_patience < 1:
+            raise ValueError(f"overfit_patience {self.overfit_patience} must be >= 1")
+        if self.overfit_min_rise < 0:
+            raise ValueError(f"overfit_min_rise {self.overfit_min_rise} must be >= 0")
+        if self.plateau_by_epoch < 1 or self.plateau_window < 1:
+            raise ValueError(
+                f"plateau_by_epoch {self.plateau_by_epoch} and plateau_window "
+                f"{self.plateau_window} are epoch counts and must be >= 1"
+            )
+        if not 0.0 < self.plateau_frac <= 1.0:
+            raise ValueError(f"plateau_frac {self.plateau_frac} must lie in (0, 1]")
+        if self.plateau_min_improvement < 0:
+            raise ValueError(
+                f"plateau_min_improvement {self.plateau_min_improvement} must be >= 0"
+            )
+        if not 0.0 < self.loader_wait_alarm < 1.0:
+            raise ValueError(f"loader_wait_alarm {self.loader_wait_alarm} must lie in (0, 1)")
+
+
 # --- The config ---------------------------------------------------------------
 
 _GROUPS: Final = {
@@ -438,6 +596,7 @@ _GROUPS: Final = {
     "schedule": Schedule,
     "runtime": Runtime,
     "init": Init,
+    "monitoring": Monitoring,
 }
 
 
@@ -456,6 +615,7 @@ class RunConfig(_Frozen):
     schedule: Schedule = field(default_factory=Schedule)
     runtime: Runtime = field(default_factory=Runtime)
     init: Init = field(default_factory=Init)
+    monitoring: Monitoring = field(default_factory=Monitoring)
 
     def __post_init__(self) -> None:
         # The constraints no single group can see. §8's continual arm is ViT-B only, and it

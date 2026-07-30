@@ -36,6 +36,12 @@ dependencies = [
 pretrain = [
     "torch>=2.2",
     "timm>=1.0",
+    # The §11 metrics sink (#97). A runtime dependency of the training package rather than a
+    # dev extra, because a run with no sink records nothing off-instance and §11's whole point
+    # is that the box holds nothing unique. It is installed for its **offline** mode: the
+    # logging path is exercised with no account and no network (`monitoring.wandb_mode`), which
+    # is what keeps #97 off the critical path of #80's ops provisioning.
+    "wandb>=0.17",
 ]
 
 [dependency-groups]
