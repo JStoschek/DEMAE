@@ -522,6 +522,36 @@ GitHub issue #1.
   from the config and the fingerprint rather than typed, and an uncommitted split tags as
   `split:absent` rather than going missing, because the two are indistinguishable afterwards and
   the absent case is the dangerous one.
+- **Val panel** — the committed 40 val tiles §10.2's reconstruction grids render, **2 from each
+  of the 20 strata** (`artifacts/phase1/val_panel_40.csv`, drawn by `pretrain.panel` under
+  `PANEL_SEED`; plan §15's checklist item 3). Third artifact in the same contract family as the
+  selection list and the split assignment — *the committed file is what later runs re-read* —
+  and committed for the reason a grid is never read on its own: it is read against the last
+  epoch's, against the other ablation arm's, against the same tiles at a different mask ratio.
+  A panel that re-drew itself would keep producing perfectly good pictures of a *different* 40
+  tiles, and nothing in the picture would say so. Stratified because the finding it exists to
+  support is about **terrain families** ("stratum 14 smears"), val-only because a train tile
+  here would show the model reconstructing its own training data in the one panel built to
+  judge generalization. Re-checked against the manifest at every load — a tile the corpus no
+  longer holds, one whose split has moved, or one whose stratum has been re-fit is refused
+  rather than rendered.
+- **Reconstruction grid** — the §10.2 triptych, `pretrain.recon`: **masked → predicted → truth**
+  for each panel tile, every 10 epochs, in **metres**, plus a **hillshade** of each. Metres
+  because the model works in two nested normalizations — §4's per-patch `norm_pix` and the
+  loader's per-tile standardization — and neither is an elevation; both are undone, the second
+  by the very `Normalizer` instance that applied it. The stated limit of that inversion: with
+  `norm_pix` on, a predicted patch's *level* is the target's and only its *shape* is the
+  model's, because §5's design means the model is never asked to predict absolute altitude.
+  The **hillshade is the part that earns the ticket** — drainage texture lives in the derivative
+  at amplitudes a colour ramp cannot show, and low-relief drainage is precisely where the corpus
+  card §3.1 predicts (and [ADR-0008](docs/adr/0008-accept-f3-drainage-shortfall-strata-2-17.md)
+  accepts) this corpus is thinnest. Unlike Gate E's sheets it is **unstretched** and shares the
+  truth's vertical exaggeration, because a per-panel contrast stretch restores a smeared
+  prediction to full range and hides the one failure the grids are built to catch. The ramp and
+  the exaggeration come from the truth alone, so the picture does not rescale itself on the
+  epoch the model moves; and non-finite predictions are **painted**, not propagated, because
+  §15's item 5 requires the whole pipeline to render on a randomly initialized model and a NaN
+  reaching W&B reads as a reconstruction failure rather than the renderer bug it is.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

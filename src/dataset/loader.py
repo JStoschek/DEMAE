@@ -22,12 +22,20 @@ from . import config
 from .shards import shard_path
 
 # --- Normalization strategies (pure numpy — the ablation hook, ADR-0003 §3) ---
+#
+# Each strategy also inverts itself. Plan §10.2's reconstruction grids (#98) render
+# **metres**, not standardized units, so something downstream has to undo what was done
+# here — and a second implementation of the inverse would be a second place for the
+# `_STD_FLOOR` clamp, the choice of statistic, and the ablation branch to disagree. The
+# forward pass and its inverse are one decision, so they sit on one object.
 
 _STD_FLOOR = 1e-6  # guard; ETL already drops std < 3 m tiles
 
 
 class Normalizer(Protocol):
     def __call__(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray: ...
+
+    def invert(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray: ...
 
 
 class PerTileNormalizer:
@@ -37,6 +45,10 @@ class PerTileNormalizer:
 
     def __call__(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray:
         return (x - mean) / max(std, _STD_FLOOR)
+
+    def invert(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray:
+        """Standardized units back to metres — the same floor, from the same line."""
+        return x * max(std, _STD_FLOOR) + mean
 
 
 class GlobalNormalizer:
@@ -50,6 +62,10 @@ class GlobalNormalizer:
 
     def __call__(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray:
         return (x - self.global_mean) / self.global_std
+
+    def invert(self, x: np.ndarray, *, mean: float, std: float) -> np.ndarray:
+        """Metres again, off the corpus statistic — the per-tile stats are ignored both ways."""
+        return x * self.global_std + self.global_mean
 
 
 def make_normalizer(name: str, meta: dict | None = None) -> Normalizer:

@@ -122,6 +122,15 @@ NORMALIZATION_STAT_SOURCE: Final = "tier_specific"
 SPLIT_ASSIGNMENT_PATH: Final = "artifacts/phase1/split_scale_500k.csv"
 SPLIT_BLOCKS_PATH: Final = "artifacts/phase1/split_blocks_500k.json"
 
+# --- Phase-1 handoff: the fixed val panel (issue #98, plan §10.2, §15 item 3) --
+# The 40 val tiles — 2 from each of the 20 strata — that §10.2's reconstruction grids
+# render every 10 epochs. Third artifact in the contract family above, and committed for
+# the reason the family exists: a grid is only ever read as a *comparison* — this epoch
+# against the last, this arm against that one — and a panel that redrew itself would make
+# every one of those a comparison of two different sets of terrain. `pretrain.panel`
+# writes it and re-reads it; the path is named here so both quote one place.
+VAL_PANEL_PATH: Final = "artifacts/phase1/val_panel_40.csv"
+
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
 # The cache-locally-not-stream policy (and why it differs from the COG reads) is

@@ -94,6 +94,23 @@ wrong. MAE gives few in-flight signals, so these are the ones that exist:
   cannot answer), the throughput panel over #95's counters, and the alarms checked on the epoch
   series. ``python -m pretrain.monitor --epochs N`` runs it against a real corpus.
 
+#98 is the visual channel of the same section — §10.2 — and the first place a *terrain-shaped*
+failure shows itself, which is a thing no scalar in the list above can report:
+
+- :mod:`pretrain.panel` — the committed 40 val tiles the grids render, 2 from each of the 20
+  strata. An artifact in the family the selection list and the split assignment are in, for the
+  family's reason: a grid is only read as a comparison, and a panel that re-drew itself would
+  make every comparison one between two different sets of terrain.
+- :mod:`pretrain.recon` — the render: masked → predicted → truth, **inverted to metres** (both
+  normalizations undone, `norm_pix`'s by the target's own per-patch statistics and the loader's
+  by the very :class:`~dataset.loader.Normalizer` instance that applied it), plus a hillshade of
+  each. The hillshade is what earns the ticket: drainage texture lives in the derivative at
+  amplitudes a colour ramp cannot show, and it is exactly what the corpus card §3.1 predicts
+  this corpus is thin on (ADR-0008). It is unstretched and shares the truth's vertical
+  exaggeration, so a smeared reconstruction draws as smeared instead of being rescaled back to
+  looking fine — and it renders on a randomly initialized model without erroring, which is §15's
+  checklist item 5 and the reason non-finite predictions are painted rather than propagated.
+
 ``python -m pretrain`` prints the config + fingerprint header a real run would record;
 ``python -m pretrain.train --steps N`` runs the bare loop. **``python -m pretrain.launch`` is
 how a run is actually started** (:mod:`pretrain.launch`): a config file plus repeatable

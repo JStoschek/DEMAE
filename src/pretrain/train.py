@@ -82,7 +82,7 @@ from .fingerprint import fingerprint_for
 from .header import add_config_arguments, build_config, format_header
 from .init import initialize_from_config
 from .loss import MaeLoss, MaeLossOutput, pixel_weights_from_land_mask
-from .model import MaskedAutoencoder
+from .model import MaeOutput, MaskedAutoencoder
 from .optim import build_optimizer
 from .runtime import compile_model, verify_attention
 from .schedule import LrSchedule
@@ -446,7 +446,7 @@ class Scored(NamedTuple):
     """One scoring of one micro-batch — see :meth:`Trainer.score`.
 
     A :class:`~typing.NamedTuple` for the same reason :class:`~pretrain.loss.MaeLossOutput` is
-    one: it survives `torch.compile`. The three travel together because they are three views of
+    one: it survives `torch.compile`. The four travel together because they are four views of
     a single forward pass, and a caller that has one and re-derives another is the drift
     :meth:`Trainer.score` documents.
     """
@@ -457,6 +457,15 @@ class Scored(NamedTuple):
     target: Tensor
     #: The per-pixel validity weights used, or ``None`` when §4's ocean weighting is ablated off.
     pixel_weights: Tensor | None
+    #: The model's own output — the per-patch predictions and the mask that hid them. Carried
+    #: for §10.2's grids (#98), which need the reconstruction *and* the mask that produced it
+    #: beside the target and the weights, all from one forward. A renderer that ran its own
+    #: forward would draw a different mask than the loss beside it was computed under, and the
+    #: grid would then be captioned with a number describing a different masking of the tile.
+    #: Required, not optional: it is a view of the same forward pass as the other three, and a
+    #: ``None`` here would be an ``AttributeError`` at the one call site rather than a degraded
+    #: render.
+    model_out: MaeOutput
 
 
 class Trainer:
@@ -590,7 +599,10 @@ class Trainer:
             land_mask = batch["land_mask"].to(self.device, non_blocking=True)
             weights = pixel_weights_from_land_mask(land_mask, self.model.patchify)
         return Scored(
-            self.loss_fn(out.pred, target, out.mask, pixel_weights=weights), target, weights
+            self.loss_fn(out.pred, target, out.mask, pixel_weights=weights),
+            target,
+            weights,
+            out,
         )
 
     def micro_loss(self, batch: dict) -> torch.Tensor:

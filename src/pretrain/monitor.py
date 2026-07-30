@@ -18,10 +18,13 @@ own, and a reconstruction loss that goes down proves very little. What there is,
 
 ## The seam this is on both sides of
 
-#98's reconstruction grids and #99's kNN probe write into :mod:`pretrain.sink`, not into this
-module. What they share with it is the logger and its step axis — the epoch — so a run's grids,
-probes and losses land on one page under one set of tags. This module is simply the first
-caller of that seam, and the one that opens and closes the run.
+#98's reconstruction grids and #99's kNN probe compute their own payloads and write them
+through :mod:`pretrain.sink`; what they share with this module is the logger and its step
+axis — the epoch — so a run's grids, probes and losses land on one page under one set of tags.
+This module is the first caller of that seam, the one that opens and closes the run, and the
+only place that knows what epoch it is — which is why §10.2's grids are *driven* from
+:meth:`EpochMonitor.end_of_epoch`, on their own 10-epoch cadence, without this module ever
+learning what a hillshade is.
 
 ## What the val pass must not do
 
@@ -56,6 +59,7 @@ from .config import RunConfig
 from .fingerprint import fingerprint_for
 from .header import add_config_arguments, build_config, format_header
 from .loss import patch_statistics
+from .recon import ReconGrids
 from .sink import Histogram, RunLogger, open_run_logger
 from .throughput import (
     StepThroughput,
@@ -425,12 +429,18 @@ class EpochMonitor:
         logger: RunLogger,
         val_loader=None,
         on_alarm: Callable[[Alarm], None] | None = None,
+        recon: ReconGrids | None = None,
     ) -> None:
         self.cfg = cfg
         self.trainer = trainer
         self.logger = logger
         self.val_loader = val_loader
         self.on_alarm = on_alarm
+        #: §10.2's reconstruction grids (#98), or ``None`` when no panel is committed at the
+        #: configured path or the cadence is 0. Held for the life of the run rather than rebuilt
+        #: per render: it carries the panel's pixels, read once, so epoch 400's grid is drawn
+        #: from the same bytes epoch 0's was.
+        self.recon = recon
         #: ``[(epoch, loss), ...]`` — what :mod:`pretrain.alarms` reads. **Epochs, not steps**:
         #: §10.1's conditions are written in epochs ("a plateau in the first 20 epochs"), and
         #: fed a step series they would fire on within-epoch noise.
@@ -490,9 +500,14 @@ class EpochMonitor:
             throughput=throughput,
             alarms=tuple(alarms),
         )
-        self.logger.log(
-            record.scalars(tail_quantile=monitoring.per_patch_tail_quantile), step=epoch
-        )
+        values = record.scalars(tail_quantile=monitoring.per_patch_tail_quantile)
+        # §10.2's grids, on their own cadence, merged into the epoch's own payload rather than
+        # logged separately: W&B's step axis is the epoch and a grid belongs to the epoch whose
+        # losses sit beside it. Rendered last, after every number is taken, because it is the
+        # one part of a boundary that runs a forward pass purely to be looked at.
+        if self.recon is not None and self.trainer is not None and self.recon.due(epoch):
+            values.update(self.recon.render(self.trainer))
+        self.logger.log(values, step=epoch)
         for alarm in alarms:
             self._fired.append(alarm)
             if self.on_alarm is not None:
@@ -510,6 +525,16 @@ class EpochMonitor:
         summary: dict[str, Any] = {
             "alarms/fired": len(self._fired),
             "alarms/names": ", ".join(sorted({a.name for a in self._fired})) or "none",
+            # What §10.2 was rendered against, or that it was not. Recorded rather than raised
+            # (:mod:`pretrain.fingerprint`'s rule for the split): an absent panel is a §15
+            # checklist failure, not a reason to refuse to train — but a run with no grids and
+            # a run whose grids nobody scrolled to look identical afterwards.
+            "recon/panel": (
+                "absent"
+                if self.recon is None
+                else f"{len(self.recon.panel)} tiles over {len(self.recon.panel.strata)} strata, "
+                f"md5 {self.recon.panel_md5 or '-'}"
+            ),
         }
         if self.train_trajectory:
             summary["train/best_loss"] = min(loss for _, loss in self.train_trajectory)
@@ -553,7 +578,12 @@ def train_epochs(
     owned = logger is None
     logger = logger or open_run_logger(cfg)
     monitor = EpochMonitor(
-        cfg, trainer=trainer, logger=logger, val_loader=val_loader, on_alarm=on_alarm
+        cfg,
+        trainer=trainer,
+        logger=logger,
+        val_loader=val_loader,
+        on_alarm=on_alarm,
+        recon=ReconGrids.from_config(cfg),
     )
     try:
         for epoch in range(epochs):

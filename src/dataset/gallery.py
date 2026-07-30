@@ -258,6 +258,7 @@ def hillshade(
     vert_exag: float = 1.0,
     azimuth_deg: float = AZIMUTH_DEG,
     altitude_deg: float = ALTITUDE_DEG,
+    stretch: bool = True,
 ) -> np.ndarray:
     """Shaded relief in ``[0, 1]`` — surface normals dotted with the light vector.
 
@@ -265,13 +266,20 @@ def hillshade(
     averaged), so the anisotropy Copernicus's poleward column coarsening leaves behind
     is drawn as the shape it is.
 
-    The result is contrast-stretched across the tile, matching
+    By default the result is contrast-stretched across the tile, matching
     :class:`matplotlib.colors.LightSource` — whose formulation this reproduces, so the
     committed sheets look like the prototype they were approved from. The stretch means
     *apparent contrast carries no information*: it is full-range on every tile,
     exaggerated or not. That is a feature for a coherence review (each tile is legible
     on its own terms) and a trap for anything else, which is why nothing quantitative in
     E2 reads a rendered image.
+
+    ``stretch=False`` returns the plain clipped Lambertian intensity, and it exists for the
+    one caller that must *not* have the trap: plan §10.2's reconstruction grids (#98) shade
+    a prediction beside its own truth, and the failure they are built to catch is a
+    prediction that came back **smeared**. Stretched per panel, a smeared reconstruction has
+    its contrast pushed straight back to full range and looks fine. Unstretched, less relief
+    draws as less contrast, which is the whole point.
     """
     # Row 0 is the *north* edge, so a step down the row axis is a step south: the row
     # spacing enters the gradient negated. Dropping this sign mirrors the illumination
@@ -286,9 +294,10 @@ def hillshade(
     light = np.array([math.cos(az) * math.cos(alt), math.sin(az) * math.cos(alt), math.sin(alt)])
 
     intensity = normal.dot(light)
-    lo, hi = float(intensity.min()), float(intensity.max())
-    if hi - lo > 1e-6:
-        intensity = (intensity - lo) / (hi - lo)
+    if stretch:
+        lo, hi = float(intensity.min()), float(intensity.max())
+        if hi - lo > 1e-6:
+            intensity = (intensity - lo) / (hi - lo)
     return np.clip(intensity, 0.0, 1.0)
 
 

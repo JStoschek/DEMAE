@@ -256,6 +256,13 @@ class Data(_Frozen):
         default=dataset_config.SPLIT_ASSIGNMENT_PATH, metadata=ENVIRONMENT
     )
     split_blocks_path: str = field(default=dataset_config.SPLIT_BLOCKS_PATH, metadata=ENVIRONMENT)
+    #: §10.2's committed 40-tile val panel (#98). Environment for the same reason the two
+    #: paths above are: *where* the artifact is mounted is a fact about the box, and its
+    #: content is what a run is answerable for. **Its md5 is not yet fingerprinted** — the
+    #: panel selects what a human looks at, not what the model is fit on, so a wrong one
+    #: mislabels a diagnostic rather than invalidating a checkpoint. :func:`pretrain.panel.
+    #: resolve_panel` re-checks it against the manifest at every load instead.
+    val_panel_path: str = field(default=dataset_config.VAL_PANEL_PATH, metadata=ENVIRONMENT)
     #: §5 — `per_tile`, the ADR-0003 default. `global` stays the scheduled Phase-3 ablation, and
     #: its failure mechanism is already measured (corpus card §4.8: ~42x more variance between
     #: tiles than within them). Do not re-litigate it in Phase 1.
@@ -484,6 +491,19 @@ class Monitoring(_Frozen):
     #: it — a gap in the diagnosis to save one inference pass over ~10k tiles.
     val_mask_seed: int = VAL_MASK_SEED
 
+    # --- §10.2's reconstruction grids (#98)
+    #: How many epochs between renders of the fixed val panel. **Plan §10.2's own number**,
+    #: unlike every threshold below it: "reconstruction grids every 10 epochs". Recipe rather
+    #: than environment, and the same argument the val mask seed carries — two runs whose
+    #: grids are rendered at different epochs cannot have their panels compared side by side,
+    #: which is the only way a grid is ever read.
+    #:
+    #: ``0`` switches the grids off, for a unit test or a run with no panel committed. It is
+    #: not a knob to reach for otherwise: §15's checklist item 5 gates R1 on the grids
+    #: rendering at all, and the drainage shortfall ADR-0008 accepted is expected to show
+    #: here first or nowhere.
+    recon_every_epochs: int = 10
+
     # --- §4's per-patch loss distribution
     #: The "top tail" of the per-patch loss distribution that §4's rule adjudicates: *if the
     #: top tail is dominated by near-flat patches, raise the variance floor before concluding
@@ -555,6 +575,11 @@ class Monitoring(_Frozen):
     def __post_init__(self) -> None:
         if self.wandb_mode not in WANDB_MODES:
             raise ValueError(f"unknown wandb_mode {self.wandb_mode!r} (one of {WANDB_MODES})")
+        if self.recon_every_epochs < 0:
+            raise ValueError(
+                f"recon_every_epochs {self.recon_every_epochs} is an epoch count; 0 switches "
+                f"§10.2's grids off and anything below that is a typo"
+            )
         if not 0.0 < self.per_patch_tail_quantile < 1.0:
             raise ValueError(
                 f"per_patch_tail_quantile {self.per_patch_tail_quantile} must lie in (0, 1)"

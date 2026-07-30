@@ -26,6 +26,34 @@ def test_global_normalizer_uses_corpus_stats():
     assert out.tolist() == pytest.approx([-1.0, 1.0])
 
 
+def test_each_normalizer_inverts_itself_back_to_metres():
+    """§10.2's grids read elevation, and the inverse has to be *this* normalizer's.
+
+    The renderer (#98) shows metres, so something has to undo what the loader did. Two
+    implementations of one transform is how a grid ends up labelled metres while showing
+    something else, so the inverse lives on the strategy that applied it — and both
+    strategies round-trip, including the `global` one whose per-tile stats are ignored in
+    both directions.
+    """
+    metres = np.array([10.0, 20.0, 30.0], dtype=np.float32)
+    for normalizer in (
+        loader.PerTileNormalizer(),
+        loader.GlobalNormalizer(global_mean=150.0, global_std=50.0),
+    ):
+        standardized = normalizer(metres, mean=20.0, std=8.16)
+        back = normalizer.invert(standardized, mean=20.0, std=8.16)
+        assert back == pytest.approx(metres, abs=1e-4)
+
+
+def test_the_per_tile_inverse_uses_the_same_std_floor_the_forward_pass_did():
+    """A degenerate std is clamped on the way in; inverting by the raw value would not undo it."""
+    metres = np.array([100.0, 100.5], dtype=np.float32)
+    tiny = loader._STD_FLOOR / 100
+    forward = loader.PerTileNormalizer()
+    back = forward.invert(forward(metres, mean=100.0, std=tiny), mean=100.0, std=tiny)
+    assert back == pytest.approx(metres, abs=1e-4)
+
+
 def test_make_normalizer_selects_and_validates():
     assert isinstance(loader.make_normalizer("per_tile"), loader.PerTileNormalizer)
     g = loader.make_normalizer("global", {"global_mean": 0.0, "global_std": 1.0})

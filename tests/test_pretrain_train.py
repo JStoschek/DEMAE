@@ -94,6 +94,10 @@ def tiny_config(corpus, **changes) -> RunConfig:
             # is how the fixture keeps `SplitDataset`'s block check on the derived lists only.
             split_assignment_path=str(corpus / "no-assignment.csv"),
             split_blocks_path=str(corpus / "no-blocks.json"),
+            # §10.2's panel is committed against the 500k corpus and would be refused against
+            # this one, correctly (`pretrain.panel.resolve_panel`). A fixture that wants grids
+            # commits its own panel and points here at it.
+            val_panel_path=str(corpus / "no-panel.csv"),
             num_workers=0,
         ),
         # §7.3's default is on, and #95 makes `Trainer.from_config` honour it. Compiling a

@@ -32,7 +32,7 @@ import torch
 from pretrain import monitor as monitor_mod
 from pretrain.config import RunConfig
 from pretrain.monitor import EpochMonitor, LossHistogram, evaluate, train_epochs
-from pretrain.sink import Histogram, MemoryLogger
+from pretrain.sink import Histogram, Image, MemoryLogger
 from pretrain.throughput import ThroughputSummary
 from pretrain.train import Trainer, build_loader, seed_run, steps_per_epoch_for
 from tests.conftest import SPLIT_COGS, build_corpus
@@ -384,6 +384,87 @@ def test_the_run_summary_records_the_best_val_and_what_fired(cfg):
     assert logger.summaries["train/best_loss"] == pytest.approx(0.004)
     assert logger.summaries["alarms/fired"] == 1
     assert "collapse" in logger.summaries["alarms/names"]
+
+
+# --- §10.2's grids, on the cadence the config sets ----------------------------
+
+
+@pytest.fixture(scope="module")
+def grid_corpus(tmp_path_factory):
+    """A corpus with two val COGs, so every stratum has the two tiles a panel needs."""
+    from tests.test_pretrain_recon import RECON_COGS
+
+    root = tmp_path_factory.mktemp("grid_corpus")
+    return build_corpus(root, RECON_COGS, tiles_per_cog=TILES_PER_COG, tile_fn=smooth_tile)
+
+
+@pytest.fixture
+def grid_cfg(grid_corpus, tmp_path):
+    from tests.test_pretrain_recon import config_for
+
+    return config_for(grid_corpus, tmp_path)
+
+
+def test_the_grids_fire_on_the_cadence_and_stay_quiet_between(grid_cfg):
+    """§10.2's "every 10 epochs", as something that happens rather than something configured."""
+    every_two = grid_cfg.replace(monitoring=grid_cfg.monitoring.replace(recon_every_epochs=2))
+    logger = MemoryLogger()
+    train_epochs(every_two, epochs=5, device="cpu", logger=logger)
+
+    rendered = [epoch for epoch in range(5) if "recon/heatmap" in logger.at(epoch)]
+    assert rendered == [0, 2, 4]
+
+
+def test_the_first_epoch_boundary_renders_the_baseline_every_later_grid_is_read_against(
+    grid_cfg,
+):
+    # Epoch 0 is the point: a cadence that first fired at epoch 10 would leave the first tenth
+    # of a run with no grid to compare anything to.
+    logger = MemoryLogger()
+    train_epochs(grid_cfg, epochs=1, device="cpu", logger=logger)
+    assert len(logger.at(0)["recon/heatmap"]) == 8
+
+
+def test_the_grids_and_the_scalars_land_at_the_same_step(grid_cfg):
+    logger = MemoryLogger()
+    train_epochs(grid_cfg, epochs=1, device="cpu", logger=logger)
+    logged = logger.at(0)
+    assert {"train/loss", "val/loss", "recon/heatmap", "recon/hillshade"} <= set(logged)
+    assert all(isinstance(i, Image) for i in logged["recon/hillshade"])
+
+
+def test_a_run_with_no_committed_panel_still_trains_and_says_the_panel_is_absent(cfg):
+    logger = MemoryLogger()
+    records = train_epochs(cfg, epochs=1, device="cpu", logger=logger)
+    assert len(records) == 1
+    assert "recon/heatmap" not in logger.at(0)
+    assert logger.summaries["recon/panel"] == "absent"
+
+
+def test_a_run_with_a_panel_records_what_it_rendered_against(grid_cfg):
+    # Including the panel's md5: two runs' grids are only comparable if they were drawn over
+    # the same tiles, and that is the only thing in the record that can prove it after the fact.
+    from dataset.materialize import file_md5
+
+    logger = MemoryLogger()
+    train_epochs(grid_cfg, epochs=1, device="cpu", logger=logger)
+    digest = file_md5(grid_cfg.data.val_panel_path)
+    assert logger.summaries["recon/panel"] == f"8 tiles over 4 strata, md5 {digest}"
+
+
+def test_the_grids_reach_a_real_offline_wandb_run_as_images(grid_cfg, tmp_path):
+    """#98's last acceptance criterion: the grids reach W&B through #97's interface."""
+    offline = grid_cfg.replace(
+        monitoring=grid_cfg.monitoring.replace(
+            wandb_mode="offline", wandb_project="demae-test", wandb_dir=str(tmp_path / "wb")
+        )
+    )
+    train_epochs(offline, epochs=1, device="cpu")
+    run = next((tmp_path / "wb" / "wandb").glob("offline-run-*"))
+    body = next(run.glob("*.wandb")).read_bytes()
+    assert b"recon/heatmap" in body and b"recon/hillshade" in body
+    # Two triptychs per panel tile, written as real PNGs a `wandb sync` would upload.
+    assert len(list(run.glob("files/media/images/recon/*.png"))) == 2 * 8
 
 
 # --- The whole thing, against a run that actually trains -----------------------

@@ -254,6 +254,10 @@ def test_only_the_environment_fields_are_left_out_of_the_hash():
         "data.corpus_dir",
         "data.split_assignment_path",
         "data.split_blocks_path",
+        # #98: where §10.2's panel is mounted. What a run is answerable for is its
+        # *content*, and it is re-checked against the manifest at every load rather than
+        # being trusted to a hash.
+        "data.val_panel_path",
         # #97: where the metrics go — which project, whose account, which directory, online or
         # offline — is the ops account (#80) and the box, not the objective.
         "monitoring.wandb_mode",
@@ -390,8 +394,19 @@ def test_the_monitoring_group_round_trips_and_refuses_a_typo():
         ({"plateau_frac": 0.0}, "plateau_frac"),
         ({"plateau_min_improvement": -1.0}, "plateau_min_improvement"),
         ({"loader_wait_alarm": 1.0}, "loader_wait_alarm"),
+        ({"recon_every_epochs": -1}, "recon_every_epochs"),
     ],
 )
 def test_a_threshold_that_could_not_fire_is_refused(changes, match):
     with pytest.raises(ValueError, match=match):
         Monitoring(**changes)
+
+
+def test_the_grid_cadence_is_the_plans_own_ten_epochs_and_is_part_of_the_recipe():
+    # §10.2: "reconstruction grids every 10 epochs". Recipe, not environment: two runs whose
+    # panels are rendered at different epochs cannot be put side by side, which is the only
+    # way a grid is ever read.
+    cfg = RunConfig()
+    assert cfg.monitoring.recon_every_epochs == 10
+    slower = cfg.replace(monitoring=cfg.monitoring.replace(recon_every_epochs=20))
+    assert slower.config_hash != cfg.config_hash

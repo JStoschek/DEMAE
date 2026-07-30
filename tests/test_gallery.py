@@ -222,6 +222,24 @@ def test_hillshade_matches_matplotlib_lightsource():
         )
 
 
+def test_unstretched_hillshade_keeps_a_flatter_surface_flatter():
+    """What ``stretch=False`` buys #98: relief and apparent contrast stop being independent.
+
+    Stretched, both fields below come back full-range and look alike — which is right for a
+    Gate-E coherence sheet and wrong for plan §10.2's grids, where a *smeared* reconstruction
+    beside its own truth is the failure being looked for.
+    """
+    _, xx = np.mgrid[0:32, 0:32].astype(float)
+    rough, smooth_ = 20.0 * np.sin(xx), 1.0 * np.sin(xx)
+    kwargs = {"dy": 30.0, "dx": 30.0}
+    assert gallery.hillshade(smooth_, **kwargs, stretch=False).std() < 0.2 * gallery.hillshade(
+        rough, **kwargs, stretch=False
+    ).std()
+    # ... where the stretched pair are all but indistinguishable in spread.
+    stretched = [gallery.hillshade(z, **kwargs).std() for z in (rough, smooth_)]
+    assert stretched[1] == pytest.approx(stretched[0], rel=0.1)
+
+
 def test_hillshade_lights_north_facing_slopes_brightest():
     """The sign flip that keeps ridges from reading as valleys, in its own right.
 
