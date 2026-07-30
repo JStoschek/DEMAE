@@ -11,17 +11,35 @@ candidates (:func:`_element_of`), which needs a pattern no two group elements ag
 :func:`test_the_fixture_pattern_distinguishes_all_eight` is that precondition, checked rather
 than assumed, because every decode-based test below is worthless without it.
 
-The seeding tests are the other half. A run reproduces off the DataLoader generator (ADR-0003),
-and two workers must not draw the same stream — a failure that would halve the effective
-augmentation and be invisible everywhere except here.
+The seeding tests are the other half, and since #104 they are a different set of claims. The
+element is a pure function of ``(run seed, epoch, sample index)`` rather than a draw from a
+per-process stream, so what has to hold is that **the same sample of the same epoch gets the
+same element wherever and whenever it is read** — in the parent, in any of eight workers, and
+after a kill and a resume. That is what makes plan §11's exact resume hold at the shipped
+``num_workers = 8`` (`test_pretrain_checkpoint.py` runs the gate itself), and it replaces the
+old per-worker-stream tests wholesale: workers cannot collide when the key is per *sample*.
+
+The one thing that can still fail silently is the epoch's trip into a worker — it rides on an
+:class:`~pretrain.augment.EpochIndex`, and a lost attribute would make every epoch apply the
+identical transform to the identical tile. Hence a test for exactly that, through real worker
+processes.
 """
 
 from __future__ import annotations
 
+import pickle
+
 import pytest
 import torch
 
-from pretrain.augment import DIHEDRAL_ORDER, DihedralDataset, apply_dihedral, make_augmented
+from pretrain.augment import (
+    DIHEDRAL_ORDER,
+    DihedralDataset,
+    EpochIndex,
+    apply_dihedral,
+    dihedral_element,
+    make_augmented,
+)
 from pretrain.config import Data
 
 #: Small enough that 2,400 samples through a DataLoader is a fast test, big enough that the
@@ -80,22 +98,28 @@ def _element_of(before: torch.Tensor, after: torch.Tensor) -> int:
     return matches[0]
 
 
+def _keys(n: int, epoch: int = 0) -> list[EpochIndex]:
+    """The keys epoch ``epoch`` would hand a dataset of ``n`` samples, in index order.
+
+    The real ones come out of :class:`pretrain.train.EpochShuffleSampler` permuted; the order is
+    irrelevant to a pure function of the key, and building them here keeps these tests off the
+    training package.
+    """
+    return [EpochIndex(i, epoch) for i in range(n)]
+
+
 def _elements(dataset, indices=None) -> list[int]:
     """The element applied to each sample's *image*, in order."""
-    indices = range(len(dataset)) if indices is None else indices
+    indices = _keys(len(dataset)) if indices is None else indices
     return [_element_of(_image(), dataset[i]["image"]) for i in indices]
 
 
-def _loader_elements(dataset, *, seed: int | None, **kwargs) -> list[int]:
-    """The elements an epoch applies, read off batches from a seeded DataLoader."""
+def _loader_elements(dataset, *, keys, **kwargs) -> list[int]:
+    """The elements a pass applies, read off batches from a DataLoader driven by ``keys``."""
     from dataset.loader import build_dataloader
 
-    generator = None
-    if seed is not None:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
     loader = build_dataloader(
-        dataset, shuffle=False, pin_memory=False, generator=generator, **kwargs
+        dataset, shuffle=False, sampler=keys, pin_memory=False, **kwargs
     )
     return [_element_of(_image(), image) for batch in loader for image in batch["image"]]
 
@@ -198,7 +222,32 @@ def test_the_underlying_sample_is_not_mutated_in_place():
     assert torch.equal(underlying[0]["image"], _image())
 
 
-# --- Reproducibility ----------------------------------------------------------
+# --- The draw is a function of (seed, epoch, index) ---------------------------
+
+
+def test_the_element_depends_on_all_three_of_the_seed_the_epoch_and_the_index():
+    # the whole of #104's seeding design in one assertion. Drop any of the three from the key
+    # and one of these equalities becomes an inequality: a seed-blind element makes two runs
+    # of different seeds identical, an epoch-blind one turns augmentation into a fixed
+    # relabelling of the corpus, an index-blind one gives a whole batch the same transform.
+    base = dict(seed=7, epoch=2, index=5)
+    here = dihedral_element(**base)
+    assert dihedral_element(**base) == here  # and it is a *function*
+    for name in ("seed", "epoch", "index"):
+        moved = [dihedral_element(**{**base, name: v}) for v in range(9)]
+        assert any(k != here for k in moved), f"the element ignores {name}"
+
+
+def test_adjacent_keys_are_not_related_and_in_particular_not_diagonally():
+    # `seed + epoch + index` would be a pure function too, and would hand the identical element
+    # to (7, 2, 5) and (7, 3, 4) — every epoch a relabelled shift of the last, across the whole
+    # corpus at once, and nothing downstream that could ever surface it. Hence a keyed hash.
+    grid = [[dihedral_element(seed=7, epoch=e, index=i) for i in range(64)] for e in range(8)]
+    for e in range(7):
+        shifted = [grid[e][i + 1] for i in range(63)]
+        assert grid[e + 1][:63] != shifted
+        # and consecutive epochs differ on most tiles, not on a lucky few
+        assert sum(a != b for a, b in zip(grid[e], grid[e + 1])) > 0.6 * 64
 
 
 def test_the_same_seed_reproduces_the_transform_sequence():
@@ -213,69 +262,84 @@ def test_different_seeds_diverge():
     assert first != second
 
 
-def test_the_dataloader_generator_seeds_the_workers():
-    # ADR-0003's reproducibility note: the run's generator is the seed of record, so an
-    # unseeded wrapper takes its stream from it rather than from an RNG of its own. Torch
-    # hands that generator's `base_seed + worker_id` to each worker, and this is the epoch
-    # that comes back out.
-    kwargs = dict(batch_size=8, num_workers=2)
-    first = _loader_elements(DihedralDataset(_FakeTiles(n=32)), seed=11, **kwargs)
-    again = _loader_elements(DihedralDataset(_FakeTiles(n=32)), seed=11, **kwargs)
-    other = _loader_elements(DihedralDataset(_FakeTiles(n=32)), seed=12, **kwargs)
-    assert first == again
-    assert first != other
-
-
-def test_the_process_seed_is_the_stream_when_there_are_no_workers():
-    # torch seeds *workers* from the loader's generator and does nothing to the main process's
-    # RNG, so at num_workers=0 the seed of record is the ambient one — `Runtime.seed`, which
-    # the run applies with `torch.manual_seed` exactly as `MaskedAutoencoder.from_config` does.
-    #
-    # Two epochs off *one* wrapper, because that is what a run is: the claim being pinned is
-    # that a run reproduces, not that a freshly built object does. Testing it on a throwaway
-    # wrapper per epoch would certify a property the production object never has to hold.
-    def run(seed: int) -> list[list[int]]:
-        torch.manual_seed(seed)
-        dataset = DihedralDataset(_FakeTiles(n=32))
-        return [_loader_elements(dataset, seed=None, num_workers=0) for _ in range(2)]
-
-    assert run(11) == run(11)
-    assert run(11) != run(12)
-
-
 def test_the_second_epoch_augments_differently_from_the_first():
-    # the flip side of reproducibility, and the reason the RNG is not reset per epoch: a stream
-    # that restarted would hand every tile the same transform it got last time, which is a
-    # fixed relabelling of the corpus rather than augmentation.
-    torch.manual_seed(5)
-    dataset = DihedralDataset(_FakeTiles(n=32))
-    first = _loader_elements(dataset, seed=None, num_workers=0)
-    assert first != _loader_elements(dataset, seed=None, num_workers=0)
+    # a transform that repeated per epoch would be a fixed relabelling of the corpus rather
+    # than augmentation — the model would see 500k tiles, each in one orientation, forever.
+    dataset = DihedralDataset(_FakeTiles(n=32), seed=5)
+    assert _elements(dataset, _keys(32, epoch=0)) != _elements(dataset, _keys(32, epoch=1))
 
 
-@pytest.mark.parametrize("seed", [3, None])
-def test_workers_do_not_share_a_transform_stream(seed):
-    # two workers drawing the same stream would apply the same 16 transforms to consecutive
-    # batches — half the augmentation, and visible nowhere but here.
-    #
-    # Both seeding paths, because they are different mechanisms and only one of them ships:
-    # `seed=None` is production (torch's own `base_seed + worker_id`), an explicit seed splits
-    # the entropy per worker here. A test of only the explicit path would leave the shipped one
-    # unasserted.
-    dataset = DihedralDataset(_FakeTiles(n=32), seed=seed)
-    elements = _loader_elements(dataset, seed=13, batch_size=16, num_workers=2)
-    assert elements[:16] != elements[16:]
+def test_a_sample_gets_the_same_element_however_and_whenever_it_is_read():
+    # the resume property, in miniature and without a checkpoint in sight: read the epoch
+    # forwards, backwards, from a fresh wrapper, and interleaved with other epochs, and sample
+    # i of epoch 3 is shown the same thing every time. A sequential stream has none of this —
+    # its answer depends on how many samples this *process* has read, which is exactly what a
+    # kill and a resume changes.
+    keys = _keys(32, epoch=3)
+    forwards = _elements(DihedralDataset(_FakeTiles(n=32), seed=5), keys)
+
+    fresh = DihedralDataset(_FakeTiles(n=32), seed=5)
+    backwards = _elements(fresh, list(reversed(keys)))
+    _elements(fresh, _keys(32, epoch=9))  # another epoch, in between
+    assert list(reversed(backwards)) == forwards
+    assert _elements(fresh, keys) == forwards
 
 
-@pytest.mark.parametrize("seed", [4, None])
-def test_a_wrapper_iterated_single_process_first_still_forks_distinct_streams(seed):
-    # the trap the lazy per-worker RNG exists for: an RNG built in the parent (by a
-    # num_workers=0 pass, or a val loader) would otherwise be copied identically into every
-    # worker, under fork and under spawn alike.
-    dataset = DihedralDataset(_FakeTiles(n=32), seed=seed)
-    _elements(dataset, indices=range(4))  # builds the parent's RNG
-    elements = _loader_elements(dataset, seed=13, batch_size=16, num_workers=2)
-    assert elements[:16] != elements[16:]
+def test_a_bare_index_reads_as_epoch_zero():
+    # indexing the wrapper directly is what a test or a diagnostic does, and it has no epoch to
+    # offer. Epoch 0 is the honest reading; the resumable loop cannot reach this path, because
+    # `EpochCursor` refuses a loader whose sampler is not an EpochShuffleSampler.
+    dataset = DihedralDataset(_FakeTiles(n=8), seed=5)
+    assert _elements(dataset, list(range(8))) == _elements(dataset, _keys(8, epoch=0))
+
+
+def test_the_epoch_survives_being_pickled():
+    # an int subclass reduces through `int.__getnewargs__`, which knows nothing about the
+    # attribute — so `EpochIndex.__reduce__` is written out by hand, and this is why.
+    assert pickle.loads(pickle.dumps(EpochIndex(7, 3))).epoch == 3
+    assert pickle.loads(pickle.dumps(EpochIndex(7, 3))) == 7
+
+
+def test_an_epoch_index_is_usable_as_the_plain_index_it_is():
+    # everything between the sampler and `DihedralDataset` — the batch sampler, the index
+    # queue, the *wrapped* dataset's own __getitem__ — sees it as an int and must not care.
+    key = EpochIndex(3, 5)
+    assert [10, 11, 12, 13][key] == 13 and key + 1 == 4 and isinstance(key, int)
+    # It must *print* as its index too: a wrapped dataset that builds an id or a cache key out
+    # of the index would otherwise produce a different one for the augmented read path than for
+    # every other caller. `int` has no `__str__` of its own, so overriding `__repr__` — which
+    # `EpochIndex` does, because a debugger should show the epoch — takes `str()` with it
+    # unless it is put back deliberately.
+    assert f"{key}" == "3" and str(key) == "3" and f"{key:04d}" == "0003"
+    assert _FakeTiles()[key]["tile_id"] == "tile_3"
+    assert repr(key) == "EpochIndex(3, epoch=5)"
+
+
+# --- Worker processes: the configuration that actually ships ------------------
+
+
+def test_workers_apply_the_identical_elements_the_parent_would_have():
+    """The gap #104 closed, at its root, and the strongest form the claim comes in.
+
+    The shipped default is ``num_workers = 8``. Under the old per-worker NumPy stream the
+    elements a worker applied were a function of *that process's* draw count and could not be
+    predicted from the parent at all — which is what made plan §11's exact resume hold only at
+    ``num_workers = 0``. As a pure function of the key they are the same list either way, and
+    "the same list" is a much sharper assertion than "no two workers collided".
+
+    Two epochs, because one would pass even if the epoch never reached the workers.
+    """
+    dataset = DihedralDataset(_FakeTiles(n=32), seed=5)
+    for epoch in (0, 1):
+        keys = _keys(32, epoch=epoch)
+        single = _loader_elements(dataset, keys=keys, batch_size=8, num_workers=0)
+        workered = _loader_elements(dataset, keys=keys, batch_size=8, num_workers=2)
+        assert workered == single
+
+    # ...and the two epochs are genuinely different, so the loop above compared two things.
+    assert _loader_elements(
+        dataset, keys=_keys(32, epoch=0), batch_size=8, num_workers=0
+    ) != _loader_elements(dataset, keys=_keys(32, epoch=1), batch_size=8, num_workers=0)
 
 
 # --- The config seam ----------------------------------------------------------
@@ -283,19 +347,19 @@ def test_a_wrapper_iterated_single_process_first_still_forks_distinct_streams(se
 
 def test_make_augmented_wraps_when_the_config_asks_for_the_dihedral_group():
     dataset = _FakeTiles()
-    assert isinstance(make_augmented(dataset, Data()), DihedralDataset)
+    assert isinstance(make_augmented(dataset, Data(), seed=0), DihedralDataset)
 
 
 def test_make_augmented_returns_the_read_path_untouched_when_augmentation_is_off():
     dataset = _FakeTiles()
-    assert make_augmented(dataset, Data(dihedral=False)) is dataset
+    assert make_augmented(dataset, Data(dihedral=False), seed=0) is dataset
 
 
 def test_random_resized_crop_is_refused_rather_than_silently_dropped():
     # §6 deviates from MAE's default deliberately and nothing here implements RRC. A config
     # that asks for it must not train without it and report that it had it.
     with pytest.raises(ValueError, match="RandomResizedCrop"):
-        make_augmented(_FakeTiles(), Data(random_resized_crop=True))
+        make_augmented(_FakeTiles(), Data(random_resized_crop=True), seed=0)
 
 
 # --- Guards -------------------------------------------------------------------
@@ -324,7 +388,9 @@ def augmented_train_split(split_corpus):
     from pretrain import data
 
     return make_augmented(
-        data.SplitDataset(split_corpus, "train", blocks_path=None, assignment_path=None), Data()
+        data.SplitDataset(split_corpus, "train", blocks_path=None, assignment_path=None),
+        Data(),
+        seed=0,
     )
 
 

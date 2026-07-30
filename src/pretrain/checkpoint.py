@@ -17,26 +17,37 @@ rest are the ones that fail quietly:
   continue the same shuffle rather than draw a fresh one (:class:`pretrain.train.EpochCursor`).
 - **Every RNG stream** — :data:`RNG_STREAMS`. Five of them, and they are genuinely independent:
   the ambient torch generator the in-model mask draw reads, CUDA's per-device generators, NumPy's
-  legacy global, Python's :mod:`random`, and the DataLoader's own :class:`torch.Generator`. Plus
-  the augmentation stream, which is a sixth (see the caveat below).
+  legacy global, Python's :mod:`random`, and the DataLoader's own :class:`torch.Generator`.
 - **The full config** — so a checkpoint says what recipe produced it without reference to a
   file that may not have travelled with it, and #97/#14 can read a released artifact's recipe
   off the artifact.
 - **#89's fingerprint block** — which corpus, which selection, which split, which commit.
 
-## The `num_workers` caveat, stated rather than discovered
+## The `num_workers` caveat, and how it was closed
 
-:class:`pretrain.augment.DihedralDataset` draws its dihedral element from a NumPy generator held
-by *whichever process is reading*. At ``num_workers = 0`` that is this process, so the state is
-reachable and is checkpointed and restored like any other stream, and resume is exact. At
-``num_workers > 0`` it lives in worker processes that the parent cannot read: the sample
-**order** still resumes exactly (:class:`~pretrain.train.EpochShuffleSampler` derives it from
-``(seed, epoch)`` alone), and the model, optimizer, schedule and mask draws all resume exactly,
-but the dihedral element each sample is shown is redrawn. That is a difference in augmentation,
-not in recipe or data, and it is recorded here because the alternative — noticing it as an
-unexplained divergence during an R0 kill-and-resume — is much worse. Closing it means making the
-draw a function of the sample index rather than of a per-worker stream, which is #91's design to
-change, not this module's.
+This module shipped with a hole, and the hole is worth keeping on the page because the shape of
+it recurs: **a stream cannot be checkpointed from a process that cannot see it.**
+:class:`pretrain.augment.DihedralDataset` used to draw its element from a NumPy generator held
+by whichever process was reading. At ``num_workers = 0`` that is this process and the state was
+captured and restored like any other; at the shipped ``num_workers = 8`` it lived in worker
+processes the parent cannot read, so the dihedral element each sample was shown was silently
+redrawn on resume — which meant §11's bit-identity gate, and item 4 of §15's pre-flight
+checklist, held only at a configuration no run uses.
+
+#104 closed it by **deleting the stream** rather than by plumbing state out of the workers. The
+element is now a pure function of ``(seed, epoch, sample index)``, so there is nothing
+process-local left to capture: resume is exact at any worker count, and :data:`RNG_STREAMS` is
+five entries rather than six. The general lesson, for anything added here later: state that has
+to survive a resume belongs in a *pure function of position*, and only what genuinely cannot
+be — the optimizer's moments, the mask draw's generator — belongs in this payload.
+
+:data:`FORMAT_VERSION` is deliberately **not** bumped for that removal. A pre-#104 checkpoint
+carries an extra ``rng["augmentation"]`` key, :func:`restore_rng` only checks for streams that
+are *missing*, and every other field means what it always did — so a run in flight across the
+change still resumes, which is the entire point of §11. What it does not get is bit-identity
+with the run that was killed, since its dihedral elements from that point on come from the hash
+rather than from the stream the checkpoint recorded. That is a code change, not a corrupt
+checkpoint, and it is what the fingerprint's ``git_sha`` is for.
 
 ## Retention, and why the milestone set is read rather than written down
 
@@ -64,7 +75,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, Final
 
 import numpy as np
 import torch
@@ -80,7 +91,7 @@ FORMAT_VERSION: Final = 1
 #: The RNG streams a checkpoint carries. Named here so the capture, the restore and the test
 #: that they round-trip all read one list — a stream added to two of the three is a stream that
 #: silently is not restored.
-RNG_STREAMS: Final = ("torch", "cuda", "numpy", "python", "dataloader", "augmentation")
+RNG_STREAMS: Final = ("torch", "cuda", "numpy", "python", "dataloader")
 
 #: The fingerprint fields a resume refuses to disagree on: *which data*. ``corpus_dir`` and
 #: ``git_sha`` are deliberately absent — §11 resumes on a fresh instance where the corpus is
@@ -168,50 +179,27 @@ def _restore_numpy_global(state: dict) -> None:
     )
 
 
-@runtime_checkable
-class HasRngState(Protocol):
-    """A dataset that owns an RNG stream of its own, and can hand it over and take it back.
-
-    :class:`pretrain.augment.DihedralDataset` is the one implementer. Named as a Protocol
-    rather than duck-typed at the call site because that is how this repo says "any object
-    with this shape" — :class:`dataset.loader.Normalizer`, ``dataset.shards.TileSink`` and
-    ``dataset.masks.MaskReader` are the same pattern — and because it makes the contract a
-    checkpoint depends on greppable from the module that depends on it.
-    """
-
-    def rng_state(self) -> dict | None: ...
-
-    def load_rng_state(self, state: dict | None) -> None: ...
-
-
-def capture_rng(
-    *, generator: torch.Generator | None = None, dataset: HasRngState | None = None
-) -> dict:
+def capture_rng(*, generator: torch.Generator | None = None) -> dict:
     """Snapshot :data:`RNG_STREAMS` — all of them, from wherever each one lives.
 
-    ``generator`` is the DataLoader's (:func:`pretrain.train.seeded_generator`); ``dataset`` is
-    whatever the loader reads, and its augmentation stream is taken when it has one to give.
-    Both are optional so a checkpoint written outside a loop still records the four ambient
-    streams rather than silently recording none.
+    ``generator`` is the DataLoader's (:func:`pretrain.train.seeded_generator`). It is optional
+    so a checkpoint written outside a loop still records the four ambient streams rather than
+    silently recording none.
+
+    The read path contributes nothing here, and that is the #104 fix rather than an omission:
+    :class:`pretrain.augment.DihedralDataset` holds no stream to snapshot.
     """
     cuda = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
-    carries_stream = isinstance(dataset, HasRngState)
     return {
         "torch": torch.get_rng_state(),
         "cuda": list(cuda),
         "numpy": _numpy_global_state(),
         "python": random.getstate(),
         "dataloader": None if generator is None else generator.get_state(),
-        "augmentation": dataset.rng_state() if carries_stream else None,
     }
 
 
-def restore_rng(
-    state: dict,
-    *,
-    generator: torch.Generator | None = None,
-    dataset: HasRngState | None = None,
-) -> None:
+def restore_rng(state: dict, *, generator: torch.Generator | None = None) -> None:
     """Put every captured stream back where it was.
 
     CUDA state is restored only when the resumed box has as many devices as the killed one had.
@@ -241,8 +229,6 @@ def restore_rng(
     random.setstate((version, tuple(internal), gauss))
     if generator is not None and state["dataloader"] is not None:
         generator.set_state(state["dataloader"].to(torch.uint8))
-    if isinstance(dataset, HasRngState):
-        dataset.load_rng_state(state["augmentation"])
 
 
 # --- The file on disk ---------------------------------------------------------

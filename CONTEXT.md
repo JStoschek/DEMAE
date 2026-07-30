@@ -281,14 +281,18 @@ GitHub issue #1.
   (ADR-0003), and the load-bearing property is that **one draw carries both the image and its
   land mask**: the two drifting apart does not crash and does not show in a loss curve, it
   simply points the ocean weighting at a rotated copy of where the ocean used to be.
-  Its draw comes from a NumPy generator held by **whichever process is reading**, which is what
-  makes it the one **RNG stream** an **exact resume** does not restore at `num_workers > 0`:
-  the stream lives in worker processes the parent cannot reach, so a checkpoint captures it
-  only at `num_workers = 0`. Order, weights, optimizer and mask draws still resume exactly at
-  any worker count — it is the dihedral element per sample that is redrawn. Closing the gap
-  means deriving the draw from the sample index instead of from a per-process stream, which is
-  a change to *this* design rather than to the checkpoint
-  ([#94](https://github.com/JStoschek/DEMAE/issues/94) records it).
+  The element is a **pure function of `(run seed, epoch, sample index)`** — a keyed hash, not a
+  draw from any generator — so it is **not an RNG stream** and there is nothing about it for a
+  checkpoint to carry. That is what makes **exact resume** hold at *any* worker count: a
+  sequential stream has a position, position is process-local, and at the shipped
+  `num_workers = 8` it lived in worker processes the parent could neither read nor restore, so a
+  resumed run silently redrew every dihedral element from the kill point on
+  ([#104](https://github.com/JStoschek/DEMAE/issues/104) closed that by deleting the stream;
+  [#94](https://github.com/JStoschek/DEMAE/issues/94) had documented it as a limitation). The
+  epoch reaches a worker — which is handed sample indices and nothing else — on an `EpochIndex`,
+  the `int` subclass `EpochShuffleSampler` yields; without it every epoch would apply the same
+  transform to the same tile, which is a fixed relabelling of the corpus rather than
+  augmentation.
 - **norm_pix** — per-patch target normalization: the reconstruction target for a patch is that
   patch standardized by its **own** mean and variance, so the model is scored on internal relief
   rather than on where the patch sits within the tile (`pretrain.loss`,
@@ -433,15 +437,21 @@ GitHub issue #1.
   over. It needs four things restored together — weights, optimizer moments, the schedule's
   step count, and every **RNG stream** — and the failure of any one of them looks like nothing:
   the run resumes, the loss descends, and the recipe quietly changed
-  ([#94](https://github.com/JStoschek/DEMAE/issues/94)). Claimed and tested at
-  `num_workers = 0`; see **Dihedral augmentation** for the one stream that does not resume with
-  workers.
+  ([#94](https://github.com/JStoschek/DEMAE/issues/94)). Claimed and tested **at the worker
+  count that ships**, not only at `num_workers = 0` — #94's gate held at 0 while the default was
+  8, because the **dihedral augmentation** drew from a stream living in the worker processes;
+  [#104](https://github.com/JStoschek/DEMAE/issues/104) made that draw a pure function instead, and
+  the kill-and-resume test now runs with real workers. The general rule it leaves behind: state
+  that must survive a resume belongs in a *pure function of position*, and only what genuinely
+  cannot — optimizer moments, the mask draw's generator — belongs in the checkpoint payload.
 - **RNG stream** — one independent source of randomness a run draws from, of which there are
-  six and not one: the ambient torch generator (the in-model mask draw), CUDA's per-device
-  generators, NumPy's legacy global, Python's `random`, the DataLoader's own `torch.Generator`,
-  and the dihedral augmentation's per-process NumPy generator. They are named as a list
-  (`pretrain.checkpoint.RNG_STREAMS`) precisely because a stream captured in one place and
-  restored in neither of the other two is a stream that silently is not restored.
+  five and not one: the ambient torch generator (the in-model mask draw), CUDA's per-device
+  generators, NumPy's legacy global, Python's `random`, and the DataLoader's own
+  `torch.Generator`. They are named as a list (`pretrain.checkpoint.RNG_STREAMS`) precisely
+  because a stream captured in one place and restored in neither of the other two is a stream
+  that silently is not restored. The augmentation was a sixth until #104 removed the stream
+  rather than the restore; a pre-#104 checkpoint still carries the dead key and still resumes,
+  which is why the checkpoint format version is unchanged.
 - **Epoch order** — the sequence a training epoch reads its tiles in, derived as a pure
   function of `(seed, epoch)` (`pretrain.train.EpochShuffleSampler`) rather than drawn from a
   rolling generator. The distinction is what makes a **mid-epoch resume** continue the order it
@@ -449,6 +459,9 @@ GitHub issue #1.
   showing some tiles twice in an epoch and others never. A generator's state at epoch 300
   depends on every draw before it, including how many DataLoader iterators were constructed,
   which differs between a first launch and a resumed one; a pure function has no such history.
+  What the sampler yields is an `EpochIndex` — an `int` that also carries the epoch it was drawn
+  for, which is how the epoch reaches a worker process for the **dihedral augmentation** to key
+  on; everything between the two treats it as the plain index it is.
   **This supersedes [ADR-0003](docs/adr/0003-dataloader-design.md) §1's global
   `DataLoader(shuffle=True)`** for the *training* loader only — the val loader still reads in
   manifest order, and the shuffle is still global and still seeded from the run config.

@@ -40,9 +40,10 @@ exactly three streams to think about:
   <pretrain.model.MaskedAutoencoder.from_config>`, in a forked RNG, so building a model does not
   consume from the stream the run then draws its masks from.
 - **The DataLoader's shuffle** takes an explicit :class:`torch.Generator` seeded from the config.
-- **Masking and augmentation** draw from the ambient torch RNG (at ``num_workers > 0`` the
-  augmentation's entropy is the loader's ``base_seed + worker_id``, which is drawn from that same
-  seeded generator — see :mod:`pretrain.augment`).
+- **Masking** draws from the ambient torch RNG.
+- **Augmentation** draws from no stream at all: since #104 the dihedral element is a pure
+  function of ``(config seed, epoch, sample index)``, so it is the same at every worker count and
+  the same after a resume — see :mod:`pretrain.augment`.
 
 `test_the_same_seed_and_config_reproduce_the_loss_trajectory` pins the result on CPU. It is a
 weaker claim on a GPU, where the kernels themselves are nondeterministic, and #94's kill-and-
@@ -65,7 +66,7 @@ from torch.utils.data import Sampler
 
 from dataset.loader import build_dataloader
 
-from .augment import make_augmented
+from .augment import EpochIndex, make_augmented
 from .checkpoint import (
     DEFAULT_INTERVAL_SECONDS,
     CheckpointPolicy,
@@ -100,9 +101,10 @@ def seeded_generator(cfg: RunConfig) -> torch.Generator:
 def seed_run(cfg: RunConfig) -> torch.Generator:
     """Seed the run's RNG streams and hand back the DataLoader's generator (§6).
 
-    The ambient seed is what the in-model mask draw (#90) and, at ``num_workers=0``, the
-    dihedral augmentation (#91) read. Model init does *not* read it — it forks its own — so
-    adding a decoder block cannot silently reorder the corpus.
+    The ambient seed is what the in-model mask draw (#90) reads. Model init does *not* read it —
+    it forks its own — so adding a decoder block cannot silently reorder the corpus. Neither
+    does the dihedral augmentation, which since #104 hashes ``cfg.runtime.seed`` with the epoch
+    and the sample index instead of drawing from any stream.
     """
     torch.manual_seed(cfg.runtime.seed)
     return seeded_generator(cfg)
@@ -146,6 +148,14 @@ class EpochShuffleSampler(Sampler[int]):
     Iterating to exhaustion advances to the next epoch and clears :attr:`skip`, so a plain
     ``for epoch in range(N): for batch in loader:`` still reshuffles every pass (#93 relies on
     it). :meth:`set_epoch` overrides that, and is what :class:`EpochCursor` drives.
+
+    What it yields is an :class:`~pretrain.augment.EpochIndex` — an ``int``, plus the epoch it
+    was drawn for (#104). That is how the epoch reaches a *worker* process, which is handed
+    indices and knows nothing else; :class:`~pretrain.augment.DihedralDataset` needs it because
+    its element is a pure function of ``(seed, epoch, index)`` rather than a stream. Nothing
+    else downstream has to know: an unaugmented shuffled loader indexes
+    :class:`~pretrain.data.SplitDataset` with these directly and they behave as the ints they
+    are.
     """
 
     def __init__(self, n: int, *, seed: int, epoch: int = 0, skip: int = 0) -> None:
@@ -172,7 +182,10 @@ class EpochShuffleSampler(Sampler[int]):
 
     def __iter__(self):
         epoch, skip = self.epoch, self.skip
-        yield from self.permutation()[skip:]
+        # Keyed with the epoch captured above, not with `self.epoch`: a `set_epoch` issued
+        # mid-iteration (which is what a resume does) must not relabel the tail of the
+        # permutation this pass is still handing out with an epoch it did not come from.
+        yield from (EpochIndex(i, epoch) for i in self.permutation()[skip:])
         # Exhausted, and nobody moved us meanwhile: the next pass is the next epoch. Guarded so
         # that a `set_epoch` issued *during* iteration (which is what a resume does, and what
         # prefetching workers make possible) is not undone by the iterator that preceded it.
@@ -221,7 +234,7 @@ def build_loader(
         normalization=cfg.data.normalization,
     )
     if augment:
-        dataset = make_augmented(dataset, cfg.data)
+        dataset = make_augmented(dataset, cfg.data, seed=cfg.runtime.seed)
     kwargs: dict[str, Any] = {
         "batch_size": cfg.optimization.batch_size,
         "num_workers": cfg.data.num_workers,
@@ -757,7 +770,7 @@ def train_resumable(
         trainer.optimizer.load_state_dict(checkpoint.optimizer)
         trainer.completed_steps = checkpoint.state.step
         state = checkpoint.state
-        restore_rng(checkpoint.rng, generator=generator, dataset=loader.dataset)
+        restore_rng(checkpoint.rng, generator=generator)
 
     if on_start is not None:
         on_start(trainer)
@@ -780,7 +793,7 @@ def train_resumable(
                 state=cursor.state(trainer.completed_steps),
                 model=trainer.model,
                 optimizer=trainer.optimizer,
-                rng=capture_rng(generator=generator, dataset=loader.dataset),
+                rng=capture_rng(generator=generator),
                 ends_epoch=group.ends_epoch,
             )
     return records

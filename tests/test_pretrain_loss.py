@@ -43,7 +43,7 @@ import math
 import pytest
 import torch
 
-from pretrain.augment import DIHEDRAL_ORDER, DihedralDataset, apply_dihedral
+from pretrain.augment import DIHEDRAL_ORDER, DihedralDataset, EpochIndex, apply_dihedral
 from pretrain.config import RunConfig
 from pretrain.loss import (
     REFERENCE_VAR_EPS,
@@ -631,9 +631,14 @@ def test_the_shipped_dihedral_augmentation_keeps_the_pair_aligned():
     }
     dataset = DihedralDataset([sample], seed=7)
 
+    # One tile across many *epochs*, not one tile read many times: since #104 the element is a
+    # pure function of `(seed, epoch, index)`, so re-reading the same index is by design the
+    # same transform every time. Sweeping the epoch is what varies it, and it is also the
+    # honest shape of the question — this asserts that the pair stays aligned under whatever
+    # element a given epoch picks, which is the property #96 depends on for the whole run.
     seen = set()
-    for _ in range(64):
-        drawn = dataset[0]
+    for epoch in range(64):
+        drawn = dataset[EpochIndex(0, epoch)]
         check_mask_alignment(drawn["image"][None], drawn["land_mask"][None])
         seen.add(drawn["land_mask"].numpy().tobytes())
 

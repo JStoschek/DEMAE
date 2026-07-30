@@ -28,43 +28,62 @@ a rotated copy of where the ocean used to be — no crash, no curve, nothing. On
 twice is the cheapest possible defence, and `test_pretrain_augment.py` decodes the element back
 out of both tensors sample by sample rather than trusting that it was.
 
-## Seeding, and the per-worker stream
+## The draw is a hash, not a stream (#104)
 
-The draw comes from a NumPy generator built **lazily, inside whichever process is reading** —
-the same fork-safety pattern as the loader's per-worker memmaps, and for a sharper reason. A
-generator built in the parent is copied byte-for-byte into every worker (under fork, and under
-spawn via pickle), so all of them would draw the identical sequence: the augmentation would
-still look random, still cover all eight elements, and still deliver each sample the same
-transform its neighbour got. Hence :attr:`DihedralDataset._rng_key` — the RNG is rebuilt
-whenever the worker identity it was built for is not the one now reading.
+The element is a **pure function of** ``(run seed, epoch, sample index)`` —
+:func:`dihedral_element` — and not a sequential draw from a generator this object owns. That is
+the whole of the seeding design, and it is worth saying why, because the obvious implementation
+is the sequential one and #91 shipped it.
 
-Left unseeded (the default) the entropy is :func:`torch.initial_seed`, which inside a worker is
-the DataLoader's ``base_seed + worker_id`` — drawn from the DataLoader's own generator. That is
-ADR-0003's reproducibility note taken literally: the run's generator seeds the shuffle *and*
-the augmentation, so one seed reproduces one epoch. An explicit ``seed`` overrides it for
-tests and for anything that wants a pinned stream independent of the loader.
+A generator has *position*, and position is process-local. Under ``num_workers > 0`` the reads
+happen in worker processes, so a per-process stream has to be seeded per worker (or every worker
+draws the identical sequence and each sample gets its neighbour's transform), and once it is
+per-worker the parent can no longer see it: :mod:`pretrain.checkpoint` cannot capture it, and a
+run killed and resumed silently redraws every dihedral element from the kill point on. That was
+a real hole in plan §11's exact-resume gate at the shipped ``num_workers = 8``, and #94
+documented it rather than closing it.
 
-One asymmetry worth knowing rather than discovering: torch passes ``base_seed`` to *workers*
-and leaves the main process's RNG alone, so at ``num_workers=0`` the loader's generator has no
-say and the seed of record is the ambient one — :attr:`pretrain.config.Runtime.seed`, applied
-with :func:`torch.manual_seed` the way :meth:`pretrain.model.MaskedAutoencoder.from_config`
-already applies it. Either way a run reproduces from one number; it is simply a different
-number in the two cases.
+A hash has no position. Sample ``i`` of epoch ``e`` gets the same element whichever process
+reads it, whether it is read now or after a kill and a resume, and whether it is the first
+sample that process has read or the ten-thousandth. So:
+
+- there is **no augmentation RNG stream to checkpoint** — the gap closes by deletion, not by
+  plumbing the state out of the workers;
+- **exact resume holds at any worker count**, which is what §15.4's checklist item actually
+  needs, since ``num_workers = 0`` is not a configuration anyone runs;
+- two workers cannot collide by construction, because the key differs per *sample* rather than
+  per *process*.
+
+## Where the epoch comes from
+
+A worker is handed sample indices and knows nothing else, so the epoch has to travel with the
+index: :class:`EpochIndex` is what :class:`pretrain.train.EpochShuffleSampler` yields, an ``int``
+that also says which epoch it was drawn for. It is an ``int`` subclass rather than a tuple so
+that everything downstream of the sampler — an unaugmented shuffled loader, plain list indexing,
+the wrapped dataset itself — keeps working on it unchanged; and it defines :meth:`__reduce__`
+explicitly, because the default pickling of an ``int`` subclass would drop the attribute on the
+way into a worker and leave every epoch augmenting identically.
+
+Indexing a :class:`DihedralDataset` with a plain ``int`` is epoch 0. That is the right answer for
+the one caller that does it — a test, or anything reading the dataset directly — and the
+resumable loop cannot reach it: :class:`pretrain.train.EpochCursor` refuses a loader whose
+sampler is not an :class:`~pretrain.train.EpochShuffleSampler`.
+
+The cost is a BLAKE2b of a short string per sample, measured at ~0.5 us, plus ~0.3 us to build
+the key. Against a memmap tile read and a normalization that is well into the tens of
+microseconds, that is not a number the §10.4 loader-wait fraction can see.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+import hashlib
+from typing import Final
 
-import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import Dataset
 
 from .config import Data
-
-if TYPE_CHECKING:  # torch does not re-export the type `get_worker_info` returns
-    from torch.utils.data._utils.worker import WorkerInfo
 
 #: |D4| — the four rotations times {identity, mirror}. Eight elements, uniform.
 DIHEDRAL_ORDER: Final = 8
@@ -75,8 +94,67 @@ DIHEDRAL_ORDER: Final = 8
 #: metres for the §10.2 grids.
 GEOMETRIC_KEYS: Final = ("image", "land_mask")
 
-#: Mask for normalizing torch's 64-bit seed into the non-negative entropy NumPy wants.
-_UINT64: Final = (1 << 64) - 1
+
+class EpochIndex(int):
+    """A sample index that also says which epoch it was drawn for (#104).
+
+    :class:`pretrain.train.EpochShuffleSampler` yields these; :class:`DihedralDataset` is the
+    only thing that reads the :attr:`epoch` off them. Everything in between — the DataLoader's
+    batch sampler, the index queue into a worker, the wrapped dataset's own ``__getitem__`` —
+    treats it as the ``int`` it is, which is the reason it is an ``int`` subclass and not a
+    tuple: an unaugmented shuffled loader indexes :class:`pretrain.data.SplitDataset` with the
+    sampler's output directly, and a tuple would break that for no gain.
+    """
+
+    epoch: int
+
+    def __new__(cls, index: int, epoch: int) -> EpochIndex:
+        self = super().__new__(cls, index)
+        self.epoch = epoch
+        return self
+
+    def __reduce__(self):
+        """Pickle the epoch along with the index — spelled out, because the default drops it.
+
+        An ``int`` subclass reduces through ``int.__getnewargs__``, which knows about the value
+        and nothing about ``__dict__``. Left to itself, every key would arrive in the worker as
+        epoch 0, every epoch would apply the same transform to the same tile, and the result
+        would be a fixed relabelling of the corpus that looks exactly like augmentation from
+        every angle except a second epoch's. `test_the_epoch_survives_being_pickled` and
+        `test_workers_apply_the_identical_elements_the_parent_would_have` are the assertions,
+        and this is the reason they exist.
+        """
+        return (EpochIndex, (int(self), self.epoch))
+
+    def __repr__(self) -> str:
+        return f"EpochIndex({int(self)}, epoch={self.epoch})"
+
+    #: **Not** the repr. ``int`` defines no ``__str__`` of its own (``int.__str__`` *is*
+    #: ``object.__str__``, which defers to ``__repr__``), so overriding ``__repr__`` alone
+    #: silently changes what ``f"{index}"`` produces — and a wrapped dataset that builds an id,
+    #: a cache key or a filename out of its index would start emitting
+    #: ``tile_EpochIndex(3, epoch=5)`` for the augmented read path and ``tile_3`` for every
+    #: other caller. An index that does not print as its own value is not a drop-in for one.
+    #: ``int.__repr__``, not ``int.__str__``, for exactly the reason above.
+    __str__ = int.__repr__
+
+
+def dihedral_element(*, seed: int, epoch: int, index: int) -> int:
+    """Which of the eight elements sample ``index`` of epoch ``epoch`` is shown, for run ``seed``.
+
+    A keyed hash, for the reason :func:`pretrain.train.epoch_seed` is one and
+    :mod:`dataset.sampling`'s tie-breaks are: adjacent keys must not produce related answers.
+    ``seed + epoch + index`` would hand the same element to (seed 7, epoch 2, tile 5) and
+    (seed 7, epoch 3, tile 4), which is a diagonal correlation across the corpus that nothing
+    downstream would ever surface.
+
+    The modulo is over the whole 64-bit digest — which is to say its low three bits, since
+    :data:`DIHEDRAL_ORDER` is 8 and divides 2**64 exactly. That makes the draw exactly uniform
+    with no rejection step, rather than the near-uniform a modulo of a non-power-of-two range
+    would give.
+    """
+    digest = hashlib.blake2b(f"{seed}:{epoch}:{index}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % DIHEDRAL_ORDER
 
 
 def apply_dihedral(x: Tensor, k: int) -> Tensor:
@@ -123,71 +201,49 @@ class DihedralDataset(Dataset):
     with :data:`GEOMETRIC_KEYS` transformed. Nothing about the wrapped dataset changes, and the
     sample it returns is not mutated: in a worker that dict can be backed by shared memory, and
     transforming it in place would corrupt the next read of the same tile.
+
+    Holds no RNG and no state of any kind beyond the run's seed, which is what makes it
+    identical in the parent and in all eight workers, and what leaves #94's checkpoint with no
+    augmentation stream to capture — see the module docstring.
     """
 
-    def __init__(self, dataset, *, seed: int | None = None) -> None:
+    def __init__(self, dataset, *, seed: int) -> None:
         self.dataset = dataset
+        #: The run's seed (:attr:`pretrain.config.Runtime.seed`) — the *whole* entropy of the
+        #: augmentation, and the same number at every worker count. Required rather than
+        #: defaulted, because a silently-zero seed is a run that reports one recipe's
+        #: augmentation and gets another's.
         self.seed = seed
-        # Built lazily, per reading process — see the module docstring. `None` here is what
-        # makes the object safe to fork or pickle into a worker.
-        self._rng: np.random.Generator | None = None
-        self._rng_key: tuple[int | None, int | None] | None = None
 
     def __len__(self) -> int:
         return len(self.dataset)
 
-    def _entropy(self, worker: WorkerInfo | None) -> int | list[int]:
-        """This process's seed: the DataLoader generator's, or an explicit one split per worker."""
-        if self.seed is None:
-            # Inside a worker this is the DataLoader's `base_seed + worker_id`, drawn from the
-            # loader's generator; in the main process it is the ambient torch seed.
-            return torch.initial_seed() & _UINT64
-        return [self.seed, 0 if worker is None else worker.id]
-
-    def _rng_for_this_worker(self) -> np.random.Generator:
-        worker = get_worker_info()
-        key = (self.seed, None if worker is None else worker.id)
-        if self._rng_key != key:
-            self._rng = np.random.default_rng(self._entropy(worker))
-            self._rng_key = key
-        return self._rng
-
     def __getitem__(self, index: int) -> dict:
+        # `index` carries an epoch when it came from an EpochShuffleSampler and is a bare int
+        # otherwise; see the module docstring for why epoch 0 is the right reading of a bare one.
+        # The wrapped dataset is indexed with it unchanged — an EpochIndex *is* an int.
         sample = dict(self.dataset[index])
-        k = int(self._rng_for_this_worker().integers(DIHEDRAL_ORDER))
+        k = dihedral_element(
+            seed=self.seed, epoch=getattr(index, "epoch", 0), index=int(index)
+        )
         for key in GEOMETRIC_KEYS:
             _check_square(sample[key], key=key)
             sample[key] = apply_dihedral(sample[key], k)
         return sample
 
-    def rng_state(self) -> dict | None:
-        """This process's augmentation stream, as plain types — #94's checkpoint reads it.
-
-        ``None`` when nothing has been read yet, which is an honest answer rather than a
-        missing one: a checkpoint written before the first sample has no stream to record, and
-        the process that resumes it seeds an identical one from the same ambient seed.
-
-        **Only this process's.** At ``num_workers > 0`` the stream that matters lives in the
-        workers, is unreachable from here, and is not what this returns — see
-        :mod:`pretrain.checkpoint`'s module docstring for what that costs a resume.
-        """
-        return None if self._rng is None else self._rng.bit_generator.state
-
-    def load_rng_state(self, state: dict | None) -> None:
-        """Put a stream captured by :meth:`rng_state` back. ``None`` is a no-op, deliberately."""
-        if state is None:
-            return
-        self._rng_for_this_worker().bit_generator.state = state
-
     def __repr__(self) -> str:
         return f"DihedralDataset({self.dataset!r}, seed={self.seed!r})"
 
 
-def make_augmented(dataset, data: Data, *, seed: int | None = None) -> Dataset:
+def make_augmented(dataset, data: Data, *, seed: int) -> Dataset:
     """The §6 augmentation :class:`~pretrain.config.Data` asks for, wrapped around ``dataset``.
 
     Returns the dataset itself when augmentation is off, so a val loader — which #93 builds
     without augmentation, to keep §10.1's val loss comparable across epochs — costs nothing.
+
+    ``seed`` is the run's (:attr:`pretrain.config.Runtime.seed`) and has no default: it is now
+    the entire entropy of the augmentation rather than a test-only override of an ambient
+    stream, so a caller that forgets it should not be able to get a plausible-looking run.
     """
     if data.random_resized_crop:
         raise ValueError(

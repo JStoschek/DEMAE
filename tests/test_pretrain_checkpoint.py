@@ -21,7 +21,10 @@ one epoch while others are skipped.
 
 **Equivalence.** Kill at step k, resume, and the loss trajectory over the next 50+ steps is
 *bit-identical* to an uninterrupted run's. That is the §15.4 gate, and it is the one assertion
-that no amount of reading the code substitutes for.
+that no amount of reading the code substitutes for. It runs **at two worker counts**, because
+#94 first shipped it at ``num_workers = 0`` while the default was 8 and the dihedral draw did
+not survive the difference (#104); a gate that holds only at a configuration nobody runs is not
+a gate, and the extra process spawn is the cheapest thing in this file.
 """
 
 from __future__ import annotations
@@ -183,42 +186,61 @@ def test_a_directory_with_no_checkpoints_resumes_from_nothing_rather_than_raisin
 def test_every_named_rng_stream_round_trips(cfg):
     # §11: "all RNG states". Each one is captured, moved on, restored, and asked to produce the
     # same next draw — the streams are independent, so a missing one is invisible in the others.
-    loader = train_mod.build_loader(cfg, "train")
-    generator, dataset = loader.generator, loader.dataset
+    generator = train_mod.build_loader(cfg, "train").generator
     torch.manual_seed(7)
-    dataset[0]  # forces the augmentation stream into existence
 
-    state = ckpt_mod.capture_rng(generator=generator, dataset=dataset)
+    state = ckpt_mod.capture_rng(generator=generator)
     expected = (
         torch.rand(3),
         np.random.rand(3).tolist(),
         [random.random() for _ in range(3)],
         torch.rand(3, generator=generator),
-        dataset._rng_for_this_worker().integers(8, size=3).tolist(),
     )
 
     torch.manual_seed(99)
     np.random.seed(99)
     random.seed(99)
     generator.manual_seed(99)
-    dataset[0]
 
-    ckpt_mod.restore_rng(state, generator=generator, dataset=dataset)
+    ckpt_mod.restore_rng(state, generator=generator)
     assert torch.equal(torch.rand(3), expected[0])
     assert np.random.rand(3).tolist() == expected[1]
     assert [random.random() for _ in range(3)] == expected[2]
     assert torch.equal(torch.rand(3, generator=generator), expected[3])
-    assert dataset._rng_for_this_worker().integers(8, size=3).tolist() == expected[4]
 
 
-def test_an_augmentation_stream_never_read_from_is_recorded_as_absent(cfg):
-    # An epoch-0 checkpoint is written before any sample is read, so the wrapper has no
-    # generator yet. Absent is the honest record, and restoring it must be a no-op rather than
-    # a crash — the fresh process seeds its own from the same ambient seed.
-    loader = train_mod.build_loader(cfg, "train")
-    state = ckpt_mod.capture_rng(generator=loader.generator, dataset=loader.dataset)
-    assert state["augmentation"] is None
-    ckpt_mod.restore_rng(state, generator=loader.generator, dataset=loader.dataset)
+def test_the_read_path_contributes_no_rng_stream_to_capture(cfg):
+    """#104: the augmentation is a pure function of ``(seed, epoch, index)``, not a stream.
+
+    This is the assertion that the ``num_workers`` gap was closed by *deletion*. Reading a
+    sample must leave nothing behind for a checkpoint to have to capture — if it did, that
+    state would live in whichever of the eight workers did the reading, and the parent could
+    no more record it than before.
+    """
+    dataset = train_mod.build_loader(cfg, "train").dataset
+    before = ckpt_mod.capture_rng()
+    dataset[0], dataset[1], dataset[2]
+    assert "augmentation" not in ckpt_mod.RNG_STREAMS
+    assert not hasattr(dataset, "rng_state")
+    # and the ambient streams are untouched by the read, too
+    assert ckpt_mod.capture_rng()["numpy"] == before["numpy"]
+
+
+def test_a_checkpoint_written_before_the_stream_removal_still_resumes(cfg, policy):
+    """A pre-#104 payload carries an extra ``rng["augmentation"]``, and must not be refused.
+
+    :data:`~pretrain.checkpoint.FORMAT_VERSION` is deliberately not bumped for the removal:
+    §11 exists so that a run in flight survives, and killing every checkpoint already on a box
+    to tidy up a key nothing reads would be the opposite of that.
+    """
+    path = write_one(policy, cfg, epoch=1, step=4)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload["rng"]["augmentation"] = {"bit_generator": "PCG64", "state": {}}
+    ckpt_mod.atomic_save(payload, path)
+
+    loaded = ckpt_mod.load_checkpoint(path)
+    ckpt_mod.restore_rng(loaded.rng, generator=train_mod.seeded_generator(cfg))
+    assert trajectory(cfg, steps=6, policy=policy, resume=True)[0].step == 4
 
 
 # --- Retention ----------------------------------------------------------------
@@ -439,14 +461,26 @@ def tiles_read(cfg, *, steps, state=RunState()) -> list[str]:
     return seen
 
 
-def test_kill_at_step_k_and_resume_reproduces_the_loss_trajectory_bit_identically(cfg, policy):
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_kill_at_step_k_and_resume_reproduces_the_loss_trajectory_bit_identically(
+    cfg, policy, num_workers
+):
     """Plan §15.4, and the gate every GPU dollar after R0 sits behind.
 
     Not `approx`: bit-identical. An approximate match would pass with the optimizer's second
     moments reset, with the LR curve restarted, or with a fresh shuffle — every one of which
     is a real bug that a run recovers from silently and never reports.
+
+    **Parametrized over the worker count, because for a while it was only true at one of them.**
+    #94 shipped this gate at ``num_workers = 0`` while the default was 8: the dihedral element
+    came from a NumPy stream held by whichever process was reading, so at any worker count that
+    matters it was unreachable from the parent, uncheckpointable, and silently redrawn from the
+    kill point on. A gate that holds only at a configuration nobody runs is not a gate. #104 made
+    the element a pure function of ``(seed, epoch, index)``, and ``num_workers = 2`` here is what
+    says so — it costs a process spawn or two, which is the cheapest thing on this page.
     """
-    uninterrupted = [r.loss for r in trajectory(cfg, steps=TOTAL)]
+    cfg = cfg.replace(data=cfg.data.replace(num_workers=num_workers))
+    uninterrupted = trajectory(cfg, steps=TOTAL)
 
     killed = trajectory(cfg, steps=KILL_AT, policy=policy)
     assert [r.step for r in killed] == list(range(KILL_AT))
@@ -454,8 +488,8 @@ def test_kill_at_step_k_and_resume_reproduces_the_loss_trajectory_bit_identicall
 
     assert [r.step for r in resumed] == list(range(KILL_AT, TOTAL))
     assert len(resumed) == 50
-    assert [r.loss for r in resumed] == uninterrupted[KILL_AT:]
-    assert [r.lr for r in resumed] == [r.lr for r in trajectory(cfg, steps=TOTAL)][KILL_AT:]
+    assert [r.loss for r in resumed] == [r.loss for r in uninterrupted[KILL_AT:]]
+    assert [r.lr for r in resumed] == [r.lr for r in uninterrupted[KILL_AT:]]
 
 
 def test_the_kill_point_is_mid_epoch_so_the_shuffle_order_is_actually_on_trial(cfg, policy):
@@ -492,8 +526,11 @@ def test_the_order_resumes_exactly_with_real_worker_processes_too(cfg):
     order derived from a *rolling* generator would come apart on exactly those seams, which is
     why :class:`~pretrain.train.EpochShuffleSampler` derives it from ``(seed, epoch)`` instead.
 
-    What this does **not** claim is the dihedral draw. That stream lives in the workers and the
-    parent cannot checkpoint it — see :mod:`pretrain.checkpoint`'s module docstring.
+    The dihedral draw used to be excluded from this claim, because it lived in the workers and
+    the parent could not checkpoint it. Since #104 it is a pure function of ``(seed, epoch,
+    index)`` and resumes with everything else; the gate that measures *that* is
+    :func:`test_kill_at_step_k_and_resume_reproduces_the_loss_trajectory_bit_identically`,
+    which now runs with workers too.
     """
     workered = cfg.replace(data=cfg.data.replace(num_workers=2))
     uninterrupted = tiles_read(workered, steps=12)
