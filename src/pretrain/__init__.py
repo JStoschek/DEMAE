@@ -59,9 +59,25 @@ that has a loss curve:
   (§7.1), gradient accumulation whose gradient equals the single-batch one, the loader assembled
   from `dataset.loader` unchanged, and a seed that makes two runs of one config the same run.
 
+#95 is what makes that loop a thing a rented box can be pointed at — plan §7's efficiency
+levers, and the command that applies them:
+
+- :mod:`pretrain.runtime` — `torch.compile(dynamic=False)` over the full model (§7.3), and
+  §7.2's SDPA path *confirmed on the blocks the model actually holds* rather than assumed from
+  the config. Both levers share one failure mode: they fail by being silently absent, training
+  the identical model more slowly, which no loss curve, gradient norm or checkpoint would ever
+  report. So the module's real subject is the checking — including a recompile counter, because
+  §7.3's 1.1-1.4x is contingent on the graph being compiled once.
+- :mod:`pretrain.throughput` — samples/s, step time, and the **loader wait fraction**, per step
+  and per epoch. §7.5 names the dataloader as the plan's #1 risk and sets a measured gate on it;
+  these are the numbers that gate is read in. #97 builds the dashboard and the ~10% alarm on
+  top of them.
+
 ``python -m pretrain`` prints the config + fingerprint header a real run would record;
-``python -m pretrain.train --steps N`` runs the loop. The launch entrypoint a rented box
-invokes — compile, throughput counters, the full override surface — is #95's, and it wraps that.
+``python -m pretrain.train --steps N`` runs the bare loop. **``python -m pretrain.launch`` is
+how a run is actually started** (:mod:`pretrain.launch`): a config file plus repeatable
+``--set group.knob=value`` overrides, the levers confirmed before the first step, the counters
+reported throughout, and a ``--dry-run`` that assembles everything and spends nothing.
 
 Note what this module re-exports and what it does not: :mod:`~pretrain.model`,
 :mod:`~pretrain.data`, :mod:`~pretrain.augment`, :mod:`~pretrain.loss`, :mod:`~pretrain.init`,

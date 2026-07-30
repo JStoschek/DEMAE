@@ -96,6 +96,11 @@ def tiny_config(corpus, **changes) -> RunConfig:
             split_blocks_path=str(corpus / "no-blocks.json"),
             num_workers=0,
         ),
+        # §7.3's default is on, and #95 makes `Trainer.from_config` honour it. Compiling a
+        # 2-block model on a CPU costs more than this whole file does to run, and buys nothing
+        # at this size — so the fixture opts out and the tests that are *about* compiling opt
+        # back in one at a time.
+        runtime=Runtime(compile=False),
     )
     return cfg.replace(**changes) if changes else cfg
 
@@ -161,7 +166,7 @@ def test_the_loader_generator_is_seeded_from_the_config(cfg):
         [t for b in train_mod.build_loader(cfg, "train") for t in b["tile_id"]] for _ in range(2)
     ]
     assert order[0] == order[1]
-    other = cfg.replace(runtime=Runtime(seed=cfg.runtime.seed + 1))
+    other = cfg.replace(runtime=cfg.runtime.replace(seed=cfg.runtime.seed + 1))
     assert [t for b in train_mod.build_loader(other, "train") for t in b["tile_id"]] != order[0]
 
 
@@ -182,7 +187,9 @@ def test_the_forward_pass_runs_under_bf16_autocast(cfg):
 
 
 def test_fp32_is_the_debugging_escape_hatch_and_turns_autocast_off(cfg):
-    trainer = Trainer.from_config(cfg.replace(runtime=Runtime(precision="fp32")), steps_per_epoch=2)
+    trainer = Trainer.from_config(
+        cfg.replace(runtime=cfg.runtime.replace(precision="fp32")), steps_per_epoch=2
+    )
     seen = {}
     trainer.model.blocks[0].register_forward_pre_hook(
         lambda m, a: seen.update(enabled=torch.is_autocast_enabled("cpu"))
@@ -252,7 +259,8 @@ def test_gradient_accumulation_matches_one_batch_of_twice_the_size(smooth_corpus
     division and the shared mask draw — and under bf16 the same computation at two batch sizes
     differs by more than the property being measured.
     """
-    base = tiny_config(smooth_corpus).replace(runtime=Runtime(precision="fp32"))
+    base = tiny_config(smooth_corpus)
+    base = base.replace(runtime=base.runtime.replace(precision="fp32"))
     batch = hand_batch(8, seed=3)
     halves = [
         {k: v[:4] for k, v in batch.items()},
@@ -418,7 +426,7 @@ def test_the_same_seed_and_config_reproduce_the_loss_trajectory(cfg):
 
 def test_a_different_seed_gives_a_different_trajectory(cfg):
     # The guard on the test above: it must be reproducing a *run*, not a constant.
-    other = cfg.replace(runtime=Runtime(seed=cfg.runtime.seed + 1))
+    other = cfg.replace(runtime=cfg.runtime.replace(seed=cfg.runtime.seed + 1))
     assert [r.loss for r in train_mod.train(cfg, steps=12)] != [
         r.loss for r in train_mod.train(other, steps=12)
     ]
@@ -446,6 +454,136 @@ def test_training_longer_than_the_split_reshuffles_rather_than_repeating_the_ord
     assert len(order) == 16  # four steps of a 2-step epoch: two whole epochs
     assert order[:8] != order[8:]
     assert sorted(order[:8]) == sorted(order[8:])  # the same tiles, in a different order
+
+
+# --- §7's levers, inside the loop (#95) ---------------------------------------
+
+
+def test_the_step_forwards_through_the_compiled_model_but_the_model_itself_stays_eager(cfg):
+    # `torch.compile` returns a wrapper whose `state_dict` keys are prefixed `_orig_mod.`, so a
+    # Trainer that replaced `self.model` with it would write checkpoints (#94) an eager run
+    # could not read — and `patchify`, which builds the target, would be reached through a
+    # proxy for no reason. The wrapper is what the forward goes through and nothing else.
+    from pretrain.model import MaskedAutoencoder
+
+    compiled = cfg.replace(runtime=cfg.runtime.replace(compile=True))
+    trainer = Trainer.from_config(compiled, steps_per_epoch=1)
+    assert isinstance(trainer.model, MaskedAutoencoder)
+    assert trainer.forward_model is not trainer.model
+    assert not any(k.startswith("_orig_mod") for k in trainer.model.state_dict())
+    # And the optimizer holds the same parameter objects the compiled call updates.
+    optimized = {id(p) for group in trainer.optimizer.param_groups for p in group["params"]}
+    assert id(trainer.model.decoder_pred.weight) in optimized
+
+
+def test_eager_is_the_fallback_and_the_step_forwards_through_the_model_itself(cfg):
+    # §7.3's escape hatch, and the shape every other test in this file runs at.
+    trainer = Trainer.from_config(cfg, steps_per_epoch=1)
+    assert trainer.forward_model is trainer.model
+
+
+def test_a_model_whose_attention_is_not_what_the_recipe_asked_for_is_refused(cfg, monkeypatch):
+    # §7.2's confirmation is a *check*, not a print, and it lives here rather than at the
+    # entrypoint so that every way of building a trainer is covered by it. The case is real:
+    # #90 only touches `fused_attn` to turn it off, so a config asking for sdpa inherits
+    # timm's `use_fused_attn()` — which reads an environment variable. A box with it disabled
+    # trains the recipe correctly and measures a model nobody is going to ship.
+    from pretrain import model as model_mod
+
+    real = model_mod.MaskedAutoencoder.from_config
+
+    def unfused(config):
+        built = real(config)
+        built.blocks[0].attn.fused_attn = False
+        return built
+
+    monkeypatch.setattr(model_mod.MaskedAutoencoder, "from_config", staticmethod(unfused))
+    with pytest.raises(ValueError, match="attention path"):
+        Trainer.from_config(cfg, steps_per_epoch=1)
+
+
+def test_the_compiled_model_trains_the_same_trajectory_as_the_eager_one(cfg, monkeypatch):
+    """§7.3 is a speed lever, not a recipe change: the losses must not move.
+
+    Run with inductor's RNG fallback on, and that is the whole subtlety. By default a compiled
+    graph draws its randomness from its own philox stream, so a compiled run masks *different
+    tokens* from an eager one and the two trajectories are two valid samples rather than one
+    claim. Handing the draw back to eager's generator is what makes "the same trajectory" a
+    statement about the arithmetic — which is the thing that would be wrong if compiling had
+    changed anything — instead of a statement about the RNG.
+    """
+    import torch._inductor.config as inductor_config
+
+    monkeypatch.setattr(inductor_config, "fallback_random", True)
+    batches = [hand_batch(2, seed=i) for i in range(4)]
+
+    def trajectory(compile_it: bool) -> list[float]:
+        trainer = Trainer.from_config(
+            cfg.replace(runtime=cfg.runtime.replace(compile=compile_it)), steps_per_epoch=2
+        )
+        torch.manual_seed(11)  # the mask draw, identical for both
+        return [trainer.step([b], step=10 + i).loss for i, b in enumerate(batches)]
+
+    eager, compiled = trajectory(False), trajectory(True)
+    assert np.allclose(eager, compiled, rtol=1e-4, atol=1e-6), f"{eager} != {compiled}"
+
+
+def test_the_compiled_loop_does_not_recompile_across_steps_or_an_epoch_boundary(cfg):
+    """§7.3's whole win rests on this, and nothing in a loss curve would report its absence.
+
+    Six steps of the fixture's 2-step epoch: three epochs, so the loader is re-iterated twice
+    and every one of #93's `drop_last` and short-group rules is exercised at a shape
+    `torch.compile(dynamic=False)` has already burned in.
+    """
+    from pretrain.runtime import CompileWatch
+
+    compiled = cfg.replace(runtime=cfg.runtime.replace(compile=True))
+    seen: list[StepRecord] = []
+    watch = CompileWatch()
+
+    def after_first(record: StepRecord) -> None:
+        seen.append(record)
+        if record.step == 0:
+            watch.reset()  # step 0 *is* the compile; everything after it would be a recompile
+
+    records = train_mod.train(compiled, steps=6, on_step=after_first)
+    assert [r.epoch for r in records] == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]  # two boundaries crossed
+    assert watch.compiled == 0
+
+
+def test_every_step_carries_its_throughput_counters(cfg):
+    # §7.5's gate is measured per step, and #97's dashboard reads them off this record.
+    records = train_mod.train(cfg, steps=4)
+    assert all(r.throughput is not None for r in records)
+    counters = [r.throughput for r in records]
+    assert [c.step for c in counters] == [0, 1, 2, 3]
+    assert [c.epoch for c in counters] == [0, 0, 1, 1]  # the whole epoch, for the per-epoch roll-up
+    assert all(c.samples == 4 for c in counters)  # batch 4 x accum 1
+    assert all(c.seconds > 0 and 0.0 <= c.loader_wait_fraction <= 1.0 for c in counters)
+
+
+def test_an_accumulated_step_counts_every_micro_batch_it_consumed(cfg):
+    # samples/s is a claim about *tiles read and trained on*. Counting the effective batch as
+    # one batch would under-report the shipped 1024 x 2 by half.
+    accumulated = cfg.replace(optimization=cfg.optimization.replace(accum_iter=2))
+    records = train_mod.train(accumulated, steps=2)
+    assert [r.throughput.samples for r in records] == [8, 8]
+
+
+def test_the_counters_are_timed_by_an_injectable_clock(cfg):
+    # The seam that makes throughput assertable without racing the box the tests run on.
+    ticks = iter(range(1, 10_000))
+    records = train_mod.train(cfg, steps=3, clock=lambda: float(next(ticks)))
+    assert all(r.throughput.seconds > 0 for r in records)
+
+
+def test_the_loop_hands_the_trainer_over_before_the_first_step(cfg):
+    # The seam #95's entrypoint reports the runtime from — the attention path and the compile
+    # state have to be read off the built model, and read *before* an hour of GPU is spent.
+    seen = []
+    train_mod.train(cfg, steps=1, on_start=seen.append)
+    assert len(seen) == 1 and isinstance(seen[0], Trainer)
+
 
 
 # --- The entrypoint -----------------------------------------------------------

@@ -391,6 +391,33 @@ GitHub issue #1.
   scale. fp16 is refused by the config rather than offered. The loss and the `norm_pix`
   statistics stay fp32 regardless (see **Variance floor**), so what autocast actually buys is the
   matmuls.
+- **Silent lever** — the shared failure mode of plan §7's efficiency levers, and the reason
+  `pretrain.runtime` is mostly checks: **compile and SDPA fail by being absent**. A model whose
+  attention fell back to the unfused kernel, or whose graph is recompiled every step, trains the
+  *identical* model more slowly. No loss curve, gradient norm, checkpoint or reconstruction grid
+  differs by a bit. The only evidence is a throughput number against a baseline nobody has, on a
+  box rented by the hour — so every §7 lever is read off the **built modules** (`attention_path`,
+  Dynamo's frame counter) and compared against the config that asked for it, before the first
+  step rather than after the invoice. Distinct from the invisible-*recipe* class (**No-decay
+  group**, **Warmup and cosine**), where the wrong version trains a slightly worse model: a
+  silent lever changes nothing but the bill.
+- **Loader wait fraction** — of one step's wall clock, the share spent **blocked inside the
+  loader's `next`** (`pretrain.throughput`). Not the time the loader spent working: with 8
+  workers prefetching, most of that happens during the previous step's backward pass and costs
+  nothing. What is counted is the residual the prefetch failed to cover, which is the only part
+  that makes a step slower — and §7.5's stop-and-fix threshold (~10%) is written about it,
+  because the dataloader is the plan's **#1 named risk** (DailyMAE got 5.8× end to end from IO
+  alone). Reported per step and per epoch, always by **summing seconds and samples and dividing
+  once**: a mean of per-step rates flatters the shape every real run has, where step 1 pays for
+  the compile and the loader's first fill.
+- **Launch entrypoint** — `python -m pretrain.launch`, the one documented way to start a run
+  ([#95](https://github.com/JStoschek/DEMAE/issues/95)). A run is *the plan's defaults plus the
+  knobs it moves*, and the entrypoint is where that sentence becomes a command: a preset, an
+  optional partial config file, the environment paths, then repeatable `--set group.knob=value`
+  overrides — in that order, the general escape hatch last. A typo'd knob stops the run rather
+  than defaulting, for the reason the config refuses unknown keys at all: a run that reports one
+  recipe and trains another is worse than a run that fails. `--dry-run` assembles the whole
+  thing and spends nothing, which is the form the §15 pre-flight checklist is walked in.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

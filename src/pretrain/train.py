@@ -5,11 +5,12 @@ read path (#91), an objective (#92, #96), an optional warm start (#102). This is
 they are one thing: loader -> augment -> mask -> encode -> decode -> loss -> backward -> step,
 running, with the loss going down.
 
-It deliberately stops short of two neighbours. **Survival is #94's**: checkpoints, RNG state and
-exact resume. **Speed is #95's**: `torch.compile`, throughput counters, and the launch
-entrypoint a rented box invokes. What is here is the loop those two wrap, plus a
-``python -m pretrain.train`` that runs it for N steps so the thing can be watched before either
-lands.
+It deliberately stops short of one neighbour: **survival is #94's** — checkpoints, RNG state
+and exact resume. **Speed arrived with #95**, which is why the step forwards through
+:attr:`Trainer.forward_model` rather than the model itself (§7.3's `torch.compile`, applied
+where a run can still fall back to eager) and why every step :func:`train` takes carries
+§7.5's throughput counters. The launch entrypoint those are reported by is
+:mod:`pretrain.launch`; ``python -m pretrain.train --steps N`` remains the bare loop.
 
 ## What the step is, precisely
 
@@ -52,8 +53,9 @@ resume test is the one that has to hold there.
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -69,7 +71,9 @@ from .init import initialize_from_config
 from .loss import MaeLoss, pixel_weights_from_land_mask
 from .model import MaskedAutoencoder
 from .optim import build_optimizer
+from .runtime import compile_model, verify_attention
 from .schedule import LrSchedule
+from .throughput import StepThroughput, ThroughputMeter
 
 # --- The read path ------------------------------------------------------------
 
@@ -208,6 +212,10 @@ class StepRecord:
     #: <pretrain.config.Optimization>` is unset. §6 clips nothing by default, and computing the
     #: norm anyway would put a device sync in every step for a number nobody reads.
     grad_norm: float | None
+    #: What the step cost in wall clock (#95, §7.5) — ``None`` when a caller drove
+    #: :meth:`Trainer.step` directly, since a step timed outside a loop has no interval to be
+    #: measured against. :func:`train` fills it for every step it takes.
+    throughput: StepThroughput | None = None
 
 
 class Trainer:
@@ -229,8 +237,16 @@ class Trainer:
         grad_clip: float | None,
         device: torch.device,
         autocast_dtype: torch.dtype | None,
+        forward_model: torch.nn.Module | None = None,
     ) -> None:
         self.model = model
+        #: What a forward actually goes through: the model, or §7.3's `torch.compile` wrapper
+        #: around it. Kept *beside* :attr:`model` rather than replacing it, because the wrapper
+        #: is not a drop-in for every purpose — its ``state_dict`` keys carry an ``_orig_mod.``
+        #: prefix, so a Trainer that swapped it in would hand #94 checkpoints that no eager run
+        #: could load. Everything structural (parameters, ``patchify``, the state dict) reads
+        #: :attr:`model`; only the forward reads this.
+        self.forward_model = model if forward_model is None else forward_model
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.schedule = schedule
@@ -257,9 +273,24 @@ class Trainer:
         :func:`~pretrain.init.initialize_from_config` is called unconditionally and does nothing
         at ``init.mode = 'scratch'``: R4 and R5 run the same code path, which is what stops the
         continual arm from being a branch that only one run exercises.
+
+        §7.3's compile is applied last, after the weights are loaded and the model is on its
+        device — the graph is traced on the first forward, so anything that moves the module
+        afterwards is a guard failure waiting to happen. The optimizer is built over the *eager*
+        model, which costs nothing: `torch.compile` wraps a module, it does not copy its
+        parameters.
+
+        §7.2's attention path is **verified here rather than at the entrypoint**, so every way
+        of building a trainer is covered by it — this loop, #94's resume, a test. The case it
+        catches is not hypothetical: #90 only touches `attn.fused_attn` to turn it *off* for
+        `attention='math'`, so a config asking for `sdpa` inherits whatever timm's own
+        `use_fused_attn()` decided, and that reads an environment variable. A box with it
+        disabled would train the recipe correctly and measure the throughput of a model nobody
+        is going to ship.
         """
         device = resolve_device(device)
         model = MaskedAutoencoder.from_config(cfg)
+        verify_attention(model, cfg)
         initialize_from_config(model, cfg)
         model.to(device)
         return cls(
@@ -271,6 +302,7 @@ class Trainer:
             grad_clip=cfg.optimization.grad_clip,
             device=device,
             autocast_dtype=torch.bfloat16 if cfg.runtime.precision == "bf16" else None,
+            forward_model=compile_model(model, cfg),
         )
 
     def autocast(self):
@@ -295,7 +327,7 @@ class Trainer:
         """
         image = batch["image"].to(self.device, non_blocking=True)
         with self.autocast():
-            out = self.model(image)
+            out = self.forward_model(image)
         target = self.model.patchify(image)
         weights = None
         if self.loss_fn.ocean_weighted:
@@ -366,7 +398,9 @@ def train(
     steps: int,
     device: torch.device | str | None = None,
     on_step: Callable[[StepRecord], None] | None = None,
+    on_start: Callable[[Trainer], None] | None = None,
     loader=None,
+    clock: Callable[[], float] = time.perf_counter,
 ) -> list[StepRecord]:
     """Train for ``steps`` optimizer steps and return what each one did.
 
@@ -374,9 +408,19 @@ def train(
     (#81) is measured in steps. The *schedule* is still the config's — 400 epochs of warmup and
     cosine — so a short run is the first N steps of the real curve rather than a compressed
     imitation of it. #94 owns running one to its end and surviving the box dying halfway.
+    #95's entrypoint is what turns an epoch count into the ``steps`` this takes.
 
     ``on_step`` receives each :class:`StepRecord` as it happens; that is the seam #97's logging
-    and #94's checkpoint triggers hang off, and it is why nothing here prints.
+    and #94's checkpoint triggers hang off, and it is why nothing here prints. ``on_start``
+    receives the built :class:`Trainer` before the first step, which is where a caller checks
+    what the model will actually do — §7.2's attention path, §7.3's compile — while there is
+    still time to stop.
+
+    Every step is timed (§7.5): the loader is wrapped in a
+    :class:`~pretrain.throughput.ThroughputMeter`, so each record carries samples/s, its step
+    time, and the fraction of it spent blocked on the loader. Two ``perf_counter`` calls per
+    micro-batch, which is nothing next to a forward pass — and the plan's #1 named risk is
+    worth measuring on every run rather than on the runs someone remembered to instrument.
     """
     generator = seed_run(cfg)
     if loader is None:
@@ -384,9 +428,22 @@ def train(
     trainer = Trainer.from_config(
         cfg, steps_per_epoch=steps_per_epoch_for(loader, cfg), device=device
     )
+    if on_start is not None:
+        on_start(trainer)
     records: list[StepRecord] = []
-    for group in micro_batch_groups(loader, trainer.accum_iter, steps=steps):
+    # Built here, immediately before the loop: its clock starts on construction, so anything
+    # done between the two would be charged to the first step.
+    meter = ThroughputMeter(loader, clock=clock)
+    for group in micro_batch_groups(meter, trainer.accum_iter, steps=steps):
         record = trainer.step(group)
+        record = replace(
+            record,
+            throughput=meter.mark(
+                step=record.step,
+                epoch=int(record.epoch),
+                samples=sum(len(batch["image"]) for batch in group),
+            ),
+        )
         records.append(record)
         if on_step is not None:
             on_step(record)
@@ -409,8 +466,9 @@ def main(argv: list[str] | None = None) -> int:
     """``python -m pretrain.train --corpus … --steps N`` — the loop, runnable.
 
     Enough of an entrypoint to watch the tracer bullet fly and to smoke-test a box. The launch
-    entrypoint a rented run actually invokes — compile, throughput counters, the full override
-    surface — is #95's, and it wraps this.
+    entrypoint a rented run actually invokes — the levers confirmed before the first step, the
+    counters reported as it goes, the epoch-counted schedule — is :mod:`pretrain.launch`, and
+    it wraps this.
     """
     p = add_config_arguments(
         argparse.ArgumentParser(
@@ -429,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         corpus=args.corpus,
         assignment=args.assignment,
         blocks=args.blocks,
+        overrides=args.overrides,
     )
     print(format_header(cfg, fingerprint_for(cfg)))
     print()

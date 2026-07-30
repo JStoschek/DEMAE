@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from .config import RunConfig
@@ -84,6 +85,36 @@ def format_header(config: RunConfig, fingerprint: DataFingerprint) -> str:
     return "\n".join(lines)
 
 
+def parse_override(text: str) -> dict:
+    """``group.knob=value`` -> the one-key overlay dict it means (#95).
+
+    The launcher's escape hatch, and the reason an ablation does not need a file: R2 is
+    ``--set masking.ratio=0.9`` and nothing else. What comes back is shaped like a partial
+    config, so it goes through :meth:`RunConfig.from_dict` with everything else and gets that
+    method's refusal of unknown groups and unknown knobs for free — a typo'd override has to
+    stop the run for exactly the reason a typo'd config file does.
+
+    **The value is read as JSON, falling back to the string itself.** That is what makes
+    ``runtime.compile=false`` the boolean and not the (truthy) string ``"false"``, keeps
+    ``optimization.batch_size=512`` an int, lets ``schedule.milestones=[50, 100]`` through, and
+    still leaves ``data.corpus_dir=data/corpus_500k`` — which is not JSON — a path.
+    """
+    key, sep, raw = text.partition("=")
+    if not sep:
+        raise ValueError(f"override {text!r} is not KNOB=VALUE (e.g. masking.ratio=0.9)")
+    path = key.strip().split(".")
+    if len(path) > 2:
+        raise ValueError(
+            f"override {text!r}: a config knob is `group.knob` or a top-level `run_id`, "
+            f"and {key.strip()!r} is deeper than that"
+        )
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = raw  # a bare string: a path, a run id, a split name
+    return {path[0]: value} if len(path) == 1 else {path[0]: {path[1]: value}}
+
+
 def _overlay(base: dict, overlay: dict) -> dict:
     """A full config dict with ``overlay``'s groups merged in, one level deep.
 
@@ -104,13 +135,20 @@ def build_config(
     corpus: str | None = None,
     assignment: str | None = None,
     blocks: str | None = None,
+    overrides: Sequence[str] | None = None,
 ) -> RunConfig:
-    """Assemble the run config: a preset, a partial config file, then the path overrides.
+    """Assemble the run config: a preset, a partial config file, the paths, then ``--set``.
 
-    Order is the point. The plan's defaults come first, the config file names only the knobs
-    its run moves — merged onto the *preset*, so ``--vit-base --config r5.json`` keeps the B/16
-    shape — and the paths, which are environment rather than recipe, go on last and never touch
-    the config hash.
+    Order is the point, and it is documented because a run's recipe is the thing this whole
+    package exists to keep unambiguous:
+
+    1. **The preset** — the plan's defaults, or ``--vit-base``'s B/16 shape.
+    2. **The config file**, naming only the knobs its run moves — merged onto the preset, so
+       ``--vit-base --config r5.json`` keeps the B/16 shape.
+    3. **The path flags**, which are environment rather than recipe and never touch the hash.
+    4. **``--set`` overrides**, last, so the command line can always pin a knob whatever the
+       file said. It is the general escape hatch, so it wins over the special-case flags: a
+       ``--set data.corpus_dir=…`` beats a ``--corpus``.
     """
     base = RunConfig.vit_base() if vit_base else RunConfig()
     if config_path is not None:
@@ -123,15 +161,19 @@ def build_config(
         data = data.replace(split_assignment_path=assignment)
     if blocks is not None:
         data = data.replace(split_blocks_path=blocks)
-    return base.replace(data=data)
+    base = base.replace(data=data)
+    for override in overrides or ():
+        base = RunConfig.from_dict(_overlay(base.to_dict(), parse_override(override)))
+    return base
 
 
 def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    """The five flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
+    """The six flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
 
     Shared rather than retyped, because every entrypoint that runs anything takes exactly these
-    (``python -m pretrain`` here, ``python -m pretrain.train`` in #93, #95's launcher next), and
-    two copies of one option list drift into two slightly different ways to name the corpus.
+    (``python -m pretrain`` here, ``python -m pretrain.train`` in #93, ``python -m
+    pretrain.launch`` in #95), and two copies of one option list drift into two slightly
+    different ways to name the corpus.
     """
     parser.add_argument("--corpus", default=None, help="corpus directory (default: the 500k tier)")
     parser.add_argument("--config", default=None, help="JSON file of the knobs this run moves")
@@ -140,6 +182,14 @@ def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     parser.add_argument("--assignment", default=None, help="committed split assignment CSV (#77)")
     parser.add_argument("--blocks", default=None, help="committed split block lists JSON (#77)")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="GROUP.KNOB=VALUE",
+        help="override one config knob, JSON-valued; repeatable, applied last",
+    )
     return parser
 
 
@@ -160,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         corpus=args.corpus,
         assignment=args.assignment,
         blocks=args.blocks,
+        overrides=args.overrides,
     )
     fingerprint = fingerprint_for(config)
     if args.json:

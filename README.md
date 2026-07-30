@@ -82,6 +82,43 @@ fingerprint byte-for-byte, at any executor and worker count: `ordered_futures` y
 in input order while keeping the pool fed, and the shard writer stays serial in the parent
 (measured in [`e1-read-cost.md`](docs/research/e1-read-cost.md) §Determinism).
 
+## Pretrain
+
+`python -m pretrain.launch` is **the way a run is started** — on a laptop for a smoke test,
+on the rented box for the real thing:
+
+```bash
+uv run python -m pretrain.launch --corpus data/corpus_500k --epochs 400
+```
+
+It assembles the run config, prints the header a checkpoint records, confirms §7's
+efficiency levers against the model it just built, and then trains — reporting samples/s,
+step time and the **loader wait fraction** for every step, every epoch and the run as a
+whole. Asked for no length it runs the config's own schedule to its end; `--steps N` and
+`--epochs N` shorten it.
+
+Every recipe knob is reachable without a file. A run is the plan's defaults plus the knobs
+it moves, and `--set` is how it moves them (repeatable, JSON-valued, applied last):
+
+```bash
+uv run python -m pretrain.launch --corpus data/corpus_500k --set masking.ratio=0.9 --set run_id=R2
+```
+
+`--config run.json` supplies the same thing as a committed partial config, `--vit-base`
+selects the ViT-B/16 release shape, and **`--dry-run` does all of the assembling and none
+of the spending** — the header, the data fingerprints and the step count, with nothing
+trained. That is the form the pre-flight checklist is walked in before a GPU is rented.
+
+Two knobs are worth knowing by name. `--set runtime.compile=false` drops `torch.compile`
+for debugging (eager is a supported fallback, ~1.1–1.4× slower), and
+`--set runtime.attention=math` drops SDPA the same way. Both are *confirmed* rather than
+assumed: the run refuses to start if the attention path it reads off the built blocks is
+not the one the recipe asked for, and it warns in the footer if the compiled graph was
+rebuilt after warmup.
+
+`python -m pretrain` prints the same header and trains nothing;
+`python -m pretrain.train --steps N` is the minimal loop underneath the launcher.
+
 ## Visualize
 
 ```bash
@@ -138,7 +175,16 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   fingerprint.py  # dataset_version / selection md5 / split md5 / git SHA
   data.py         # split-aware Dataset; asserts no test geocell reaches a train batch
   model.py        # the MAE forward pass — ViT encoder, shallow decoder, in-model masking
+  augment.py      # §6's dihedral group, wrapped around the read path
+  loss.py         # §4's objective — masked MSE, norm_pix, ocean/invalid weighting
+  init.py         # §8's warm start: an ImageNet MAE encoder, RGB patch embed collapsed
+  optim.py        # AdamW off the config, and §6's bias/norm no-decay grouping
+  schedule.py     # the LR curve — linear warmup from 0, cosine to exactly 0
+  train.py        # the step and the loop around it (bf16, accumulation, the seed)
+  runtime.py      # §7's levers — `torch.compile`, and SDPA confirmed on the built blocks
+  throughput.py   # §7.5's counters — samples/s, step time, loader wait fraction
   header.py       # `python -m pretrain` — the config + fingerprint header a run records
+  launch.py       # `python -m pretrain.launch` — the way a run is started
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records
 Dockerfile        # pinned ETL environment for a rented vast.ai box
