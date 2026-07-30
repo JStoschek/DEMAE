@@ -46,13 +46,30 @@ trains against:
   inference from a shape (#102, #103). That policy earned its keep immediately — their positional
   embedding is the transpose of MAE's.
 
-``python -m pretrain`` prints the config + fingerprint header a real run would record.
+#93 is where those pieces become one running thing — the tracer bullet, and the first code here
+that has a loss curve:
+
+- :mod:`pretrain.optim` — AdamW off the config, and §6's one non-default: bias and norm
+  parameters excluded from weight decay. The grouping is computed once, over the real model,
+  because getting it wrong trains perfectly well and produces a slightly worse encoder.
+- :mod:`pretrain.schedule` — the LR curve: linear warmup from 0, cosine to exactly 0. A pure
+  function of (step, config), torch-free, with its boundary values pinned by name. Every wrong
+  version of it also trains.
+- :mod:`pretrain.train` — the step and the loop around it: bf16 autocast and no GradScaler
+  (§7.1), gradient accumulation whose gradient equals the single-batch one, the loader assembled
+  from `dataset.loader` unchanged, and a seed that makes two runs of one config the same run.
+
+``python -m pretrain`` prints the config + fingerprint header a real run would record;
+``python -m pretrain.train --steps N`` runs the loop. The launch entrypoint a rented box
+invokes — compile, throughput counters, the full override surface — is #95's, and it wraps that.
 
 Note what this module re-exports and what it does not: :mod:`~pretrain.model`,
-:mod:`~pretrain.data`, :mod:`~pretrain.augment`, :mod:`~pretrain.loss` and
-:mod:`~pretrain.init` are imported from their own modules, because each pulls in torch at import
-time and ``python -m pretrain`` — the header, which is pure config — should keep working on a
-box that has no CUDA stack at all.
+:mod:`~pretrain.data`, :mod:`~pretrain.augment`, :mod:`~pretrain.loss`, :mod:`~pretrain.init`,
+:mod:`~pretrain.optim` and :mod:`~pretrain.train` are imported from their own modules, because
+each pulls in torch at import time and ``python -m pretrain`` — the header, which is pure config
+— should keep working on a box that has no CUDA stack at all. (:mod:`~pretrain.schedule` needs
+no torch either, being arithmetic over four numbers, but it is a piece of the loop rather than a
+piece of the vocabulary and stays beside its users.)
 """
 
 from .config import RunConfig

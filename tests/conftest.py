@@ -19,21 +19,34 @@ def _tile(rng: np.random.Generator, base: float) -> np.ndarray:
     return (base + rng.normal(0, 200, size=(224, 224))).astype(np.float32)
 
 
-def build_corpus(root, cogs, *, tiles_per_cog: int = 2, splits: dict[str, str] | None = None):
+def build_corpus(
+    root,
+    cogs,
+    *,
+    tiles_per_cog: int = 2,
+    splits: dict[str, str] | None = None,
+    tile_fn=None,
+):
     """Materialize a corpus at ``root`` from ``cogs`` — ``[(stem, geocell_id, split), ...]``.
 
     Every tile of a COG takes that COG's ``split`` label, so the blocking the real assignment
     is drawn at (whole geocells for ``test``, whole COGs for ``val``) is expressible here.
     ``splits`` overrides individual tiles by id, which is how a *contaminated* assignment —
     one train tile inside a held-out block — gets built for the test that must reject it.
+
+    ``tile_fn(rng, base) -> (224, 224) float array`` replaces the default noise window. The
+    default is right for every test that only reads a sample; #93's training tests pass a
+    *smooth* generator instead, because a model cannot reduce a reconstruction loss on noise
+    and "the loss falls" would then be an untestable claim.
     """
     rng = np.random.default_rng(0)
+    tile_fn = tile_fn or _tile
     rows: list[manifest.TileRecord] = []
     total = sum_ = sumsq = 0.0
     with shards.ShardWriter(root / "shards") as writer:
         for c, (stem, geocell, split) in enumerate(cogs):
             for j in range(tiles_per_cog):
-                tile, reason = normalize.prepare_tile(_tile(rng, 500.0 + 100 * c))
+                tile, reason = normalize.prepare_tile(tile_fn(rng, 500.0 + 100 * c))
                 assert tile is not None, reason
                 ref = writer.add(tile.raw_i16)
                 vals = tile.raw_i16[normalize.land_mask(tile.raw_i16)].astype(np.float64)

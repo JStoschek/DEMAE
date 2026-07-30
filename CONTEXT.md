@@ -357,6 +357,40 @@ GitHub issue #1.
   `pos_embed` and compares 151,296 floats before copying a single weight — and where one does
   not, the honest position is that a **behavioural** check has measured power and usually less
   than hoped (P102 §6.1: two of eight scrambles caught).
+- **Micro-batch** — one batch as the DataLoader hands it over, and what a forward/backward
+  actually runs on: `batch_size` samples, sized by what fits in 32 GB
+  (`pretrain.train`, [#93](https://github.com/JStoschek/DEMAE/issues/93)). It is *not* the unit
+  the recipe is written in — **effective batch** is — and the distinction is the whole of why
+  gradient accumulation is not a recipe change.
+- **Effective batch** — physical batch × gradient accumulation: `accum_iter` micro-batches
+  backwarded at 1/N before one optimizer step, and the *only* batch number the recipe reads
+  (plan §6). §6's linear scaling rule is `lr = blr × eff_batch / 256`, so 1024×2 (ViT-S) and
+  512×4 (ViT-B) both land on **2048 → 1.2e-3** and the two runs stay comparable: the physical
+  batch is what fits in 32 GB, the effective one is the recipe. The gradient of N accumulated
+  micro-batches at 1/N *is* the gradient of one batch N× the size, which is asserted rather than
+  assumed — and it is why a **short group at an epoch boundary is dropped rather than stepped
+  on**: half an effective batch at the LR a whole one earns is a step outside the recipe.
+- **No-decay group** — the AdamW parameter group at weight decay 0, holding exactly the biases
+  and the normalization parameters (`pretrain.optim`, §6's "excluded on bias/norm params").
+  Everything else, the two class tokens included, decays at 0.05 — they are `(1, 1, D)` and the
+  reference rule is a dimensionality test, which is the one place "tokens are like biases" would
+  quietly change the recipe. Getting the grouping wrong is invisible: it trains, it descends,
+  and it produces a slightly worse encoder that reads as an unlucky run. The two readings of the
+  rule — by module type, and the reference's `ndim <= 1 or .bias` — are both computed and must
+  **agree**, so a future 1-D learnable scale (timm's LayerScale `gamma`) raises rather than
+  landing in whichever group the code happened to pick.
+- **Warmup and cosine** — the LR curve: linear from **0** over 20 epochs (5% of the 400-epoch
+  schedule, matching MAE's 40/800), then cosine to **exactly 0** at the final epoch, evaluated at
+  the fractional epoch so it moves every step rather than every epoch. Past the end it is clamped
+  at 0, because `cos` climbs again after π and R5's 400→800 extension is a config change, not a
+  loop that kept running. Like the no-decay group, every wrong version of this trains.
+- **bf16 without a scaler** — the precision policy (plan §7.1): bf16 autocast over the encoder
+  and decoder, and **no `GradScaler` anywhere**. The absence is the point — fp16 needs a scaler
+  because its dynamic range cannot hold the gradients, and that machinery is the documented NaN
+  failure mode of the official MAE repo; bf16 has fp32's exponent range, so there is nothing to
+  scale. fp16 is refused by the config rather than offered. The loss and the `norm_pix`
+  statistics stay fp32 regardless (see **Variance floor**), so what autocast actually buys is the
+  matmuls.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

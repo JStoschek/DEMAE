@@ -145,8 +145,29 @@ def _dataset_class():
                 "stratum_id": int(self._stratum[i]),
             }
 
+    # Pickle saves an *instance* by reference to its class — `getattr(module, qualname)` — and
+    # a class defined inside a function has a qualname pytorch cannot resolve. Naming it as a
+    # module attribute (with `__getattr__` below serving the lookup in a fresh process) is what
+    # lets a `TileDataset` cross into a DataLoader worker under the **spawn** start method,
+    # which is the default on macOS. Fork copies the class object and never notices; spawn dies
+    # with "Can't pickle local object", at `num_workers > 0` only — so the ADR-0003 read path
+    # was unusable with workers on any spawn platform (#93 found it on the first real run).
+    _TileDataset.__qualname__ = "_TileDataset"
     _DATASET_CLASS = _TileDataset
     return _DATASET_CLASS
+
+
+def __getattr__(name: str):
+    """Resolve ``dataset.loader._TileDataset`` on demand — PEP 562, for pickle's sake.
+
+    The class does not exist until something builds it, because that is what keeps torch out of
+    this module's import (ADR-0003). Pickle, unpickling a dataset in a spawned worker, looks the
+    name up on the module and would otherwise find nothing; this builds it exactly as the parent
+    did. Nothing else should reach for it — :func:`TileDataset` is the constructor.
+    """
+    if name == "_TileDataset":
+        return _dataset_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def TileDataset(

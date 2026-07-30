@@ -126,17 +126,31 @@ def build_config(
     return base.replace(data=data)
 
 
+def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """The five flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
+
+    Shared rather than retyped, because every entrypoint that runs anything takes exactly these
+    (``python -m pretrain`` here, ``python -m pretrain.train`` in #93, #95's launcher next), and
+    two copies of one option list drift into two slightly different ways to name the corpus.
+    """
+    parser.add_argument("--corpus", default=None, help="corpus directory (default: the 500k tier)")
+    parser.add_argument("--config", default=None, help="JSON file of the knobs this run moves")
+    parser.add_argument(
+        "--vit-base", action="store_true", help="the ViT-B/16 release preset (§2.1)"
+    )
+    parser.add_argument("--assignment", default=None, help="committed split assignment CSV (#77)")
+    parser.add_argument("--blocks", default=None, help="committed split block lists JSON (#77)")
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     """``python -m pretrain`` — print the header a real run would record."""
-    p = argparse.ArgumentParser(
-        prog="python -m pretrain",
-        description="Print the Phase-1 run config + data fingerprints (#89).",
+    p = add_config_arguments(
+        argparse.ArgumentParser(
+            prog="python -m pretrain",
+            description="Print the Phase-1 run config + data fingerprints (#89).",
+        )
     )
-    p.add_argument("--corpus", default=None, help="corpus directory (default: the 500k tier)")
-    p.add_argument("--config", default=None, help="JSON file of the knobs this run moves")
-    p.add_argument("--vit-base", action="store_true", help="the ViT-B/16 release preset (§2.1)")
-    p.add_argument("--assignment", default=None, help="committed split assignment CSV (#77)")
-    p.add_argument("--blocks", default=None, help="committed split block lists JSON (#77)")
     p.add_argument("--json", action="store_true", help="emit the record a checkpoint carries")
     args = p.parse_args(argv)
 

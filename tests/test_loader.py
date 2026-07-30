@@ -174,3 +174,27 @@ def test_build_dataloader_sets_adr_perf_flags(corpus):
     assert dl.batch_size == 4
     batch = next(iter(dl))
     assert batch["image"].shape[1:] == (1, 224, 224)
+
+
+def test_the_dataset_survives_a_pickle_round_trip(corpus):
+    """What a DataLoader worker needs under the `spawn` start method (macOS's default).
+
+    The Dataset class is built inside a function so that importing this module never imports
+    torch (ADR-0003), and a class defined inside a function is not picklable by reference
+    unless the module can resolve its name. Fork copies the class object and never notices;
+    spawn dies with "Can't pickle local object" — at `num_workers > 0` only, which is why this
+    survived until #93 ran the loop against the real corpus.
+    """
+    import pickle
+
+    ds = loader.TileDataset(corpus)
+    restored = pickle.loads(pickle.dumps(ds))
+    assert len(restored) == len(ds)
+    assert restored[0]["tile_id"] == ds[0]["tile_id"]
+
+
+def test_it_reads_through_worker_processes(corpus):
+    ds = loader.TileDataset(corpus)
+    dl = loader.build_dataloader(ds, batch_size=2, num_workers=2, shuffle=False, pin_memory=False)
+    tiles = [t for batch in dl for t in batch["tile_id"]]
+    assert sorted(tiles) == sorted(ds._tile_id)
