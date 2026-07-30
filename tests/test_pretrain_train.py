@@ -585,7 +585,6 @@ def test_the_loop_hands_the_trainer_over_before_the_first_step(cfg):
     assert len(seen) == 1 and isinstance(seen[0], Trainer)
 
 
-
 # --- The entrypoint -----------------------------------------------------------
 
 

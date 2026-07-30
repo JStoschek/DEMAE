@@ -5,12 +5,11 @@ read path (#91), an objective (#92, #96), an optional warm start (#102). This is
 they are one thing: loader -> augment -> mask -> encode -> decode -> loss -> backward -> step,
 running, with the loss going down.
 
-It deliberately stops short of one neighbour: **survival is #94's** — checkpoints, RNG state
-and exact resume. **Speed arrived with #95**, which is why the step forwards through
-:attr:`Trainer.forward_model` rather than the model itself (§7.3's `torch.compile`, applied
-where a run can still fall back to eager) and why every step :func:`train` takes carries
-§7.5's throughput counters. The launch entrypoint those are reported by is
-:mod:`pretrain.launch`; ``python -m pretrain.train --steps N`` remains the bare loop.
+It deliberately stops short of two neighbours. **Survival is #94's**: checkpoints, RNG state and
+exact resume. **Speed is #95's**: `torch.compile`, throughput counters, and the launch
+entrypoint a rented box invokes. What is here is the loop those two wrap, plus a
+``python -m pretrain.train`` that runs it for N steps so the thing can be watched before either
+lands.
 
 ## What the step is, precisely
 
@@ -54,21 +53,34 @@ from __future__ import annotations
 
 import argparse
 import time
+import warnings
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
 import torch
+from torch import Tensor
+from torch.utils.data import Sampler
 
 from dataset.loader import build_dataloader
 
 from .augment import make_augmented
+from .checkpoint import (
+    DEFAULT_INTERVAL_SECONDS,
+    CheckpointPolicy,
+    RunState,
+    capture_rng,
+    load_checkpoint,
+    resolve_resume,
+    restore_rng,
+)
 from .config import RunConfig
 from .data import SplitDataset
 from .fingerprint import fingerprint_for
 from .header import add_config_arguments, build_config, format_header
 from .init import initialize_from_config
-from .loss import MaeLoss, pixel_weights_from_land_mask
+from .loss import MaeLoss, MaeLossOutput, pixel_weights_from_land_mask
 from .model import MaskedAutoencoder
 from .optim import build_optimizer
 from .runtime import compile_model, verify_attention
@@ -94,6 +106,78 @@ def seed_run(cfg: RunConfig) -> torch.Generator:
     """
     torch.manual_seed(cfg.runtime.seed)
     return seeded_generator(cfg)
+
+
+def epoch_seed(seed: int, epoch: int) -> int:
+    """The seed epoch ``epoch`` of a run seeded ``seed`` shuffles with.
+
+    A keyed hash rather than ``seed + epoch``, for the same reason
+    :attr:`RunConfig.config_hash <pretrain.config.RunConfig>` is one: adjacent seeds should not
+    produce related streams, and two runs one seed apart would otherwise share every epoch's
+    order but the first. BLAKE2b is the hash family every tie-break in :mod:`dataset.sampling`
+    already uses.
+    """
+    import hashlib
+
+    digest = hashlib.blake2b(f"{seed}:{epoch}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") >> 1  # torch seeds are non-negative int64
+
+
+class EpochShuffleSampler(Sampler[int]):
+    """The training order: a pure function of ``(seed, epoch)``, sliceable mid-epoch (#94, §11).
+
+    This exists because of one bug, and the bug is invisible. A run killed mid-epoch and resumed
+    against ``DataLoader(shuffle=True)`` gets a **fresh permutation**: the epoch it resumes into
+    shows some tiles twice and never shows others, and nothing about the loss curve, the
+    gradient norm or the checkpoint says so. Owning the permutation is what makes "resume
+    continues the same order" a property rather than a hope.
+
+    Deriving each epoch's order from ``(seed, epoch)`` — rather than from a rolling generator —
+    is what makes it *reproducible from a fresh process*. A generator's state at the start of
+    epoch 300 depends on every draw before it, including how many times a DataLoader iterator
+    was constructed, which differs between a first launch and a resumed one (and again between
+    ``persistent_workers`` on and off). A pure function has no such history to get wrong.
+
+    :attr:`skip` is how a resumed epoch starts partway through: the same permutation, minus the
+    samples already seen. With ``drop_last`` that is exactly right —
+    ``(n - k*B) // B == n // B - k`` — so the resumed epoch has precisely the batches the
+    interrupted one had left, in the order it would have read them.
+
+    Iterating to exhaustion advances to the next epoch and clears :attr:`skip`, so a plain
+    ``for epoch in range(N): for batch in loader:`` still reshuffles every pass (#93 relies on
+    it). :meth:`set_epoch` overrides that, and is what :class:`EpochCursor` drives.
+    """
+
+    def __init__(self, n: int, *, seed: int, epoch: int = 0, skip: int = 0) -> None:
+        if n < 0 or skip < 0:
+            raise ValueError(f"a sampler over {n} samples cannot skip {skip}")
+        self.n = n
+        self.seed = seed
+        self.epoch = epoch
+        self.skip = skip
+
+    def set_epoch(self, epoch: int, *, skip: int = 0) -> None:
+        """Read epoch ``epoch``'s order next, starting ``skip`` samples into it."""
+        self.epoch = epoch
+        self.skip = skip
+
+    def permutation(self) -> list[int]:
+        """Epoch :attr:`epoch`'s whole order, before :attr:`skip` is applied."""
+        generator = torch.Generator()
+        generator.manual_seed(epoch_seed(self.seed, self.epoch))
+        return torch.randperm(self.n, generator=generator).tolist()
+
+    def __len__(self) -> int:
+        return max(self.n - self.skip, 0)
+
+    def __iter__(self):
+        epoch, skip = self.epoch, self.skip
+        yield from self.permutation()[skip:]
+        # Exhausted, and nobody moved us meanwhile: the next pass is the next epoch. Guarded so
+        # that a `set_epoch` issued *during* iteration (which is what a resume does, and what
+        # prefetching workers make possible) is not undone by the iterator that preceded it.
+        if (self.epoch, self.skip) == (epoch, skip):
+            self.set_epoch(epoch + 1)
 
 
 def build_loader(
@@ -124,6 +208,10 @@ def build_loader(
 
     ``augment=False`` is how §10.1's val loader is built: a fresh dihedral draw per read would
     make the val loss a moving measurement rather than a comparable one.
+
+    A shuffled loader reads through an :class:`EpochShuffleSampler` rather than through
+    ``DataLoader(shuffle=True)``, so that #94 can resume mid-epoch into the order it was
+    interrupted in. A val pass keeps manifest order and needs neither.
     """
     dataset = SplitDataset(
         cfg.data.corpus_dir,
@@ -137,7 +225,9 @@ def build_loader(
     kwargs: dict[str, Any] = {
         "batch_size": cfg.optimization.batch_size,
         "num_workers": cfg.data.num_workers,
-        "shuffle": shuffle,
+        # The order is the sampler's; `shuffle` stays False because DataLoader refuses both.
+        "shuffle": False,
+        "sampler": EpochShuffleSampler(len(dataset), seed=cfg.runtime.seed) if shuffle else None,
         "drop_last": shuffle,
         "generator": generator if generator is not None else seeded_generator(cfg),
     }
@@ -156,18 +246,33 @@ def steps_per_epoch_for(loader, cfg: RunConfig) -> int:
     return len(loader) // cfg.optimization.accum_iter
 
 
-def micro_batch_groups(loader, accum_iter: int, *, steps: int) -> Iterator[list[dict]]:
-    """Group the loader's batches into one list per optimizer step, for ``steps`` steps.
+def epoch_groups(batches, accum_iter: int) -> Iterator[list[dict]]:
+    """**One** pass over ``batches``, grouped into one list per optimizer step.
 
-    Each pass over ``loader`` is an epoch, and re-iterating it is what re-shuffles: the sample
-    order in epoch 2 is not epoch 1's. (Cycling one materialized epoch instead would train fine
-    and quietly turn a 400-epoch run into 400 repetitions of one ordering.)
+    **A short group at the end is dropped**, for the same reason ``drop_last`` drops a short
+    batch: an optimizer step is defined as *the effective batch*, and a step taken on half of one
+    at the LR the whole batch earns is a step outside the recipe. At the shipped shape that costs
+    at most one micro-batch per epoch, re-drawn by the next epoch's shuffle. It also keeps the
+    count :func:`steps_per_epoch_for` gives the schedule exact.
 
-    **A short group at an epoch boundary is dropped**, for the same reason ``drop_last`` drops a
-    short batch: an optimizer step is defined as *the effective batch*, and a step taken on half
-    of one at the LR the whole batch earns is a step outside the recipe. At the shipped shape
-    that costs at most one micro-batch per epoch, re-drawn by the next epoch's shuffle. It also
-    keeps the count :func:`steps_per_epoch_for` gives the schedule exact.
+    Takes an iterable rather than the loader itself, so a caller can wrap the loader first —
+    which is how #95's :class:`~pretrain.throughput.ThroughputMeter` charges the time spent
+    waiting for a batch to §10.4's loader-wait fraction without this function knowing anything
+    about it.
+    """
+    group: list[dict] = []
+    for batch in batches:
+        group.append(batch)
+        if len(group) == accum_iter:
+            yield group
+            group = []
+
+
+def assert_a_step_fits(loader, accum_iter: int) -> None:
+    """Refuse a split too small to accumulate one optimizer step out of.
+
+    With ``drop_last`` on, such a loader yields batches that never fill a group, so a loop
+    waiting for its first step waits forever — on a rented box, an hour of paid nothing.
     """
     if len(loader) // accum_iter == 0:
         raise ValueError(
@@ -175,17 +280,119 @@ def micro_batch_groups(loader, accum_iter: int, *, steps: int) -> Iterator[list[
             "smaller than one effective batch, with drop_last on. Left alone this would spin "
             "forever without taking a step"
         )
+
+
+def micro_batch_groups(loader, accum_iter: int, *, steps: int) -> Iterator[list[dict]]:
+    """Group the loader's batches into one list per optimizer step, for ``steps`` steps.
+
+    Each pass over ``loader`` is an epoch, and re-iterating it is what re-shuffles: the sample
+    order in epoch 2 is not epoch 1's. (Cycling one materialized epoch instead would train fine
+    and quietly turn a 400-epoch run into 400 repetitions of one ordering.)
+    """
+    assert_a_step_fits(loader, accum_iter)
     produced = 0
     while produced < steps:
-        group: list[dict] = []
-        for batch in loader:
-            group.append(batch)
-            if len(group) == accum_iter:
-                yield group
-                produced += 1
-                group = []
-                if produced == steps:
-                    return
+        for group in epoch_groups(loader, accum_iter):
+            yield group
+            produced += 1
+            if produced == steps:
+                return
+
+
+@dataclass(frozen=True)
+class EpochGroup:
+    """One optimizer step's micro-batches, and where in the schedule they came from (#94)."""
+
+    micro_batches: list[dict]
+    #: The epoch these batches were drawn from. 0-based, so it is the *index*, while
+    #: :attr:`RunState.epoch <pretrain.checkpoint.RunState>` counts epochs completed.
+    epoch: int
+    #: This group is the last complete step of its epoch — §11's per-epoch checkpoint trigger.
+    ends_epoch: bool
+
+
+class EpochCursor:
+    """Where the loop is in the corpus's order, and the iterator that keeps it there (#94, §11).
+
+    :func:`micro_batch_groups` walks the same batches and is the right thing for a run that
+    will not be interrupted. This one adds the two things a resume needs and nothing else:
+    it drives an :class:`EpochShuffleSampler` so a resumed epoch continues the order it was
+    interrupted in, and it tracks a :class:`~pretrain.checkpoint.RunState` precise enough to
+    restart from.
+
+    It does its own grouping rather than calling :func:`epoch_groups`, for one reason worth
+    stating: **the epoch has to be over before its last group is handed out.**
+
+    What is left over at an epoch's end is the batches an incomplete *group* would have been
+    built from — ``len(loader) % accum_iter`` of them, which at ``accum_iter = 2`` is one. Those
+    batches are genuinely fetched, and fetching them advances the augmentation stream. (The
+    remainder ``drop_last`` drops is a different thing and costs nothing here: torch's
+    ``BatchSampler`` abandons a short batch's indices without ever fetching them, so those
+    samples are never read.) So the drain loop exists for the accumulation remainder, and it
+    runs *before* the final group is yielded: a checkpoint written at an epoch boundary is then
+    taken on the far side of it, with a clean ``batches_into_epoch = 0``, and the resumed run
+    does not re-read a tail the original had already consumed.
+    """
+
+    def __init__(
+        self,
+        loader,
+        *,
+        accum_iter: int,
+        steps_per_epoch: int,
+        state: RunState = RunState(),
+    ) -> None:
+        self.loader = loader
+        self.accum_iter = accum_iter
+        #: A *whole* epoch's step count — the schedule's unit. Computed by the caller before any
+        #: skip is applied, since ``len(loader)`` shrinks under one.
+        self.steps_per_epoch = steps_per_epoch
+        self.sampler = loader.sampler
+        if not isinstance(self.sampler, EpochShuffleSampler):
+            raise TypeError(
+                f"an exactly resumable run needs an EpochShuffleSampler, not "
+                f"{type(self.sampler).__name__}: an order that is not a function of "
+                f"(seed, epoch) cannot be resumed into (plan §11)"
+            )
+        self.epoch = state.epoch
+        self.batches_into_epoch = state.batches_into_epoch
+
+    def state(self, step: int) -> RunState:
+        """The position to checkpoint, given the optimizer step count the Trainer holds."""
+        return RunState(
+            epoch=self.epoch, step=step, batches_into_epoch=self.batches_into_epoch
+        )
+
+    def groups(self) -> Iterator[EpochGroup]:
+        """Micro-batch groups, epoch after epoch, forever — the caller decides when to stop."""
+        assert_a_step_fits(self.loader, self.accum_iter)
+        while True:
+            self.sampler.set_epoch(
+                self.epoch, skip=self.batches_into_epoch * self.loader.batch_size
+            )
+            done = self.batches_into_epoch // self.accum_iter
+            iterator = iter(self.loader)
+            group: list[dict] = []
+            final: list[dict] | None = None
+            for batch in iterator:
+                self.batches_into_epoch += 1
+                group.append(batch)
+                if len(group) < self.accum_iter:
+                    continue
+                done += 1
+                if done < self.steps_per_epoch:
+                    yield EpochGroup(group, epoch=self.epoch, ends_epoch=False)
+                    group = []
+                    continue
+                final = group
+                for _ in iterator:  # the remainder `drop_last` discards — read, then dropped
+                    self.batches_into_epoch += 1
+                break
+            epoch = self.epoch
+            self.epoch += 1
+            self.batches_into_epoch = 0
+            if final is not None:
+                yield EpochGroup(final, epoch=epoch, ends_epoch=True)
 
 
 # --- One step -----------------------------------------------------------------
@@ -216,6 +423,23 @@ class StepRecord:
     #: :meth:`Trainer.step` directly, since a step timed outside a loop has no interval to be
     #: measured against. :func:`train` fills it for every step it takes.
     throughput: StepThroughput | None = None
+
+
+class Scored(NamedTuple):
+    """One scoring of one micro-batch — see :meth:`Trainer.score`.
+
+    A :class:`~typing.NamedTuple` for the same reason :class:`~pretrain.loss.MaeLossOutput` is
+    one: it survives `torch.compile`. The three travel together because they are three views of
+    a single forward pass, and a caller that has one and re-derives another is the drift
+    :meth:`Trainer.score` documents.
+    """
+
+    #: §4's objective: the scalar, the per-patch losses, and the weight each entered with.
+    out: MaeLossOutput
+    #: The patchified fp32 image the loss scored against.
+    target: Tensor
+    #: The per-pixel validity weights used, or ``None`` when §4's ocean weighting is ablated off.
+    pixel_weights: Tensor | None
 
 
 class Trainer:
@@ -313,8 +537,8 @@ class Trainer:
             enabled=self.autocast_dtype is not None,
         )
 
-    def micro_loss(self, batch: dict) -> torch.Tensor:
-        """Forward one micro-batch and score it: §4's scalar, in fp32.
+    def score(self, batch: dict, *, generator: torch.Generator | None = None) -> Scored:
+        """Forward one micro-batch and score it: §4's objective in fp32, and what it scored.
 
         Only the model runs under autocast. The target is :meth:`patchify
         <pretrain.model.MaskedAutoencoder.patchify>` of the *same* fp32 image the model was
@@ -324,16 +548,37 @@ class Trainer:
         The pixel weights follow §4's ``ocean_weighted`` flag, read off the loss module rather
         than the config so the two cannot disagree: the loss refuses weights it was not
         configured for, and refuses to score without them when it was.
+
+        Returns all three of the things one scoring produces, and the third is the one that is
+        easy to leave out. #97's per-patch distribution (§4) needs the losses to bin, the
+        **target** to say which of those patches were near-flat, and the **same pixel weights**
+        this used — because under §4's ocean weighting "near-flat" means flat over a patch's
+        *valid* pixels, and computed unweighted a half-ocean patch measures its variance across
+        the land/ocean step and never looks flat at all. Deriving them a second time at the call
+        site is the version of this that trains fine and silently misclassifies exactly the
+        population §4's variance-floor rule exists to find.
+
+        :meth:`step` takes ``.loss`` and drops the rest, which costs nothing — every one of
+        those tensors exists either way.
+
+        ``generator`` pins the mask draw. §10.1's val pass passes a seeded one so its loss is
+        comparable epoch to epoch; a training step passes nothing and draws from the ambient RNG.
         """
         image = batch["image"].to(self.device, non_blocking=True)
         with self.autocast():
-            out = self.forward_model(image)
+            out = self.forward_model(image, generator=generator)
         target = self.model.patchify(image)
         weights = None
         if self.loss_fn.ocean_weighted:
             land_mask = batch["land_mask"].to(self.device, non_blocking=True)
             weights = pixel_weights_from_land_mask(land_mask, self.model.patchify)
-        return self.loss_fn(out.pred, target, out.mask, pixel_weights=weights).loss
+        return Scored(
+            self.loss_fn(out.pred, target, out.mask, pixel_weights=weights), target, weights
+        )
+
+    def micro_loss(self, batch: dict) -> torch.Tensor:
+        """§4's scalar for one micro-batch — :meth:`score` with the diagnostics dropped."""
+        return self.score(batch).out.loss
 
     def step(self, micro_batches: Sequence[dict], *, step: int | None = None) -> StepRecord:
         """One optimizer step over an effective batch delivered in pieces (§6).
@@ -450,6 +695,97 @@ def train(
     return records
 
 
+def train_resumable(
+    cfg: RunConfig,
+    *,
+    steps: int | None = None,
+    policy: CheckpointPolicy | None = None,
+    resume: bool | str | Path = False,
+    device: torch.device | str | None = None,
+    on_step: Callable[[StepRecord], None] | None = None,
+    on_start: Callable[[Trainer], None] | None = None,
+) -> list[StepRecord]:
+    """:func:`train`, but it survives the box going away (#94, plan §11).
+
+    Same loop and the same :class:`Trainer`; the differences are all bookkeeping. The order
+    comes from an :class:`EpochShuffleSampler` through an :class:`EpochCursor`, so a mid-epoch
+    resume continues the interrupted shuffle. ``policy`` decides when to write and what to keep.
+    ``resume`` picks what to continue from — ``False`` for a fresh run, ``True`` for "the newest
+    checkpoint in the policy's directory, if there is one", or an explicit path.
+
+    ``steps`` is the run's **total**, not an increment: a resumed run stops where the original
+    would have. It defaults to the config's whole schedule, which is what a real run passes.
+
+    The restore order is the part worth reading twice. Everything is rebuilt from the config
+    first — model, optimizer, schedule, loader — and only then are the checkpoint's tensors and
+    RNG states written over it. Restoring RNG *last* matters because building a loader and a
+    model touches generators (:meth:`MaskedAutoencoder.from_config
+    <pretrain.model.MaskedAutoencoder.from_config>` forks its own, but nothing guarantees the
+    next thing to be added will), and a stream restored before something else advances it is a
+    stream that was not restored at all.
+    """
+    generator = seed_run(cfg)
+    loader = build_loader(cfg, cfg.data.train_split, generator=generator)
+    steps_per_epoch = steps_per_epoch_for(loader, cfg)  # before any skip shortens the sampler
+    trainer = Trainer.from_config(cfg, steps_per_epoch=steps_per_epoch, device=device)
+    if steps is None:
+        steps = cfg.schedule.epochs * steps_per_epoch
+
+    state = RunState()
+    fingerprint = fingerprint_for(cfg)
+    path = resolve_resume(policy.directory, resume) if policy is not None else None
+    if path is not None:
+        checkpoint = load_checkpoint(path, map_location=trainer.device)
+        # Refused before a step is taken, and before anything is loaded over the fresh model:
+        # a run that resumed across a corpus change would release an encoder whose recorded
+        # `dataset_version` names data it was only partly trained on (§11, §14).
+        checkpoint.verify_against(fingerprint)
+        if checkpoint.config_hash != cfg.config_hash:
+            # Warned, not refused. §6/#87 lets R5 extend 400 -> 800 epochs by *rebuilding the
+            # schedule* and resuming, and the plan calls that a config change rather than a new
+            # run — so refusing here would block the one legitimate case. But an unnoticed knob
+            # move is how a run reports one recipe and trains another, which is exactly what
+            # `config_hash` exists to make visible.
+            warnings.warn(
+                f"resuming {path} under a different recipe: the checkpoint records config "
+                f"{checkpoint.config_hash} and this run is {cfg.config_hash}. Intended for an "
+                f"R5-style epoch extension (§6, #87); anything else means the resumed run is "
+                f"not the run that was killed",
+                stacklevel=2,
+            )
+        trainer.model.load_state_dict(checkpoint.model)
+        trainer.optimizer.load_state_dict(checkpoint.optimizer)
+        trainer.completed_steps = checkpoint.state.step
+        state = checkpoint.state
+        restore_rng(checkpoint.rng, generator=generator, dataset=loader.dataset)
+
+    if on_start is not None:
+        on_start(trainer)
+
+    cursor = EpochCursor(
+        loader, accum_iter=trainer.accum_iter, steps_per_epoch=steps_per_epoch, state=state
+    )
+    records: list[StepRecord] = []
+    groups = cursor.groups()  # endless; the step count below is what stops the run
+    while trainer.completed_steps < steps:
+        group = next(groups)
+        record = trainer.step(group.micro_batches)
+        records.append(record)
+        if on_step is not None:
+            on_step(record)
+        if policy is not None and policy.due(ends_epoch=group.ends_epoch):
+            policy.save(
+                config=cfg,
+                fingerprint=fingerprint,
+                state=cursor.state(trainer.completed_steps),
+                model=trainer.model,
+                optimizer=trainer.optimizer,
+                rng=capture_rng(generator=generator, dataset=loader.dataset),
+                ends_epoch=group.ends_epoch,
+            )
+    return records
+
+
 # --- The entrypoint -----------------------------------------------------------
 
 
@@ -466,9 +802,8 @@ def main(argv: list[str] | None = None) -> int:
     """``python -m pretrain.train --corpus … --steps N`` — the loop, runnable.
 
     Enough of an entrypoint to watch the tracer bullet fly and to smoke-test a box. The launch
-    entrypoint a rented run actually invokes — the levers confirmed before the first step, the
-    counters reported as it goes, the epoch-counted schedule — is :mod:`pretrain.launch`, and
-    it wraps this.
+    entrypoint a rented run actually invokes — compile, throughput counters, the full override
+    surface — is #95's, and it wraps this.
     """
     p = add_config_arguments(
         argparse.ArgumentParser(
@@ -479,6 +814,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--steps", type=int, required=True, help="optimizer steps to run")
     p.add_argument("--device", default=None, help="cuda | cpu | … (default: cuda if present)")
     p.add_argument("--log-every", type=int, default=10, help="steps between printed lines")
+    p.add_argument(
+        "--checkpoint-dir",
+        default=None,
+        help="write §11 checkpoints here (per epoch and per --checkpoint-minutes)",
+    )
+    p.add_argument(
+        "--checkpoint-minutes",
+        type=float,
+        default=DEFAULT_INTERVAL_SECONDS / 60,
+        help="wall-clock checkpoint interval; §11 asks for 30-60",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from the newest checkpoint in --checkpoint-dir, if there is one",
+    )
     args = p.parse_args(argv)
 
     cfg = build_config(
@@ -496,7 +847,24 @@ def main(argv: list[str] | None = None) -> int:
         if record.step % args.log_every == 0 or record.step + 1 == args.steps:
             print(format_step(record, args.steps), flush=True)
 
-    records = train(cfg, steps=args.steps, device=args.device, on_step=report)
+    if args.checkpoint_dir is None:
+        if args.resume:
+            p.error("--resume needs --checkpoint-dir to resume from")
+        records = train(cfg, steps=args.steps, device=args.device, on_step=report)
+    else:
+        policy = CheckpointPolicy.from_config(
+            cfg,
+            directory=args.checkpoint_dir,
+            interval_seconds=args.checkpoint_minutes * 60,
+        )
+        records = train_resumable(
+            cfg,
+            steps=args.steps,
+            policy=policy,
+            resume=args.resume,
+            device=args.device,
+            on_step=report,
+        )
     if records:
         print(f"\n{len(records)} steps: loss {records[0].loss:.4f} -> {records[-1].loss:.4f}")
     return 0

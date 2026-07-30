@@ -1,12 +1,16 @@
 # ADR 0003 — Dataloader design (Phase 0)
 
-- **Status:** Accepted — §3 **amended** (nothing superseded); see [Amendments](#amendments)
+- **Status:** Accepted — §3 and §1 **amended** (nothing superseded); see [Amendments](#amendments)
 - **Date:** 2026-07-13
 - **Context ticket:** "Decide the dataloader design" (GitHub issue #6), Phase-0 wayfinder map (#1)
 - **Builds on:** [ADR 0001 — Corpus-construction recipe](0001-corpus-construction-recipe.md), [ADR 0002 — Storage format & manifest](0002-storage-format-and-manifest.md)
 - **Amended by:** Phase F, 2026-07-27 ([issue #70](https://github.com/JStoschek/DEMAE/issues/70)) — §3's
   `global` statistic is **tier-specific**, so the ablation is within-tier only; and the mode's measured
   effect on the signal is recorded. See [Amendments](#amendments)
+- **Amended by:** Phase 1, 2026-07-30 ([issue #94](https://github.com/JStoschek/DEMAE/issues/94)) — §1's
+  global shuffle is unchanged in *kind*, but the **training** loader now obtains it from an explicit
+  per-epoch sampler rather than from `DataLoader(shuffle=True)`, so that plan §11's exact resume can
+  re-enter an interrupted epoch. See [Amendments](#amendments)
 
 ## Context
 
@@ -30,7 +34,8 @@ masking lives in the Phase-1 model, **not** the loader.
   the handle in a per-worker dict keyed by `shard_id`. Fork-safe; O(1) after warmup.
 - **Global `DataLoader(shuffle=True)`.** memmap gives true O(1) random access, so we get a *perfect*
   per-epoch shuffle for free — no WebDataset-style shuffle buffers (a stated reason ADR 0002 chose
-  memmap).
+  memmap). *(Amended 2026-07-30 — the **training** loader now sources this same global per-epoch
+  shuffle from an explicit sampler; see [Amendment 2](#amendment-2-2026-07-30--the-training-shuffle-moves-to-an-explicit-per-epoch-sampler).)*
 - **Perf flags:** a few `num_workers`, `pin_memory=True`, `persistent_workers=True`, default
   `prefetch_factor`. The Dataset returns **fp32 CPU tensors**; bf16 autocast is a Phase-1 model concern.
 
@@ -193,3 +198,46 @@ quote and ADR-0006/0007 rest on. A corpus card written before this amendment has
 - **Bare-tensor or `(image, mask)` return** — rejected in favour of the dict (needs stats/id/stratum).
 - **Baking normalization into storage** — already rejected in ADR 0002; would kill the ablation.
 - **Benchmarked throughput** — deferred to an optional build-time check; reasoned headroom suffices here.
+
+### Amendment 2 (2026-07-30) — the training shuffle moves to an explicit per-epoch sampler
+
+**Source:** Phase-1 pretraining map ([#76](https://github.com/JStoschek/DEMAE/issues/76)), ticket
+[#94](https://github.com/JStoschek/DEMAE/issues/94). **Supersedes:** nothing — §1's decision was
+*a perfect global per-epoch shuffle, seeded from the run config*, and that is exactly what still
+happens. What changes is **where the permutation comes from**, for the training loader only.
+
+#### The decision
+
+`pretrain.train.build_loader` builds a shuffled loader as `shuffle=False` plus an explicit
+`EpochShuffleSampler`, whose order for epoch *e* is `randperm` under a seed derived
+`blake2b(f"{run_seed}:{e}")`. The val loader is untouched and still reads in manifest order.
+
+#### Why §1's form could not stay
+
+Plan §11 makes **exact resume** a gate: a run killed mid-epoch must come back and finish *that*
+epoch's order. `DataLoader(shuffle=True)` draws its permutation from the loader's generator at
+iterator-construction time, so the order of epoch 300 is a function of every draw that preceded
+it — including how many iterators were constructed, which differs between a first launch and a
+resumed one, and again between `persistent_workers` on and off. There is no state a checkpoint
+can carry that makes a fresh process re-derive it reliably.
+
+Making the order a pure function of `(seed, epoch)` removes the history entirely, and lets a
+resumed epoch start partway through by slicing: with `drop_last`, `(n - k·B) // B == n // B - k`,
+so the resumed epoch has exactly the batches the interrupted one had left, in the order it would
+have read them.
+
+#### What is unchanged
+
+- The shuffle is still **global** and still **perfect** — a full `randperm` over the split, which
+  is what §1 bought with memmap's O(1) random access. No shuffle buffer appears.
+- It is still seeded from the run config, so §1's reproducibility consequence holds.
+- Every perf flag in §1 stands: `pin_memory`, `persistent_workers`, `prefetch_factor`, and the
+  lazy per-worker memmaps are untouched. A sampler chooses indices; it does not change how they
+  are read.
+
+#### The cost, recorded
+
+Iterating the sampler to exhaustion advances it to the next epoch, so `len()` answers "what is
+left of the current epoch" rather than a constant. Callers that need a whole epoch's step count
+(the LR schedule's unit) must ask before the epoch is walked — `pretrain.train.train_resumable`
+computes it once, before any skip is applied.

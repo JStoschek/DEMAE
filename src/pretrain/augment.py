@@ -160,6 +160,25 @@ class DihedralDataset(Dataset):
             sample[key] = apply_dihedral(sample[key], k)
         return sample
 
+    def rng_state(self) -> dict | None:
+        """This process's augmentation stream, as plain types — #94's checkpoint reads it.
+
+        ``None`` when nothing has been read yet, which is an honest answer rather than a
+        missing one: a checkpoint written before the first sample has no stream to record, and
+        the process that resumes it seeds an identical one from the same ambient seed.
+
+        **Only this process's.** At ``num_workers > 0`` the stream that matters lives in the
+        workers, is unreachable from here, and is not what this returns — see
+        :mod:`pretrain.checkpoint`'s module docstring for what that costs a resume.
+        """
+        return None if self._rng is None else self._rng.bit_generator.state
+
+    def load_rng_state(self, state: dict | None) -> None:
+        """Put a stream captured by :meth:`rng_state` back. ``None`` is a no-op, deliberately."""
+        if state is None:
+            return
+        self._rng_for_this_worker().bit_generator.state = state
+
     def __repr__(self) -> str:
         return f"DihedralDataset({self.dataset!r}, seed={self.seed!r})"
 

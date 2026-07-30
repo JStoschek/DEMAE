@@ -281,6 +281,14 @@ GitHub issue #1.
   (ADR-0003), and the load-bearing property is that **one draw carries both the image and its
   land mask**: the two drifting apart does not crash and does not show in a loss curve, it
   simply points the ocean weighting at a rotated copy of where the ocean used to be.
+  Its draw comes from a NumPy generator held by **whichever process is reading**, which is what
+  makes it the one **RNG stream** an **exact resume** does not restore at `num_workers > 0`:
+  the stream lives in worker processes the parent cannot reach, so a checkpoint captures it
+  only at `num_workers = 0`. Order, weights, optimizer and mask draws still resume exactly at
+  any worker count — it is the dihedral element per sample that is redrawn. Closing the gap
+  means deriving the draw from the sample index instead of from a per-process stream, which is
+  a change to *this* design rather than to the checkpoint
+  ([#94](https://github.com/JStoschek/DEMAE/issues/94) records it).
 - **norm_pix** — per-patch target normalization: the reconstruction target for a patch is that
   patch standardized by its **own** mean and variance, so the model is scored on internal relief
   rather than on where the patch sits within the tile (`pretrain.loss`,
@@ -418,6 +426,44 @@ GitHub issue #1.
   than defaulting, for the reason the config refuses unknown keys at all: a run that reports one
   recipe and trains another is worse than a run that fails. `--dry-run` assembles the whole
   thing and spends nothing, which is the form the §15 pre-flight checklist is walked in.
+- **Exact resume** — the property plan §11 makes a *gate* rather than a nicety, and §15's
+  checklist item 4 measures: a run killed at step k and restarted from its checkpoint produces
+  a **bit-identical** loss trajectory to the uninterrupted one. vast.ai instances vanish
+  permanently rather than pausing, so this is what stands between a multi-day run and starting
+  over. It needs four things restored together — weights, optimizer moments, the schedule's
+  step count, and every **RNG stream** — and the failure of any one of them looks like nothing:
+  the run resumes, the loss descends, and the recipe quietly changed
+  ([#94](https://github.com/JStoschek/DEMAE/issues/94)). Claimed and tested at
+  `num_workers = 0`; see **Dihedral augmentation** for the one stream that does not resume with
+  workers.
+- **RNG stream** — one independent source of randomness a run draws from, of which there are
+  six and not one: the ambient torch generator (the in-model mask draw), CUDA's per-device
+  generators, NumPy's legacy global, Python's `random`, the DataLoader's own `torch.Generator`,
+  and the dihedral augmentation's per-process NumPy generator. They are named as a list
+  (`pretrain.checkpoint.RNG_STREAMS`) precisely because a stream captured in one place and
+  restored in neither of the other two is a stream that silently is not restored.
+- **Epoch order** — the sequence a training epoch reads its tiles in, derived as a pure
+  function of `(seed, epoch)` (`pretrain.train.EpochShuffleSampler`) rather than drawn from a
+  rolling generator. The distinction is what makes a **mid-epoch resume** continue the order it
+  was interrupted in instead of drawing a fresh one — a bug that trains perfectly well while
+  showing some tiles twice in an epoch and others never. A generator's state at epoch 300
+  depends on every draw before it, including how many DataLoader iterators were constructed,
+  which differs between a first launch and a resumed one; a pure function has no such history.
+  **This supersedes [ADR-0003](docs/adr/0003-dataloader-design.md) §1's global
+  `DataLoader(shuffle=True)`** for the *training* loader only — the val loader still reads in
+  manifest order, and the shuffle is still global and still seeded from the run config.
+- **Milestone set** — the epochs whose end-of-epoch checkpoint is **protected from retention**,
+  read off `Schedule.milestones` and never hardcoded. §11 keeps the last 3 checkpoints plus
+  this set; §14 keeps the set so Phase 2 can plot downstream performance against pretraining
+  compute. Read from the config because R5 ([#87](https://github.com/JStoschek/DEMAE/issues/87))
+  may extend to 800 epochs: against a fixed 50/100/200/400 the 800 checkpoint would be an
+  ordinary one, and last-3 retention would delete the endpoint of the very plot the milestones
+  exist for. R2/R3 stop at 200, so their sets are shorter for the same reason.
+- **Atomic checkpoint write** — tmp file, `fsync`, then `os.replace`, so that at every instant
+  the checkpoint name refers to a whole file. The failure it prevents is not a lost checkpoint
+  but a **half-written one that loads**: a resume from it comes back with weights partly from
+  the previous step, and nothing about the run looks wrong. The temporary name is hidden and
+  outside the discovery glob, because a hard kill leaves it behind with no chance to clean up.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
