@@ -338,10 +338,14 @@ class EpochCursor:
 
     What is left over at an epoch's end is the batches an incomplete *group* would have been
     built from — ``len(loader) % accum_iter`` of them, which at ``accum_iter = 2`` is one. Those
-    batches are genuinely fetched, and fetching them advances the augmentation stream. (The
-    remainder ``drop_last`` drops is a different thing and costs nothing here: torch's
-    ``BatchSampler`` abandons a short batch's indices without ever fetching them, so those
-    samples are never read.) So the drain loop exists for the accumulation remainder, and it
+    batches are genuinely fetched, and a fetched batch is one the epoch has consumed. What is at
+    stake is that count rather than the samples: since #104 the augmentation is a pure function
+    of ``(seed, epoch, index)``, so a re-read tail comes back bit-identical — but it is re-*trained*
+    on, which moves weights and optimizer moments. (Before #104 a re-read silently changed the
+    transforms as well, which is the stronger claim this paragraph used to make.) The remainder
+    ``drop_last`` drops is a different thing and costs nothing here: torch's ``BatchSampler``
+    abandons a short batch's indices without ever fetching them, so those samples are never
+    read. So the drain loop exists for the accumulation remainder, and it
     runs *before* the final group is yielded: a checkpoint written at an epoch boundary is then
     taken on the far side of it, with a clean ``batches_into_epoch = 0``, and the resumed run
     does not re-read a tail the original had already consumed.
