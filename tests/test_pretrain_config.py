@@ -254,10 +254,11 @@ def test_only_the_environment_fields_are_left_out_of_the_hash():
         "data.corpus_dir",
         "data.split_assignment_path",
         "data.split_blocks_path",
-        # #98: where §10.2's panel is mounted. What a run is answerable for is its
-        # *content*, and it is re-checked against the manifest at every load rather than
-        # being trusted to a hash.
+        # #98/#99: where §10.2's panel and §10.3's probe set are mounted. What a run is
+        # answerable for is their *content*, and both are re-checked against the manifest at
+        # every load rather than being trusted to a hash.
         "data.val_panel_path",
+        "data.probe_set_path",
         # #97: where the metrics go — which project, whose account, which directory, online or
         # offline — is the ops account (#80) and the box, not the objective.
         "monitoring.wandb_mode",

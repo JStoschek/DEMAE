@@ -552,6 +552,38 @@ GitHub issue #1.
   epoch the model moves; and non-finite predictions are **painted**, not propagated, because
   §15's item 5 requires the whole pipeline to render on a randomly initialized model and a NaN
   reaching W&B reads as a reconstruction failure rather than the renderer bug it is.
+- **Probe set** — the committed ~5,000 val tiles §10.3's kNN probe scores, drawn stratified over
+  `stratum_id` (`artifacts/phase1/probe_set_500k.csv`, by `pretrain.probe`; 5,000 tiles over 477
+  source COGs, half the shipped val split). Fourth artifact in the same contract family as the
+  selection list, the split assignment and the val panel, and committed for the family's reason
+  sharpened: **every probe number is a comparison** — this checkpoint against the last, this
+  ablation arm against the release recipe — so a probe set that re-drew itself would make each
+  of those a comparison between two different tile populations. Re-checked against the manifest
+  at every load: a tile the corpus does not hold, a stratum that has moved under the committed
+  label, or a tile outside `val` is refused rather than scored.
+- **kNN probe** — §10.3's cheap proxy for representation quality, `pretrain.probe`, run **every
+  20 epochs** (epoch 0 included, as the untrained baseline). A **frozen** encoder produces one
+  mean-pooled feature per probe tile, and a kNN over those features classifies `stratum_id` and
+  regresses `slope_mean` and `geomorphon_entropy` — supervision the manifest already carries, so
+  it costs nothing. Half of what #85 adjudicates the release recipe on, jointly with the
+  fixed-mask val loss, and the only in-flight signal that reports on the *encoder* rather than on
+  the decoder's inpainting. Three properties are load-bearing:
+  - **Frozen is asserted, not assumed** — eval mode restored, no gradient reached, no parameter
+    moved, each checked on the way out. And the probe's loader carries an explicit generator:
+    a `DataLoader` without one draws its base seed from the ambient RNG, which is the stream the
+    masking draws from, so measuring the run would otherwise change it.
+  - **The bank excludes a query's own source COG.** Corpus card §4.6: two windows of one COG are
+    neighbours, not independent samples. A plain leave-one-out kNN answers most queries with the
+    overlapping window next door and reports a high accuracy for an encoder that knows nothing
+    transferable — the corpus's geography read back as representation quality, at its most
+    flattering. Same blocking unit the val split was drawn at, one level down.
+  - **The SSL4EO caveat is emitted, not documented.** SSL4EO-S12 measured MAE representations as
+    weak under linear and kNN probes relative to contrastive methods, on benchmarks where MAE
+    fine-tuning ultimately wins, so these numbers compare **trends and never set an absolute
+    bar**. The caveat is logged beside the numbers at every probe point and printed under every
+    line, each accuracy is reported against its own leave-one-COG-out no-skill baseline, and the
+    headline series is the **delta against the epoch-0 baseline** — so the natural thing to read
+    off a chart is movement rather than level.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

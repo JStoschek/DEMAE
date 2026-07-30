@@ -131,6 +131,16 @@ SPLIT_BLOCKS_PATH: Final = "artifacts/phase1/split_blocks_500k.json"
 # writes it and re-reads it; the path is named here so both quote one place.
 VAL_PANEL_PATH: Final = "artifacts/phase1/val_panel_40.csv"
 
+# --- Phase-1 handoff: the kNN probe set (issue #99, plan §10.3) ---------------
+# The committed ~5k val tiles §10.3's probe scores every 20 epochs. Fourth artifact in
+# the same contract family as the two above, and named here for the same reason — one
+# place holds the path, whoever writes it (`pretrain.probe`) and whoever re-reads it.
+# Committing it is the whole point: every probe number is a comparison between
+# checkpoints or between ablation arms, and a probe set that redrew itself would make
+# each of those a comparison of two different tile populations. Tier-specific, like the
+# split it is drawn from.
+PROBE_SET_PATH: Final = "artifacts/phase1/probe_set_500k.csv"
+
 # --- Quality masks (docs/research/copernicus-mask-spec.md; masks.py) ----------
 # EDM/FLM/WBM ship in each tile's own AUXFILES/ prefix in the DEM bucket above.
 # The cache-locally-not-stream policy (and why it differs from the COG reads) is

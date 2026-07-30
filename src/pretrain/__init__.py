@@ -111,6 +111,20 @@ failure shows itself, which is a thing no scalar in the list above can report:
   looking fine — and it renders on a randomly initialized model without erroring, which is §15's
   checklist item 5 and the reason non-finite predictions are painted rather than propagated.
 
+#99 is §10.3, the third channel: the only in-flight signal that reports on the **encoder**
+rather than on the decoder's inpainting, and half of what #85 adjudicates the release recipe on:
+
+- :mod:`pretrain.probe` — a frozen encoder, features over the committed ~5k val tiles, and a
+  kNN: ``stratum_id`` classified, ``slope_mean`` and ``geomorphon_entropy`` regressed, all
+  supervised for free by manifest columns. Three things earn their place beside the estimators.
+  The freeze is **asserted** — mode restored, no gradient reached, no parameter moved — rather
+  than assumed. The bank excludes a query's own source COG, because the corpus card §4.6 says
+  two windows of one COG are neighbours and a plain leave-one-out kNN would report the geography
+  back as representation quality, at its most flattering. And SSL4EO's caveat — MAE reads weak
+  under kNN probes even where fine-tuning wins — is **emitted**, not documented: logged beside
+  every number, printed under every line, with the headline series shaped as a delta against the
+  untrained epoch-0 baseline so the natural read is movement rather than level.
+
 ``python -m pretrain`` prints the config + fingerprint header a real run would record;
 ``python -m pretrain.train --steps N`` runs the bare loop. **``python -m pretrain.launch`` is
 how a run is actually started** (:mod:`pretrain.launch`): a config file plus repeatable

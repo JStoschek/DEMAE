@@ -59,6 +59,7 @@ from .config import RunConfig
 from .fingerprint import fingerprint_for
 from .header import add_config_arguments, build_config, format_header
 from .loss import patch_statistics
+from .probe import KnnProbe, ProbeReport, format_probe, probe_for
 from .recon import ReconGrids
 from .sink import Histogram, RunLogger, open_run_logger
 from .throughput import (
@@ -372,6 +373,11 @@ class EpochRecord:
     #: #95's counters for the epoch, or ``None`` when the caller measured nothing.
     throughput: ThroughputSummary | None
     alarms: tuple[Alarm, ...]
+    #: §10.3's probe point (#99), on the epochs its cadence lands on and ``None`` between them.
+    #: Carried here so an ``on_epoch`` caller can print it; the numbers themselves go to the
+    #: sink through :mod:`pretrain.probe`, not through :meth:`scalars` — see the module
+    #: docstring on which side of the seam each ticket sits.
+    probe: ProbeReport | None = None
 
     @property
     def val_loss(self) -> float | None:
@@ -429,6 +435,7 @@ class EpochMonitor:
         logger: RunLogger,
         val_loader=None,
         on_alarm: Callable[[Alarm], None] | None = None,
+        probe: KnnProbe | None = None,
         recon: ReconGrids | None = None,
     ) -> None:
         self.cfg = cfg
@@ -441,6 +448,10 @@ class EpochMonitor:
         #: per render: it carries the panel's pixels, read once, so epoch 400's grid is drawn
         #: from the same bytes epoch 0's was.
         self.recon = recon
+        #: §10.3's probe (#99), or ``None``. Driven from here — the epoch boundary is the only
+        #: place that knows what epoch it is — but it writes its own numbers into the sink, so
+        #: this module never learns what a kNN accuracy is.
+        self.probe = probe
         #: ``[(epoch, loss), ...]`` — what :mod:`pretrain.alarms` reads. **Epochs, not steps**:
         #: §10.1's conditions are written in epochs ("a plateau in the first 20 epochs"), and
         #: fed a step series they would fire on within-epoch noise.
@@ -491,6 +502,14 @@ class EpochMonitor:
             ),
         )
 
+        # §10.3's probe, on its own cadence — after val, so an epoch's cheap numbers are all
+        # taken before the expensive one. It logs itself; what comes back is for the console.
+        probe = (
+            None
+            if self.probe is None or self.trainer is None
+            else self.probe.maybe_run(self.trainer.model, epoch)
+        )
+
         record = EpochRecord(
             epoch=epoch,
             steps=len(self._losses),
@@ -499,6 +518,7 @@ class EpochMonitor:
             val=val,
             throughput=throughput,
             alarms=tuple(alarms),
+            probe=probe,
         )
         values = record.scalars(tail_quantile=monitoring.per_patch_tail_quantile)
         # §10.2's grids, on their own cadence, merged into the epoch's own payload rather than
@@ -583,6 +603,7 @@ def train_epochs(
         logger=logger,
         val_loader=val_loader,
         on_alarm=on_alarm,
+        probe=probe_for(cfg, logger),
         recon=ReconGrids.from_config(cfg),
     )
     try:
@@ -646,6 +667,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     def report(record: EpochRecord) -> None:
         print(format_epoch(record), flush=True)
+        if record.probe is not None:
+            # Printed as well as logged, and with §10.3's caveat attached — the person most
+            # likely to over-read a probe number is the one watching the run it came out of.
+            print(format_probe(record.probe), flush=True)
 
     def announce(alarm: Alarm) -> None:
         # Printed as well as logged: an alarm that exists only in W&B is one nobody sees during

@@ -58,6 +58,8 @@ import numpy as np
 from dataset.config import VAL_PANEL_PATH
 from dataset.sampling import _shuffle_key  # the house determinism rule, as `gallery` imports it
 
+from .artifact import read_tile_strata, write_tile_strata
+
 __all__ = [
     "PANEL_SEED",
     "PANEL_SPLIT",
@@ -86,8 +88,6 @@ TILES_PER_STRATUM: Final = 2
 
 #: The only split a panel tile may come from. See the module docstring.
 PANEL_SPLIT: Final = "val"
-
-_HEADER: Final = "tile_id,stratum_id"
 
 
 class PanelTile(NamedTuple):
@@ -188,25 +188,19 @@ def write_panel(tiles: list[PanelTile], path: Path | str) -> Path:
     byte-identical whatever order the draw handed the tiles over in, which is what makes its
     md5 a contract rather than a timestamp. Same rule as
     :func:`dataset.splits.write_assignment`.
+
+    The format itself is :mod:`pretrain.artifact`'s, shared with §10.3's probe set (#99): the
+    two artifacts are the same two columns in two roles, and the decisions worth not
+    duplicating are the header, the LF termination and the caller-owned order.
     """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(tiles, key=lambda t: (t.stratum_id, t.tile_id))
-    lines = [_HEADER] + [f"{t.tile_id},{t.stratum_id}" for t in ordered]
-    path.write_text("\n".join(lines) + "\n")
-    return path
+    return write_tile_strata(((t.tile_id, t.stratum_id) for t in ordered), path)
 
 
 def read_panel(path: Path | str) -> list[PanelTile]:
     """Read the committed panel back. Neither column ever contains a comma."""
-    lines = Path(path).read_text().splitlines()
-    if not lines or lines[0] != _HEADER:
-        raise ValueError(f"{path} is not a val panel (header {lines[:1]}, expected {_HEADER!r})")
-    tiles = []
-    for line in lines[1:]:
-        tile_id, stratum = line.rsplit(",", 1)
-        tiles.append(PanelTile(tile_id, int(stratum)))
-    return tiles
+    rows = read_tile_strata(path, what="val panel")
+    return [PanelTile(tile_id, stratum) for tile_id, stratum in rows]
 
 
 # --- Resolving it against a corpus --------------------------------------------

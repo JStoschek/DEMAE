@@ -80,6 +80,19 @@ POS_ENCODINGS: Final = ("sincos2d", "sincos2d_rowfirst")
 #: ``offline`` — see :class:`Monitoring`.
 WANDB_MODES: Final = ("offline", "online", "disabled")
 
+#: §10.3 — how a tile's ``(1 + n_patches, encoder_dim)`` encoding becomes the one feature vector
+#: the kNN probe compares (#99).
+#:
+#: ``mean`` — the average of the **patch** tokens, CLS excluded — is the default, and the
+#: argument is that the CLS token is *never supervised during MAE pretraining*: no term in §4's
+#: objective touches it, so what it holds after 400 epochs is whatever attention happened to
+#: leave there. MAE's own fine-tuning recipe reads global-average-pooled patch tokens for the
+#: same reason. ``cls`` is kept because MAE's *linear* probe uses it and #85 may want both.
+#:
+#: Named here rather than in :mod:`pretrain.probe` for the reason :data:`POS_ENCODINGS` is: this
+#: module is the torch-free one and a run's recipe vocabulary has one home.
+PROBE_POOLINGS: Final = ("mean", "cls")
+
 
 def masked_token_count(n_patches: int, ratio: float) -> int:
     """How many tokens a ratio hides — 147 of 196 at 0.75 (plan §3).
@@ -263,6 +276,13 @@ class Data(_Frozen):
     #: mislabels a diagnostic rather than invalidating a checkpoint. :func:`pretrain.panel.
     #: resolve_panel` re-checks it against the manifest at every load instead.
     val_panel_path: str = field(default=dataset_config.VAL_PANEL_PATH, metadata=ENVIRONMENT)
+    #: §10.3's committed ~5k-tile kNN probe set (#99). Environment for the same reason, and
+    #: unfingerprinted for a *weaker* version of the panel's: a wrong probe set does not
+    #: invalidate a checkpoint either, but it does invalidate every cross-arm comparison drawn
+    #: off it, which is what #85 adjudicates the release recipe on. So
+    #: :func:`pretrain.probe.load_probe_tiles` re-checks it against the manifest at every load
+    #: — every tile present, every committed stratum still agreeing, every tile still in `val`.
+    probe_set_path: str = field(default=dataset_config.PROBE_SET_PATH, metadata=ENVIRONMENT)
     #: §5 — `per_tile`, the ADR-0003 default. `global` stays the scheduled Phase-3 ablation, and
     #: its failure mechanism is already measured (corpus card §4.8: ~42x more variance between
     #: tiles than within them). Do not re-litigate it in Phase 1.
@@ -556,6 +576,22 @@ class Monitoring(_Frozen):
     #: from IO alone — and 10% is the point past which the GPU dollars are buying idle time.
     loader_wait_alarm: float = 0.10
 
+    # --- §10.3's kNN probe (#99)
+    #: How often §10.3's frozen-encoder probe runs, in epochs. 20 is the plan's own cadence:
+    #: the probe is an inference pass over ~5k tiles plus a kNN, minutes against an epoch's
+    #: hours, and representation quality does not move fast enough to be worth watching more
+    #: closely. **Epoch 0 is probed too** — that is the untrained baseline every later point is
+    #: reported as a delta against, and the first *informative* point is still epoch 20. ``0``
+    #: turns the probe off entirely, which is what a unit test and R0's smoke run want.
+    probe_every_epochs: int = 20
+    #: Neighbours each probe query votes over. See :data:`pretrain.probe.DEFAULT_K`.
+    probe_k: int = 20
+    #: How a tile's token sequence becomes one feature vector — see
+    #: :data:`pretrain.probe.POOLINGS`. Recipe, not environment, and this is the field that
+    #: makes it so: two arms pooled differently are not comparable, and the config hash is
+    #: where that disagreement has to become visible.
+    probe_pooling: str = "mean"
+
     # --- §11's sink (environment, not recipe)
     #: `offline` writes the whole run to a local directory with no account and no network, and
     #: is the default *and the test target*: it keeps this code off the critical path of #80's
@@ -608,6 +644,17 @@ class Monitoring(_Frozen):
             )
         if not 0.0 < self.loader_wait_alarm < 1.0:
             raise ValueError(f"loader_wait_alarm {self.loader_wait_alarm} must lie in (0, 1)")
+        if self.probe_every_epochs < 0:
+            raise ValueError(
+                f"probe_every_epochs {self.probe_every_epochs} must be >= 0 (0 turns §10.3's "
+                "probe off)"
+            )
+        if self.probe_k < 1:
+            raise ValueError(f"probe_k {self.probe_k} must be >= 1")
+        if self.probe_pooling not in PROBE_POOLINGS:
+            raise ValueError(
+                f"unknown probe_pooling {self.probe_pooling!r} (one of {PROBE_POOLINGS})"
+            )
 
 
 # --- The config ---------------------------------------------------------------

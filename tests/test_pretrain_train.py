@@ -37,7 +37,15 @@ import torch
 from pretrain import optim
 from pretrain import schedule as schedule_mod
 from pretrain import train as train_mod
-from pretrain.config import Architecture, Data, Optimization, RunConfig, Runtime, Schedule
+from pretrain.config import (
+    Architecture,
+    Data,
+    Monitoring,
+    Optimization,
+    RunConfig,
+    Runtime,
+    Schedule,
+)
 from pretrain.train import StepRecord, Trainer
 
 #: conftest's geography — one geocell held out as `test`, one COG as `val` — reused so the
@@ -98,6 +106,7 @@ def tiny_config(corpus, **changes) -> RunConfig:
             # this one, correctly (`pretrain.panel.resolve_panel`). A fixture that wants grids
             # commits its own panel and points here at it.
             val_panel_path=str(corpus / "no-panel.csv"),
+            probe_set_path=str(corpus / "no-probe-set.csv"),  # same story, §10.3's set (#99)
             num_workers=0,
         ),
         # §7.3's default is on, and #95 makes `Trainer.from_config` honour it. Compiling a
@@ -105,6 +114,13 @@ def tiny_config(corpus, **changes) -> RunConfig:
         # at this size — so the fixture opts out and the tests that are *about* compiling opt
         # back in one at a time.
         runtime=Runtime(compile=False),
+        # §10.3's kNN probe (#99) reads a *committed* probe set, and the one in the repo belongs
+        # to the 500k tier — a fixture corpus has no probe set and nothing has drawn it one. Off
+        # here rather than tolerated in `pretrain.probe`, which refuses a probe set that does not
+        # describe the corpus in front of it: a probe scored against the wrong tiles is a wrong
+        # measurement, not a missing one. `test_pretrain_probe.py` turns it back on with a set
+        # drawn from its own corpus.
+        monitoring=Monitoring(probe_every_epochs=0),
     )
     return cfg.replace(**changes) if changes else cfg
 

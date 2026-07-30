@@ -26,6 +26,7 @@ def build_corpus(
     tiles_per_cog: int = 2,
     splits: dict[str, str] | None = None,
     tile_fn=None,
+    metrics_fn=None,
 ):
     """Materialize a corpus at ``root`` from ``cogs`` — ``[(stem, geocell_id, split), ...]``.
 
@@ -38,6 +39,12 @@ def build_corpus(
     default is right for every test that only reads a sample; #93's training tests pass a
     *smooth* generator instead, because a model cannot reduce a reconstruction loss on noise
     and "the loss falls" would then be an untestable claim.
+
+    ``metrics_fn(cog_index, tile_index) -> dict`` overrides the frozen metric vector and the
+    ``stratum_id`` beside it. The default is one constant row, which is right for every test
+    that never reads those columns and wrong for #99's, whose kNN regression targets *are*
+    ``slope_mean`` and ``geomorphon_entropy`` — a constant target makes a no-skill baseline
+    score perfectly and the probe untestable.
     """
     rng = np.random.default_rng(0)
     tile_fn = tile_fn or _tile
@@ -54,6 +61,16 @@ def build_corpus(
                 sumsq += float(np.square(vals).sum())
                 total += vals.size
                 tile_id = manifest.make_tile_id(stem, j * 224, 0)
+                metrics = {
+                    "stratum_id": j % 20,
+                    "slope_mean": 0.1,
+                    "local_relief": 30.0,
+                    "texture": 0.5,
+                    "elevation_relief_ratio": 0.4,
+                    "mean_elevation": 500.0 + 100 * c,
+                    "geomorphon_entropy": 1.8,
+                }
+                metrics.update(metrics_fn(c, j) if metrics_fn is not None else {})
                 rows.append(
                     manifest.TileRecord(
                         tile_id=tile_id,
@@ -69,14 +86,8 @@ def build_corpus(
                         mean=tile.mean,
                         std=tile.std,
                         land_frac=tile.land_frac,
-                        stratum_id=j % 20,
                         provenance="base",
-                        slope_mean=0.1,
-                        local_relief=30.0,
-                        texture=0.5,
-                        elevation_relief_ratio=0.4,
-                        mean_elevation=500.0 + 100 * c,
-                        geomorphon_entropy=1.8,
+                        **metrics,
                         edm_edited_frac=0.0,
                         flm_fill_frac=0.0,
                         wbm_water_frac=0.0,
