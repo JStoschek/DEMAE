@@ -174,12 +174,28 @@ def test_the_image_and_the_land_mask_receive_the_identical_element():
         )
 
 
-def test_the_coupling_holds_through_a_multi_worker_dataloader():
+@pytest.mark.parametrize("epoch", [None, 3])
+def test_the_coupling_holds_through_a_multi_worker_dataloader(epoch):
+    """The coupling, on the far side of a process boundary — both kinds of key.
+
+    ``epoch=None`` drives it with plain ints, which is what an unshuffled loader hands down.
+    ``epoch=3`` drives it with :class:`EpochIndex` keys, which is the configuration that
+    actually ships: the key is pickled into a worker and the element is derived from the epoch
+    that survived the trip. `test_workers_apply_the_identical_elements_the_parent_would_have`
+    pushes the same keys through workers but decodes only the *image*, so without this
+    parametrization nothing asserts that the mask came back on the same element as its image
+    on the path R0/R1 actually run.
+    """
     from dataset.loader import build_dataloader
 
     dataset = DihedralDataset(_FakeTiles(n=64), seed=2)
     loader = build_dataloader(
-        dataset, batch_size=8, num_workers=2, shuffle=False, pin_memory=False
+        dataset,
+        batch_size=8,
+        num_workers=2,
+        shuffle=False,
+        sampler=None if epoch is None else _keys(64, epoch=epoch),
+        pin_memory=False,
     )
     for batch in loader:
         for image, mask in zip(batch["image"], batch["land_mask"]):

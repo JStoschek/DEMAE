@@ -11,6 +11,11 @@
   global shuffle is unchanged in *kind*, but the **training** loader now obtains it from an explicit
   per-epoch sampler rather than from `DataLoader(shuffle=True)`, so that plan §11's exact resume can
   re-enter an interrupted epoch. See [Amendments](#amendments)
+- **Amended by:** Phase 1, 2026-07-30 ([issue #104](https://github.com/JStoschek/DEMAE/issues/104)) —
+  that sampler now yields an `EpochIndex` (an `int` subclass carrying its epoch) rather than a plain
+  `int`, and the dihedral augmentation derives its element from `Runtime.seed` by hash instead of
+  drawing from the DataLoader generator, so the §11 gate holds at the shipped `num_workers = 8`.
+  See [Amendments](#amendments)
 
 ## Context
 
@@ -241,3 +246,43 @@ Iterating the sampler to exhaustion advances it to the next epoch, so `len()` an
 left of the current epoch" rather than a constant. Callers that need a whole epoch's step count
 (the LR schedule's unit) must ask before the epoch is walked — `pretrain.train.train_resumable`
 computes it once, before any skip is applied.
+
+### Amendment 3 (2026-07-30) — the sampler's index carries its epoch, and the augmentation leaves the generator
+
+**Source:** Phase-1 pretraining map ([#76](https://github.com/JStoschek/DEMAE/issues/76)), ticket
+[#104](https://github.com/JStoschek/DEMAE/issues/104). **Supersedes:** nothing — this qualifies
+[Amendment 2](#amendment-2-2026-07-30--the-training-shuffle-moves-to-an-explicit-per-epoch-sampler)
+and §1's **Reproducibility** consequence, both of which still hold for the shuffle itself.
+
+#### The decision
+
+Two things Amendment 2 described in passing are now different:
+
+- **`EpochShuffleSampler` yields `pretrain.augment.EpochIndex`, not a plain `int`.** It is an `int`
+  *subclass* carrying the epoch it was drawn for, precisely so that everything §1 specifies about
+  the read path — the batch sampler, the worker index queue, `SplitDataset.__getitem__` — keeps
+  treating it as the index it is. A tuple would have broken an unaugmented shuffled loader, which
+  indexes the dataset with the sampler's output directly.
+- **The augmentation's seed of record is `Runtime.seed`, not the DataLoader generator.** §1's
+  Reproducibility consequence — *"global shuffle uses the DataLoader generator seed"* — is about
+  the **shuffle**, and is unchanged. But the dihedral augmentation used to read the same generator
+  by way of `torch.initial_seed()` inside whichever process was reading; it now takes the run seed
+  explicitly and derives its element as `blake2b(f"{seed}:{epoch}:{index}")`.
+
+#### Why §1's form could not stay
+
+A per-process generator has a **position**, and position is process-local. At the shipped
+`num_workers = 8` that position lived in worker processes the parent could neither read nor
+restore, so plan §11's exact-resume gate — the whole reason Amendment 2 exists — held only at
+`num_workers = 0`. A pure function of `(seed, epoch, index)` has no position, so there is no
+augmentation stream to checkpoint and resume is exact at any worker count.
+
+#### What is unchanged
+
+- The shuffle is still global, still perfect, still seeded from the run config. A sampler still
+  only chooses indices.
+- Every perf flag in §1 stands; the augmentation remains **a wrapper around** the read path and
+  never an edit to it.
+- The checkpoint format version is **not** bumped: the removed RNG stream leaves a dead key in
+  pre-#104 checkpoints, which still restore, because a run in flight across this change resuming
+  is the point of §11.
