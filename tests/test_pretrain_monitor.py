@@ -23,8 +23,6 @@ disagree with the entrypoint's numbers by whatever it forgot to include.
 
 from __future__ import annotations
 
-import json
-
 import numpy as np
 import pytest
 import torch
@@ -527,25 +525,9 @@ def test_the_whole_epoch_loop_runs_through_a_real_offline_wandb_run(cfg, tmp_pat
         assert key in body, key
 
 
-# --- The entrypoint -----------------------------------------------------------
-
-
-def test_the_entrypoint_runs_n_epochs_and_prints_the_panel(cfg, tmp_path, capsys):
-    config_file = tmp_path / "run.json"
-    config_file.write_text(json.dumps(cfg.to_dict()))
-    assert monitor_mod.main(["--config", str(config_file), "--epochs", "2"]) == 0
-    out = capsys.readouterr().out
-    assert "DEMAE Phase 1" in out  # #89's header, before the first epoch
-    lines = [line for line in out.splitlines() if line.startswith("epoch ")]
-    assert len(lines) == 2
-    assert "val" in lines[0] and "samples/s" in lines[0] and "loader" in lines[0]
-
-
-def test_the_entrypoint_prints_an_alarm_where_a_reader_will_see_it(cfg, tmp_path, capsys):
-    # An alarm that only exists in W&B is an alarm nobody sees during the run that fires it.
-    loud = cfg.replace(monitoring=cfg.monitoring.replace(loader_wait_alarm=1e-6))
-    config_file = tmp_path / "run.json"
-    config_file.write_text(json.dumps(loud.to_dict()))
-    assert monitor_mod.main(["--config", str(config_file), "--epochs", "1"]) == 0
-    out = capsys.readouterr().out
-    assert "[STOP]" in out and "loader_wait" in out
+# --- The composition (#106) ---------------------------------------------------
+#
+# `pretrain.monitor` is no longer a run path: there was a `python -m pretrain.monitor` that
+# trained, wrote no checkpoints, and silently discarded `--set`, and #106 removed it in favour
+# of the one shipping command. The panel, the alarms and the console dashboard are now asserted
+# where they actually reach a reader — `test_pretrain_launch.py`.

@@ -97,6 +97,16 @@ step time and the **loader wait fraction** for every step, every epoch and the r
 whole. Asked for no length it runs the config's own schedule to its end; `--steps N` and
 `--epochs N` shorten it.
 
+It is **the only command that trains**, and that is the point of it: one command owns
+§11's checkpoints and resume, §10's whole reporting panel — val loss under a fixed mask
+seed, the three alarms, the per-patch loss distribution, reconstruction grids every 10
+epochs, a kNN probe every 20 — and the W&B run they all go to. Checkpoints land in
+`runs/<run_id>` on both of §11's triggers (every epoch, and every 45 minutes), keeping the
+last 3 plus the milestone set. **Resume is the default**: vast.ai instances vanish
+permanently, so a first launch and a relaunch on a fresh box are the same command, and the
+launcher prints what it found before spending anything. `--checkpoint-dir` moves the
+directory, `--no-checkpoints` and `--no-resume` opt out.
+
 Every recipe knob is reachable without a file. A run is the plan's defaults plus the knobs
 it moves, and `--set` is how it moves them (repeatable, JSON-valued, applied last):
 
@@ -117,7 +127,9 @@ not the one the recipe asked for, and it warns in the footer if the compiled gra
 rebuilt after warmup.
 
 `python -m pretrain` prints the same header and trains nothing;
-`python -m pretrain.train --steps N` is the minimal loop underneath the launcher.
+`python -m pretrain.train --steps N` is the minimal loop underneath the launcher — a tracer
+bullet for watching a step go by, not a way to start a run: it has no monitoring, and its
+checkpoints are opt-in.
 `python -m pretrain.panel` draws and commits §10.2's fixed 40-tile val panel, once per
 corpus tier, and `python -m pretrain.recon` renders that panel on an untrained model and
 writes the two contact sheets to look at — *garbage in, garbage rendered*, which is item 5
@@ -190,7 +202,7 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   train.py        # the step and the loop around it (bf16, accumulation, the seed)
   runtime.py      # §7's levers — `torch.compile`, and SDPA confirmed on the built blocks
   throughput.py   # §7.5's counters — samples/s, step time, loader wait fraction
-  monitor.py      # §10 — what a run reports every epoch, and the alarms wired onto it
+  monitor.py      # §10 — what a run reports every epoch, and the loop that composes it all
   alarms.py       # §10.1's failure conditions, as pure functions over loss trajectories
   artifact.py     # the committed `tile_id,stratum_id` contract — one format, two artifacts
   panel.py        # §10.2's fixed 40-tile val panel — drawn once, committed, re-read by runs
@@ -199,7 +211,7 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   sink.py         # §11's metrics sink — every scalar, histogram and grid goes through here
   checkpoint.py   # §11's exact resume — weights, optimizer, five RNG streams, the config
   header.py       # `python -m pretrain` — the config + fingerprint header a run records
-  launch.py       # `python -m pretrain.launch` — the way a run is started
+  launch.py       # `python -m pretrain.launch` — the one command a run is started with
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records
 Dockerfile        # pinned ETL environment for a rented vast.ai box

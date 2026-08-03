@@ -422,14 +422,38 @@ GitHub issue #1.
   alone). Reported per step and per epoch, always by **summing seconds and samples and dividing
   once**: a mean of per-step rates flatters the shape every real run has, where step 1 pays for
   the compile and the loader's first fill.
-- **Launch entrypoint** — `python -m pretrain.launch`, the one documented way to start a run
-  ([#95](https://github.com/JStoschek/DEMAE/issues/95)). A run is *the plan's defaults plus the
+- **Launch entrypoint** — `python -m pretrain.launch`, the **only** command that trains
+  ([#95](https://github.com/JStoschek/DEMAE/issues/95),
+  [#106](https://github.com/JStoschek/DEMAE/issues/106)). A run is *the plan's defaults plus the
   knobs it moves*, and the entrypoint is where that sentence becomes a command: a preset, an
   optional partial config file, the environment paths, then repeatable `--set group.knob=value`
   overrides — in that order, the general escape hatch last. A typo'd knob stops the run rather
   than defaulting, for the reason the config refuses unknown keys at all: a run that reports one
   recipe and trains another is worse than a run that fails. `--dry-run` assembles the whole
   thing and spends nothing, which is the form the §15 pre-flight checklist is walked in.
+- **The composition** — that one command owning *all* of it: #94's resumable loop, #97's
+  per-epoch panel, #98's grids, #99's probe and #97's sink, together
+  ([#106](https://github.com/JStoschek/DEMAE/issues/106)). Named here because its absence was
+  invisible in exactly the way this project's other named failures are. Every piece was built
+  and tested; nothing called them together, so the runbook's start command ran the plain loop
+  and a 400-epoch R1 would have produced **no checkpoints** — with `sync_checkpoints.sh`
+  reporting `ok` over an empty directory for forty hours — **no W&B run**, and no val pass. The
+  general shape: *a seam that nobody is on both sides of is a feature that does not exist*, and
+  the way to keep it from recurring is a test that drives the **shipping entry point** far
+  enough to see the artifacts, not one that drives each piece. There is correspondingly one
+  training loop (`pretrain.monitor.train_epochs`, over `pretrain.train.train_resumable`) and one
+  command; `python -m pretrain.monitor` was a second one and is gone, along with a `--set` it
+  accepted and discarded. `pretrain.train` remains a tracer bullet, documented as not a run.
+- **Checkpoint directory** — `runs/<run_id>`, derived rather than fixed. Two arms writing into
+  one directory is how R2 resumes R1's weights, and since a relaunch resumes by default that
+  would be silent; the run id is what already distinguishes two arms and what §15.7 tags the
+  W&B run with, so `--set run_id=R2` moves the ablation's checkpoints with the ablation.
+- **Resume by default** — the launcher continues from the newest checkpoint in that directory
+  unless told `--no-resume`, and an empty directory is a first launch rather than an error.
+  vast.ai instances vanish permanently, so a first launch and a relaunch on a replacement box
+  are the *same command*, typed at the one moment nobody wants to be remembering a flag. What
+  was found is printed before a step is taken, because a relaunch that silently restarted a
+  40-hour run and one that silently continued the wrong one both look like a normal run.
 - **Exact resume** — the property plan §11 makes a *gate* rather than a nicety, and §15's
   checklist item 4 measures: a run killed at step k and restarted from its checkpoint produces
   a **bit-identical** loss trajectory to the uninterrupted one. vast.ai instances vanish

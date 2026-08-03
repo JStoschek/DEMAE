@@ -17,6 +17,7 @@ existing ADR, surface it rather than silently overriding.
 | [0006](0006-accept-edm-flm-hollowing-stratum19.md) | Accept the EDM/FLM gate's high-alpine hollowing of stratum 19 | Accepted |
 | [0007](0007-accept-degenerate-flatness-gate-flat-strata.md) | Accept the `degenerate` flatness gate's concentration on flat strata 2/5/7/17 | Accepted — Phase-F revisit trigger fired (Gate F `F3`) and **dispositioned by [0008](0008-accept-f3-drainage-shortfall-strata-2-17.md)**; see Amendment 1 |
 | [0008](0008-accept-f3-drainage-shortfall-strata-2-17.md) | Accept the `F3` drainage shortfall in strata 2 and 17 — Gate F's FAIL, dispositioned | Accepted — with a Phase-2 downstream revisit trigger |
+| [0009](0009-one-shipping-entry-point.md) | One shipping entry point, composing resume and monitoring (Phase 1) | Accepted |
 
 ## Supersession
 

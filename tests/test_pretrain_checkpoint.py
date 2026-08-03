@@ -859,3 +859,88 @@ def test_the_entrypoint_takes_a_checkpoint_directory_and_resumes_from_it(cfg, tm
 def test_the_default_run_uses_wall_clock_time_rather_than_a_test_clock(cfg, tmp_path):
     policy = CheckpointPolicy.from_config(cfg, directory=tmp_path / "ckpt")
     assert policy.clock is time.monotonic
+
+
+# --- The epoch boundary, as a seam (#106) -------------------------------------
+
+
+def test_the_resumable_loop_times_every_step_the_way_the_plain_one_does(cfg):
+    """§7.5's counters are on the shipping path, not only on #93's tracer bullet.
+
+    `train` fills `StepRecord.throughput` on every step and `train_resumable` used to fill
+    none, so the loop that a rented box actually runs — the one with the checkpoints — was the
+    one measuring nothing. §7.5's gate and #97's ~10% loader alarm are both read off these
+    numbers.
+    """
+    records = trajectory(cfg, steps=3)
+    assert all(r.throughput is not None for r in records)
+    assert [r.throughput.step for r in records] == [0, 1, 2]
+    assert all(r.throughput.samples == BATCH for r in records)
+
+
+def boundaries_of(cfg, *, steps, policy=None, resume=False) -> list[tuple[int, int, int]]:
+    """``(epoch, steps in it, samples in it)`` for every boundary a run closed."""
+    closed: list[tuple[int, int, int]] = []
+    train_mod.train_resumable(
+        cfg,
+        steps=steps,
+        policy=policy,
+        resume=resume,
+        device="cpu",
+        on_epoch=lambda epoch, counters: closed.append(
+            (epoch, counters.steps, counters.samples)
+        ),
+    )
+    return closed
+
+
+def test_each_epoch_boundary_closes_with_the_counters_of_the_steps_in_it(cfg):
+    # Summed over the epoch's own steps, not over the run: an epoch's panel row is about that
+    # epoch, and #97 plots the rows side by side.
+    assert boundaries_of(cfg, steps=STEPS_PER_EPOCH * 2) == [
+        (0, STEPS_PER_EPOCH, STEPS_PER_EPOCH * BATCH),
+        (1, STEPS_PER_EPOCH, STEPS_PER_EPOCH * BATCH),
+    ]
+
+
+def test_a_resumed_run_closes_the_epoch_it_lands_in_under_that_epochs_number(cfg, policy):
+    # The epoch axis has to survive the box vanishing: #97's sink keys on it, and a resumed run
+    # that restarted its count at 0 would log epoch 2 on top of epoch 0 — and W&B drops a point
+    # whose step went backwards without saying so.
+    trajectory(cfg, steps=STEPS_PER_EPOCH + 1, policy=policy)
+    closed = boundaries_of(cfg, steps=STEPS_PER_EPOCH * 3, policy=policy, resume=True)
+    # Epoch 1 had one step before the kill, so this process times the three it ran itself.
+    assert closed == [(1, STEPS_PER_EPOCH - 1, (STEPS_PER_EPOCH - 1) * BATCH),
+                      (2, STEPS_PER_EPOCH, STEPS_PER_EPOCH * BATCH)]
+
+
+def test_the_checkpoint_for_a_boundary_is_written_before_the_epoch_is_scored(cfg, policy):
+    """Survival first, measurement second — and it is measurable which happened.
+
+    An epoch's val pass, per-patch histogram, grids and probe are minutes of work on a real
+    run. A box that vanishes inside them should lose the measurement, not the epoch. The same
+    ordering is what keeps §11's bit-identity independent of monitoring: the RNG streams the
+    checkpoint records are the training loop's, captured before anything else can draw on them.
+    """
+    at_boundary: list[int | None] = []
+
+    def look(epoch, counters):
+        found = ckpt_mod.latest(policy.directory)
+        at_boundary.append(None if found is None else found.epoch)
+
+    train_mod.train_resumable(
+        cfg, steps=STEPS_PER_EPOCH, policy=policy, device="cpu", on_epoch=look
+    )
+    # `RunState.epoch` counts epochs *completed*, so the checkpoint taken at the end of epoch 0
+    # records 1 — and the point is that it is already on disk when the boundary is reported.
+    assert at_boundary == [1]
+
+
+def test_a_run_asked_for_epochs_runs_what_the_split_actually_yields(cfg):
+    records = train_mod.train_resumable(cfg, epochs=2, device="cpu")
+    assert len(records) == STEPS_PER_EPOCH * 2
+
+
+def test_a_run_cannot_be_given_two_different_lengths(cfg):
+    with pytest.raises(ValueError, match="steps or epochs"):
+        train_mod.train_resumable(cfg, steps=4, epochs=2, device="cpu")

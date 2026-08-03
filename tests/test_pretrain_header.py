@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
@@ -187,3 +190,77 @@ def test_an_override_changes_the_config_hash_and_a_path_flag_does_not(cfg):
     assert header.build_config(corpus="somewhere/else").config_hash == plain.config_hash
     moved = header.build_config(corpus=cfg.data.corpus_dir, overrides=["masking.ratio=0.9"])
     assert moved.config_hash != plain.config_hash
+
+
+# --- One consumer for the shared flags (#106) ---------------------------------
+
+
+def _called_names(source: str) -> set[str]:
+    """Every bare-name call in a source file — ``build_config(...)`` gives ``build_config``."""
+    return {
+        node.func.id
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def _modules_offering_the_shared_flags() -> list[str]:
+    """Every module in the package that adds the shared config flags to a parser.
+
+    Discovered by reading the source rather than listed, and that is the whole point: a
+    hand-maintained list of entrypoints is one more thing to forget to add a module to, which
+    is the same class of mistake as forgetting one argument of six — see
+    :func:`pretrain.header.config_from_args`. A new command is covered the moment it is written.
+
+    The module rather than the function, because the two halves need not sit in one function:
+    ``pretrain.launch`` builds its parser in :func:`~pretrain.launch.build_parser` and consumes
+    the namespace in ``main``.
+    """
+    directory = Path(header.__file__).parent
+    return sorted(
+        path.stem
+        for path in directory.glob("*.py")
+        if "add_config_arguments" in _called_names(path.read_text())
+    )
+
+
+def test_the_package_has_commands_offering_the_shared_flags():
+    """The guard on the test below: an AST walk that found nothing would pass it vacuously."""
+    assert {"header", "launch", "train", "probe", "recon"} <= set(
+        _modules_offering_the_shared_flags()
+    )
+
+
+@pytest.mark.parametrize("module", _modules_offering_the_shared_flags())
+def test_every_command_offering_set_consumes_it_through_the_one_consumer(module):
+    """A command that *defines* ``--set`` reaches its config through :func:`config_from_args`.
+
+    This is #106's fold-in as a pin, and it is written against the **call** rather than against
+    the flag, because the call is where the bug was. ``pretrain.monitor.main`` defined ``--set``
+    with ``dest="overrides"`` and then called ``build_config`` with the other five arguments and
+    not that one, so ``monitor --set masking.ratio=0.9`` masked 75% and hashed as R1. R2 (#83)
+    and R3 (#84) *are* ``--set`` ablations, so on that path they would have run R1's recipe and
+    read out as "no difference". ``pretrain.recon.main`` had the identical hole.
+
+    A test that parsed the flag and then called ``config_from_args`` itself would have stayed
+    green through both of those, because neither *parser* was ever wrong. What has to hold is
+    that a command assembles its config no other way — so that is what is asserted here, and
+    `test_the_one_consumer_honours_set` below is what makes the delegation worth anything.
+    """
+    calls = _called_names((Path(header.__file__).parent / f"{module}.py").read_text())
+    assert "config_from_args" in calls, (
+        f"pretrain.{module} offers --set and never calls config_from_args"
+    )
+    if module != "header":  # where the one consumer lives, and calls build_config itself
+        assert "build_config" not in calls, (
+            f"pretrain.{module} calls build_config directly, which is how --set gets dropped: "
+            f"the six arguments are retyped at a second site and one goes missing (#106)"
+        )
+
+
+def test_the_one_consumer_honours_set():
+    """And what every entrypoint delegates to actually applies the overrides."""
+    parser = header.add_config_arguments(argparse.ArgumentParser())
+    args = parser.parse_args(["--set", "masking.ratio=0.9", "--set", "run_id=R2"])
+    cfg = header.config_from_args(args)
+    assert cfg.masking.ratio == 0.9 and cfg.run_id == "R2"

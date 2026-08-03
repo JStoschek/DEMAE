@@ -208,19 +208,29 @@ cd /workspace/DEMAE && tmux new -s r1
 uv run python -m pretrain.launch --vit-base --set 'monitoring.wandb_mode="online"'
 ```
 
+That one command is the whole run: §11's checkpoints on both triggers, §10's val pass, alarms,
+per-patch distribution, reconstruction grids and kNN probe, and the W&B run they all go to. It
+did not used to be — [#106](https://github.com/JStoschek/DEMAE/issues/106) composed it, and
+before that this command called the plain training loop and produced none of them.
+
+**Checkpoints go to `/workspace/DEMAE/runs/R1`** — `runs/<run_id>`, and `run_id` defaults to
+`R1`. `--checkpoint-dir` moves it; `--set run_id=R2` moves it with the arm, which is what keeps
+an ablation from resuming the baseline's weights. Read the `checkpoints` line the launcher
+prints in its first ten lines rather than trusting this paragraph: it names the directory, both
+triggers and the retention rule, and the sync loop below has to point at the same place.
 
 Then the checkpoint sync, in its own window:
 
 ```bash
 tmux new-window -t r1 -n sync
-scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/r1 \
+scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 \
   --remote bucket:demae-checkpoints/r1/
 ```
 
 Prove the credentials first, before committing GPU hours — `--once` probes the remote even when no checkpoint exists yet:
 
 ```bash
-scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/r1 \
+scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 \
   --remote bucket:demae-checkpoints/r1/ --once
 ```
 
@@ -230,8 +240,9 @@ is training and the fix is to re-run provisioning; the loop is started *during* 
 to avoid some ERROR lines would end checkpoint shipping for the next 40 hours — the exact trade
 the script exists to refuse.
 
-**This loop is not optional.** §11 requires checkpoints off-instance every epoch and every 30–60 minutes, because vast instances vanish permanently rather than pause. Nothing in `src/pretrain` implements that — `checkpoint.py` writes to local disk and mentions syncing only in a comment, and teardown calls its own pass "the safety net, not the mechanism." Without this window, a box that disappears at hour 40 of a 43-hour run takes every checkpoint with it, not merely the last interval's worth.
+**This loop is not optional.** §11 requires checkpoints off-instance every epoch and every 30–60 minutes, because vast instances vanish permanently rather than pause. Nothing in `src/pretrain` pushes off-instance — the launcher writes §11's checkpoints to local disk (since #106; before it, to nowhere) and `checkpoint.py` mentions syncing only in a comment, while teardown calls its own pass "the safety net, not the mechanism." Without this window, a box that disappears at hour 40 of a 43-hour run takes every checkpoint with it, not merely the last interval's worth.
 
+**Check the first pass reports a file rather than `ok` over nothing.** The loop reports `ok` whether or not the directory holds anything, which is correct behaviour for a sync and was how the empty-directory case survived unnoticed until #106. One epoch in, `ls /workspace/DEMAE/runs/R1` should show a `checkpoint_e*.pt`.
 
 The loop exits by itself once training has started and then stopped, after a final pass.
 
@@ -240,7 +251,9 @@ The loop exits by itself once training has started and then stopped, after a fin
 ## 8. During the run
 
 - Checkpoints land every epoch and every 30–60 min; retention keeps last 3 plus the 50/100/200/400 milestones.
+- Every epoch prints one line — LR, train loss, val loss, samples/s, step time, loader wait — and §10.1's three alarms print `[STOP]` lines inline where the person watching will see them. Every 10 epochs the reconstruction grids render; every 20, the kNN probe.
 - The sync loop prints a timestamped `ok` per pass. A persistent failure prints a rising consecutive-failure count rather than dying — exiting would guarantee the outcome it exists to prevent.
+- **If the box vanishes, run the exact same command on the replacement.** Resume is the default: the launcher picks up the newest checkpoint in `runs/R1` and prints which one before spending anything. Pull the directory back from the bucket first — the box that vanished took its copy with it.
 - `wandb_mode="online"` avoids offline run directories entirely. If you run offline instead, those directories are unique to the box until `wandb sync` ships them, and teardown will warn about them.
 
 ---
@@ -253,7 +266,7 @@ Runs on the **laptop**, not the box. A teardown script that destroys the machine
 
 ```bash
 uv run ./scripts/teardown_box.sh --host demae-box \
-  --checkpoint-dir /workspace/DEMAE/runs/r1 \
+  --checkpoint-dir /workspace/DEMAE/runs/R1 \
   --bucket demae-checkpoints --prefix r1/ --profile r2 \
   --endpoint-url https://79083f36be71e95fad1b0b06d2bb62a1.r2.cloudflarestorage.com
 ```
@@ -346,6 +359,7 @@ Set a **time-based** rule, prefix `r1/`, retention outliving the run plus the an
 
 | Gap | Status |
 |---|---|
+| The documented start command wrote no checkpoints and opened no W&B run | **closed 2026-08-03 (#106).** `pretrain.launch` called the plain training loop, so a 400-epoch R1 launched from §7 would have produced no checkpoints for `sync_checkpoints.sh` to ship, no W&B run for §15.7's tags to hang off, and none of §10's instruments — while every pass of the sync loop reported `ok`. The launcher now composes #94's resumable loop with #97's monitor; `python -m pretrain.monitor` is gone as a second training command, and with it a `--set` that was parsed and discarded |
 | No continuous checkpoint sync in `src/pretrain` | closed by `sync_checkpoints.sh`; the plan's §11 wording still implies the trainer does it |
 | `bucket:` rclone remote undocumented in provision's `--help` | documented in §11 above; the script's own help is still incomplete |
 | Both script headers say the checkpoint key is safe "with versioning enabled" on R2 | **factually wrong — R2 has no object versioning.** [`provision_box.sh:23`](../scripts/provision_box.sh:23) and [`teardown_box.sh:22`](../scripts/teardown_box.sh:22) still carry it. §11 records the real mechanism (bucket locks); the headers need correcting |

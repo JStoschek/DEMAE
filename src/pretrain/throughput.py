@@ -189,6 +189,23 @@ class ThroughputMeter:
         """The loader's length: ``micro_batch_groups`` and ``steps_per_epoch_for`` both ask."""
         return len(self.loader)
 
+    def __getattr__(self, name: str):
+        """Anything else, off the wrapped loader — ``sampler`` and ``batch_size``, in practice.
+
+        #94's :class:`~pretrain.train.EpochCursor` drives the loader's
+        :class:`~pretrain.train.EpochShuffleSampler` and divides by its batch size, so metering
+        a resumable run means the meter has to be as loader-shaped as ``len`` and ``iter``
+        already made it. Delegation rather than two named properties: the alternative is a list
+        of forwarded attributes that is discovered to be incomplete on the box, mid-run.
+
+        Only reached for attributes this class does not define, so nothing above is shadowed.
+        """
+        # `self.loader` is set first in `__init__`, but a lookup arriving before that (an
+        # unpickler, `copy`) would recurse here forever rather than raising. Say so instead.
+        if name == "loader":
+            raise AttributeError(name)
+        return getattr(self.loader, name)
+
     def __iter__(self) -> Iterator:
         """One pass over the loader, charging the time each batch took to arrive.
 

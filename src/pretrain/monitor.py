@@ -1,4 +1,4 @@
-"""What a run reports every epoch, and the alarms wired onto it (#97, plan §10).
+"""What a run reports every epoch, and the alarms wired onto it (#97, plan §10, #106).
 
 Plan §10 opens with the reason this module exists: *"MAE gives few in-flight signals; build the
 ones that exist."* There is no accuracy to watch, no held-out metric that means anything on its
@@ -15,6 +15,19 @@ own, and a reconstruction loss that goes down proves very little. What there is,
 4. **§10.4's throughput dashboard**, displayed and alarmed on. The counters themselves are
    :mod:`pretrain.throughput`'s (#95); this reads them.
 5. **The sink** every one of those goes to, which is :mod:`pretrain.sink` (§11).
+
+## This module is not a run path
+
+There is no ``python -m pretrain.monitor``. There was, and #106 removed it: it trained, wrote
+no checkpoints, and — because its ``main`` called ``build_config`` without ``overrides`` — it
+accepted ``--set`` and discarded it, so ``monitor --set masking.ratio=0.9`` masked 75% and
+reported R1's config hash. Two commands that both train are two recipes to keep in step, and
+the one nobody watched was the one that drifted.
+
+What is here now is :func:`train_epochs`, which *is* the shipping run — #94's resumable loop
+with this module's panel on its epoch boundary — and ``python -m pretrain.launch`` is the one
+command that calls it. Everything §10 asks for is still exercisable against a real corpus
+without renting anything; it is ``pretrain.launch --epochs 2`` rather than a second entrypoint.
 
 ## The seam this is on both sides of
 
@@ -46,38 +59,23 @@ did, not because the sample did.
 
 from __future__ import annotations
 
-import argparse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final, NamedTuple
 
 import numpy as np
 import torch
 
 from .alarms import Alarm, check_alarms
+from .checkpoint import CheckpointPolicy
 from .config import RunConfig
-from .fingerprint import fingerprint_for
-from .header import add_config_arguments, build_config, format_header
 from .loss import patch_statistics
-from .probe import KnnProbe, ProbeReport, format_probe, probe_for
+from .probe import KnnProbe, ProbeReport, probe_for
 from .recon import ReconGrids
 from .sink import Histogram, RunLogger, open_run_logger
-from .throughput import (
-    StepThroughput,
-    ThroughputMeter,
-    ThroughputSummary,
-    format_throughput,
-    summarize,
-)
-from .train import (
-    StepRecord,
-    Trainer,
-    assert_a_step_fits,
-    build_loader,
-    epoch_groups,
-    seed_run,
-    steps_per_epoch_for,
-)
+from .throughput import ThroughputSummary, format_throughput
+from .train import StepRecord, Trainer, build_loader, train_resumable
 
 #: The bins §4's distribution is accumulated into: one bin for *exactly nothing*, then 64
 #: logarithmic bins from 1e-6 to 1e3.
@@ -423,8 +421,9 @@ class EpochMonitor:
     """Accumulates a run's steps into epochs, scores val, checks §10's alarms, logs the lot.
 
     Driven rather than driving: :meth:`on_step` per optimizer step and :meth:`end_of_epoch` at
-    the boundary. That is what lets #94's resumed loop and #95's entrypoint use the same object
-    as :func:`train_epochs` does, instead of each growing its own reporting.
+    the boundary. That is what lets it hang off #94's resumable loop unchanged —
+    :func:`train_epochs` is those two callbacks and nothing else — instead of §10's reporting
+    being a loop of its own that a run would have to choose between.
     """
 
     def __init__(
@@ -570,129 +569,97 @@ class EpochMonitor:
 def train_epochs(
     cfg: RunConfig,
     *,
-    epochs: int,
+    epochs: int | None = None,
+    steps: int | None = None,
     device: torch.device | str | None = None,
     logger: RunLogger | None = None,
+    policy: CheckpointPolicy | None = None,
+    resume: bool | str | Path = False,
     on_epoch: Callable[[EpochRecord], None] | None = None,
     on_alarm: Callable[[Alarm], None] | None = None,
+    on_step: Callable[[StepRecord], None] | None = None,
+    on_start: Callable[[Trainer], None] | None = None,
 ) -> list[EpochRecord]:
-    """Train for ``epochs`` whole epochs, reporting §10's panel at each boundary.
+    """**The run.** #94's resumable loop with §10's panel on its epoch boundary (#106).
 
-    Epochs rather than #93's steps, because that is the unit §10 is written in — every alarm,
-    the val cadence, and §12's run table all count epochs. It reuses #93's pieces unchanged
-    (:class:`~pretrain.train.Trainer`, :func:`~pretrain.train.epoch_groups`) and #95's counters
-    (:class:`~pretrain.throughput.ThroughputMeter`), so what this function actually adds is the
-    boundary: where val runs, where the alarms are checked, and where the sink is written.
+    This is the whole composition, and until #106 it did not exist. #93 built the loop, #94
+    built checkpoints and exact resume, #95 built the entrypoint and the counters, #97/#98/#99
+    built the instruments — and nothing put the three together, so the command the ops runbook
+    tells a rented box to run produced no checkpoints, no W&B run and no val pass. Every piece
+    was built and tested; this is the wrap the docstrings had been promising.
 
-    It is **not** #94's resumable run. There is no checkpoint here and no restart; this is the
-    loop that makes §10's reporting exercisable end to end — and what #94 and #95 wrap.
+    What it adds to :func:`~pretrain.train.train_resumable` is the epoch boundary's *content*:
+    where §10.1's val pass runs, where its alarms are checked, where §4's per-patch distribution
+    is accumulated, where §10.2's grids and §10.3's probe fire on their cadences, and where all
+    of it is written to the sink. The loop, the checkpoints and the counters are not
+    reimplemented here — they are the function this calls.
+
+    ``epochs`` is the run's **total**, not an increment, and defaults to the config's own
+    schedule. ``steps`` truncates it for a smoke run, in which case a final partial epoch simply
+    never reaches a boundary and is never scored — which is honest: half an epoch's train loss
+    is not a row of §10's table.
+
+    ``policy`` and ``resume`` are #94's, passed straight through: no policy is a run that writes
+    no checkpoints, which is a test or a laptop, never a rented box. ``logger`` is #97's sink; a
+    caller that does not supply one gets :func:`~pretrain.sink.open_run_logger`'s and this closes
+    it.
+
+    The :class:`EpochMonitor` is built inside ``on_start`` rather than before the call, because
+    the :class:`~pretrain.train.Trainer` it scores with is the resumed one — built from the
+    config and then loaded over from the checkpoint. A monitor holding a trainer built out here
+    would run its val pass against a model the run had already replaced.
     """
-    generator = seed_run(cfg)
-    train_loader = build_loader(cfg, cfg.data.train_split, generator=generator)
-    assert_a_step_fits(train_loader, cfg.optimization.accum_iter)
+    epochs = cfg.schedule.epochs if epochs is None else epochs
     val_loader = build_loader(cfg, cfg.data.val_split, augment=False, shuffle=False)
-    trainer = Trainer.from_config(
-        cfg, steps_per_epoch=steps_per_epoch_for(train_loader, cfg), device=device
-    )
-
     owned = logger is None
     logger = logger or open_run_logger(cfg)
-    monitor = EpochMonitor(
-        cfg,
-        trainer=trainer,
-        logger=logger,
-        val_loader=val_loader,
-        on_alarm=on_alarm,
-        probe=probe_for(cfg, logger),
-        recon=ReconGrids.from_config(cfg),
-    )
+    monitor: EpochMonitor | None = None
+
+    def start(trainer: Trainer) -> None:
+        nonlocal monitor
+        monitor = EpochMonitor(
+            cfg,
+            trainer=trainer,
+            logger=logger,
+            val_loader=val_loader,
+            on_alarm=on_alarm,
+            probe=probe_for(cfg, logger),
+            recon=ReconGrids.from_config(cfg),
+        )
+        if on_start is not None:
+            on_start(trainer)
+
+    def step(record: StepRecord) -> None:
+        monitor.on_step(record)
+        if on_step is not None:
+            on_step(record)
+
+    def boundary(epoch: int, throughput: ThroughputSummary) -> None:
+        result = monitor.end_of_epoch(epoch, throughput=throughput)
+        if on_epoch is not None:
+            on_epoch(result)
+
     try:
-        for epoch in range(epochs):
-            # A meter per epoch, built immediately before the loop: its clock starts on
-            # construction, so anything done between the two would be charged to the first step.
-            meter = ThroughputMeter(train_loader)
-            counters: list[StepThroughput] = []
-            for group in epoch_groups(meter, trainer.accum_iter):
-                record = trainer.step(group)
-                counters.append(
-                    meter.mark(
-                        step=record.step,
-                        epoch=epoch,
-                        samples=sum(len(batch["image"]) for batch in group),
-                    )
-                )
-                monitor.on_step(record)
-            result = monitor.end_of_epoch(epoch, throughput=summarize(counters, epoch=epoch))
-            if on_epoch is not None:
-                on_epoch(result)
-        monitor.finish()
+        train_resumable(
+            cfg,
+            steps=steps,
+            epochs=None if steps is not None else epochs,
+            policy=policy,
+            resume=resume,
+            device=device,
+            on_start=start,
+            on_step=step,
+            on_epoch=boundary,
+        )
+        # ``monitor`` is unguarded inside the three callbacks above and guarded here, and the
+        # asymmetry is real rather than sloppy: a callback cannot run before ``on_start`` built
+        # it, but the *call* can fail before ``on_start`` is reached at all — a resumed
+        # checkpoint that names a different corpus is refused in `train_resumable` before the
+        # trainer is handed over. Then there is no run to finish and no records to return.
+        if monitor is not None:
+            monitor.finish()
     finally:
         if owned:
             logger.close()
-    return monitor.records
+    return [] if monitor is None else monitor.records
 
-
-# --- The entrypoint -------------------------------------------------------------
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """``python -m pretrain.monitor --corpus … --epochs N`` — §10's dashboard, runnable.
-
-    The counterpart to ``python -m pretrain.train``: that one watches the step, this one watches
-    the epoch. It exists so §10's reporting can be exercised against a real corpus — the
-    acceptance criterion is "a real short training run, not only mocks" — before anyone rents a
-    GPU. #95's launcher is what a rented run invokes, and it drives the same
-    :class:`EpochMonitor`.
-    """
-    p = add_config_arguments(
-        argparse.ArgumentParser(
-            prog="python -m pretrain.monitor",
-            description="Train for N epochs and report plan §10's panel (#97).",
-        )
-    )
-    p.add_argument("--epochs", type=int, required=True, help="whole epochs to run")
-    p.add_argument("--device", default=None, help="cuda | cpu | … (default: cuda if present)")
-    args = p.parse_args(argv)
-
-    cfg = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-    )
-    fingerprint = fingerprint_for(cfg)
-    print(format_header(cfg, fingerprint))
-    print()
-
-    def report(record: EpochRecord) -> None:
-        print(format_epoch(record), flush=True)
-        if record.probe is not None:
-            # Printed as well as logged, and with §10.3's caveat attached — the person most
-            # likely to over-read a probe number is the one watching the run it came out of.
-            print(format_probe(record.probe), flush=True)
-
-    def announce(alarm: Alarm) -> None:
-        # Printed as well as logged: an alarm that exists only in W&B is one nobody sees during
-        # the run that fired it, which is the run where it is still worth acting on.
-        print(f"  {alarm}", flush=True)
-
-    with open_run_logger(cfg, fingerprint) as logger:
-        records = train_epochs(
-            cfg,
-            epochs=args.epochs,
-            device=args.device,
-            logger=logger,
-            on_epoch=report,
-            on_alarm=announce,
-        )
-    if records:
-        print(
-            f"\n{len(records)} epochs: train {records[0].train_loss:.4f} -> "
-            f"{records[-1].train_loss:.4f}"
-        )
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
-    raise SystemExit(main())

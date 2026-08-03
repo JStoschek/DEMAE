@@ -632,7 +632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     import argparse
 
     from .fingerprint import fingerprint_for
-    from .header import add_config_arguments, build_config, format_header
+    from .header import add_config_arguments, config_from_args, format_header
     from .train import Trainer, resolve_device
 
     p = add_config_arguments(
@@ -645,13 +645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--device", default=None, help="cuda | cpu | … (default: cuda if present)")
     args = p.parse_args(argv)
 
-    cfg = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-    )
+    cfg = config_from_args(args)
     print(format_header(cfg, fingerprint_for(cfg)))
     grids = ReconGrids.from_config(cfg)
     if grids is None:

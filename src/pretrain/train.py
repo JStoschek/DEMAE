@@ -5,11 +5,14 @@ read path (#91), an objective (#92, #96), an optional warm start (#102). This is
 they are one thing: loader -> augment -> mask -> encode -> decode -> loss -> backward -> step,
 running, with the loss going down.
 
-It deliberately stops short of two neighbours. **Survival is #94's**: checkpoints, RNG state and
-exact resume. **Speed is #95's**: `torch.compile`, throughput counters, and the launch
-entrypoint a rented box invokes. What is here is the loop those two wrap, plus a
-``python -m pretrain.train`` that runs it for N steps so the thing can be watched before either
-lands.
+Two loops live here. :func:`train` is the tracer bullet — steps, no checkpoints, no
+monitoring — and ``python -m pretrain.train`` runs it so a step can be watched going by.
+:func:`train_resumable` is #94's: the same :class:`Trainer`, driven through an
+:class:`EpochCursor` so it survives the box vanishing, timed by #95's counters, and reporting
+each epoch boundary as a seam. **That is the loop that ships.**
+:func:`pretrain.monitor.train_epochs` puts §10's panel on its boundary and
+``python -m pretrain.launch`` is the one command that calls it (#106); nothing here knows what
+a val loss or a W&B run is, which is why the seams are callbacks.
 
 ## What the step is, precisely
 
@@ -79,14 +82,14 @@ from .checkpoint import (
 from .config import RunConfig
 from .data import SplitDataset
 from .fingerprint import fingerprint_for
-from .header import add_config_arguments, build_config, format_header
+from .header import add_config_arguments, config_from_args, format_header
 from .init import initialize_from_config
 from .loss import MaeLoss, MaeLossOutput, pixel_weights_from_land_mask
 from .model import MaeOutput, MaskedAutoencoder
 from .optim import build_optimizer
 from .runtime import compile_model, verify_attention
 from .schedule import LrSchedule
-from .throughput import StepThroughput, ThroughputMeter
+from .throughput import StepThroughput, ThroughputMeter, ThroughputSummary, summarize
 
 # --- The read path ------------------------------------------------------------
 
@@ -681,8 +684,9 @@ def train(
     ``steps`` rather than epochs, deliberately: this is the tracer bullet and R0's smoke run
     (#81) is measured in steps. The *schedule* is still the config's — 400 epochs of warmup and
     cosine — so a short run is the first N steps of the real curve rather than a compressed
-    imitation of it. #94 owns running one to its end and surviving the box dying halfway.
-    #95's entrypoint is what turns an epoch count into the ``steps`` this takes.
+    imitation of it. #94's :func:`train_resumable` owns running one to its end and surviving
+    the box dying halfway, and it — not this — is what ``python -m pretrain.launch`` drives.
+    What this is for is watching the loop work with nothing else attached.
 
     ``on_step`` receives each :class:`StepRecord` as it happens; that is the seam #97's logging
     and #94's checkpoint triggers hang off, and it is why nothing here prints. ``on_start``
@@ -728,11 +732,13 @@ def train_resumable(
     cfg: RunConfig,
     *,
     steps: int | None = None,
+    epochs: int | None = None,
     policy: CheckpointPolicy | None = None,
     resume: bool | str | Path = False,
     device: torch.device | str | None = None,
     on_step: Callable[[StepRecord], None] | None = None,
     on_start: Callable[[Trainer], None] | None = None,
+    on_epoch: Callable[[int, ThroughputSummary], None] | None = None,
 ) -> list[StepRecord]:
     """:func:`train`, but it survives the box going away (#94, plan §11).
 
@@ -743,7 +749,24 @@ def train_resumable(
     checkpoint in the policy's directory, if there is one", or an explicit path.
 
     ``steps`` is the run's **total**, not an increment: a resumed run stops where the original
-    would have. It defaults to the config's whole schedule, which is what a real run passes.
+    would have. ``epochs`` says the same thing in the schedule's own unit and is converted
+    through :func:`steps_per_epoch_for`, so it counts the steps the split actually yields.
+    Asked for neither, this runs the config's whole schedule — which is what a real run does.
+
+    Every step is timed, exactly as :func:`train` times one: the loader is wrapped in a
+    :class:`~pretrain.throughput.ThroughputMeter` and each record carries samples/s, its step
+    time and the loader-wait fraction. That is not decoration on this path either — §7.5's gate
+    is read off these numbers and #97's ~10% loader alarm fires on them, and a resumable run
+    that reported none of it would be the shipping path measuring nothing.
+
+    ``on_epoch`` is the epoch boundary as a seam: the epoch index that has just ended, and its
+    throughput summed over the steps in it. It is what #97's :class:`~pretrain.monitor.
+    EpochMonitor` hangs off, and it fires **after the checkpoint for that boundary is written**.
+    The order is deliberate and worth stating: an epoch's val pass, its per-patch histogram, its
+    grids and its probe are minutes of work, and a box that vanishes during them should not take
+    the epoch with it. It also keeps §11's bit-identity independent of what monitoring does —
+    the RNG streams a checkpoint records are the training loop's, captured before anything else
+    has had a chance to draw from them.
 
     The restore order is the part worth reading twice. Everything is rebuilt from the config
     first — model, optimizer, schedule, loader — and only then are the checkpoint's tensors and
@@ -753,12 +776,16 @@ def train_resumable(
     next thing to be added will), and a stream restored before something else advances it is a
     stream that was not restored at all.
     """
+    if steps is not None and epochs is not None:
+        raise ValueError(
+            f"a run's length is steps or epochs, not both (got steps={steps}, epochs={epochs})"
+        )
     generator = seed_run(cfg)
     loader = build_loader(cfg, cfg.data.train_split, generator=generator)
     steps_per_epoch = steps_per_epoch_for(loader, cfg)  # before any skip shortens the sampler
     trainer = Trainer.from_config(cfg, steps_per_epoch=steps_per_epoch, device=device)
     if steps is None:
-        steps = cfg.schedule.epochs * steps_per_epoch
+        steps = (cfg.schedule.epochs if epochs is None else epochs) * steps_per_epoch
 
     state = RunState()
     fingerprint = fingerprint_for(cfg)
@@ -791,14 +818,32 @@ def train_resumable(
     if on_start is not None:
         on_start(trainer)
 
+    # Built here, immediately before the loop, for the reason :func:`train` gives: its clock
+    # starts on construction, so anything done between the two is charged to the first step.
+    # It wraps the loader rather than sitting beside it, and the cursor drives it as the loader
+    # (see :meth:`ThroughputMeter.__getattr__`), so the wait it measures is the one the
+    # resumable order actually paid.
+    meter = ThroughputMeter(loader)
     cursor = EpochCursor(
-        loader, accum_iter=trainer.accum_iter, steps_per_epoch=steps_per_epoch, state=state
+        meter, accum_iter=trainer.accum_iter, steps_per_epoch=steps_per_epoch, state=state
     )
     records: list[StepRecord] = []
+    # Accumulated, never accrued: R1 is ~195,000 steps and a per-epoch list of all of them
+    # would be a memory leak inside the thing measuring the run's health.
+    epoch_counters = summarize([], epoch=state.epoch)
     groups = cursor.groups()  # endless; the step count below is what stops the run
     while trainer.completed_steps < steps:
         group = next(groups)
         record = trainer.step(group.micro_batches)
+        counters = meter.mark(
+            step=record.step,
+            epoch=group.epoch,
+            samples=sum(len(batch["image"]) for batch in group.micro_batches),
+        )
+        record = replace(record, throughput=counters)
+        if counters.epoch != epoch_counters.epoch:
+            epoch_counters = summarize([], epoch=counters.epoch)
+        epoch_counters = epoch_counters.plus(counters)
         records.append(record)
         if on_step is not None:
             on_step(record)
@@ -812,6 +857,10 @@ def train_resumable(
                 rng=capture_rng(generator=generator),
                 ends_epoch=group.ends_epoch,
             )
+        # After the checkpoint, always — see the docstring. An epoch that ended because the run
+        # ended still closes, so the last epoch of a run reports like every other one.
+        if group.ends_epoch and on_epoch is not None:
+            on_epoch(group.epoch, epoch_counters)
     return records
 
 
@@ -861,14 +910,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    cfg = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-        overrides=args.overrides,
-    )
+    cfg = config_from_args(args)
     print(format_header(cfg, fingerprint_for(cfg)))
     print()
 

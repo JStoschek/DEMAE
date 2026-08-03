@@ -1026,7 +1026,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     import argparse
 
-    from .header import add_config_arguments, build_config
+    from .header import add_config_arguments, config_from_args
     from .model import MaskedAutoencoder
     from .sink import open_run_logger
 
@@ -1045,14 +1045,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--device", default=None, help="cuda | cpu | … (default: cuda if present)")
     args = p.parse_args(argv)
 
-    cfg = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-        overrides=args.overrides,
-    )
+    cfg = config_from_args(args)
     if args.probe_set is not None:
         cfg = cfg.replace(data=cfg.data.replace(probe_set_path=args.probe_set))
 

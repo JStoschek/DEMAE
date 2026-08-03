@@ -1,7 +1,7 @@
-"""``python -m pretrain.launch`` — the documented way to start a run (#95).
+"""``python -m pretrain.launch`` — the one command a run is started with (#95, #106).
 
 Everything before this file is a piece that works. This is the command a rented box actually
-invokes, and what it adds to #93's ``python -m pretrain.train`` is the three things you only
+invokes, and what it adds to #93's ``python -m pretrain.train`` is the four things you only
 want on a box you are paying for:
 
 - **The full override surface.** A config file plus repeatable ``--set group.knob=value``, so
@@ -15,30 +15,59 @@ want on a box you are paying for:
   wait fraction; every epoch and the run as a whole are summarized the same way. §7.5's gate —
   *measured samples/s at least 2x model demand, in the first rented hour* — is read off these
   lines, and R0 (#81) is the ticket that reads it.
+- **Survival, and the instruments.** §11's checkpoints on both triggers, resume from them, and
+  §10's whole panel — the val pass, the alarms, §4's per-patch distribution, §10.2's grids,
+  §10.3's probe, and the W&B run they all go to. See below; this is #106.
 
-``--dry-run`` does all of the assembling and none of the spending: the header, the fingerprint
-and the step count, with nothing built and no corpus read past its manifest. That is the form
-the §15 pre-flight checklist is meant to be walked in.
+``--dry-run`` does all of the assembling and none of the spending: the header, the fingerprint,
+the step count, where the checkpoints will go and what the sink is, with nothing built and no
+corpus read past its manifest. That is the form the §15 pre-flight checklist is walked in.
 
-## What this does not own
+## Why this is the *only* command that trains (#106)
 
-Checkpoints and resume are #94's, and the per-epoch loss reporting, the alarms and the W&B
-sink are #97's — both hang off :func:`~pretrain.train.train`'s ``on_step`` seam, which is why
-the reporting here stays deliberately plain. What is printed is what a human watching a
-terminal needs in order to decide whether to let the run continue.
+It was not, and the gap was the last thing standing between the codebase and R1. Each piece was
+built and tested — #94's ``train_resumable``, #97's ``EpochMonitor``, #98's grids, #99's probe —
+and nothing composed them, so this entrypoint called plain :func:`~pretrain.train.train` and a
+400-epoch run launched by the documented command would have produced **no checkpoints** (with
+``sync_checkpoints.sh`` faithfully reporting ``ok`` over an empty directory for forty hours),
+**no W&B run**, and none of §10's instruments. There was a second training command,
+``python -m pretrain.monitor``, which had the panel and no checkpoints — and which accepted
+``--set`` and threw it away, so the two arms that *are* ``--set`` ablations (R2 #83, R3 #84)
+would have run R1's recipe and read out as "no difference".
+
+So: one command, composing all of it, and ``pretrain.monitor`` is a library rather than a run
+path. The composition itself is :func:`~pretrain.monitor.train_epochs`; what lives here is the
+command — the flags, the console, and the two decisions a run needs made before it starts.
+
+**Where the checkpoints go.** ``runs/<run_id>``, unless ``--checkpoint-dir`` says otherwise.
+Derived rather than defaulted to a fixed path because two arms writing into one directory is
+how R2 resumes R1's weights, and the run id is the thing that already distinguishes them.
+``--no-checkpoints`` is the opt-out and belongs to laptops and tests; on a rented box it is
+§11's whole survival argument switched off.
+
+**Resume is the default.** vast.ai instances vanish permanently, so a first launch and a
+relaunch are the same command, typed on a fresh box — and a flag that had to be remembered at
+exactly that moment is a flag that will be missing. An empty directory is a fresh start rather
+than an error, and what was found is printed before anything is spent. ``--no-resume`` forces a
+new run past an existing directory.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+from pathlib import Path
 
+from .alarms import Alarm
+from .checkpoint import DEFAULT_INTERVAL_SECONDS, CheckpointPolicy, resolve_resume
 from .config import RunConfig
 from .fingerprint import fingerprint_for
-from .header import add_config_arguments, build_config, format_header
+from .header import add_config_arguments, config_from_args, format_header
+from .monitor import EpochRecord, format_epoch, train_epochs
+from .probe import format_probe
 from .runtime import CompileWatch, attention_path, eager_module
-from .throughput import ThroughputSummary, format_throughput, summarize
-from .train import StepRecord, Trainer, build_loader, format_step, steps_per_epoch_for, train
+from .sink import open_run_logger
+from .throughput import format_throughput, summarize
+from .train import StepRecord, Trainer, build_loader, format_step, steps_per_epoch_for
 
 
 def resolve_steps(cfg: RunConfig, loader, *, steps: int | None, epochs: int | None) -> int:
@@ -90,12 +119,49 @@ def format_step_line(record: StepRecord, total: int) -> str:
     return f"{line}   {format_throughput(record.throughput)}"
 
 
-def format_epoch_line(summary: ThroughputSummary) -> str:
-    """One completed epoch's throughput — the row #97's dashboard plots."""
-    return (
-        f"epoch {summary.epoch:4d}  {summary.steps:5d} steps   "
-        f"{format_throughput(summary)}"
+def checkpoint_directory(cfg: RunConfig, given: str | None) -> Path:
+    """Where §11's checkpoints go: ``--checkpoint-dir``, else ``runs/<run_id>``.
+
+    Derived from the run id rather than fixed, because the alternative is every arm writing
+    into one directory — and with resume on by default (see the module docstring) that is R2
+    silently continuing R1's weights. The run id is the thing that already distinguishes two
+    arms, it is what §15.7 tags the W&B run with, and ``--set run_id=R2`` is how an ablation
+    is launched, so the directory follows the ablation without anyone remembering a second flag.
+    """
+    return Path(given) if given is not None else Path("runs") / cfg.run_id
+
+
+def describe_checkpoints(policy: CheckpointPolicy | None) -> str:
+    """The §11 line: where they go, on what triggers, and what is protected — or that none go.
+
+    Printed at the top of a run, and again in the footer when there is a policy — because the
+    failure it exists to make visible is silent at both ends. R0 (#81) found the shipping
+    command writing none at all while ``sync_checkpoints.sh`` reported ``ok`` over an empty
+    directory every pass; naming the directory is what makes that noticeable in the first
+    minute rather than at teardown. The footer repeats it so the last thing on screen after
+    forty hours is where to look, and it is skipped under ``--no-checkpoints``, where the
+    header line has already said so and a second "none" is noise.
+    """
+    if policy is None:
+        return "none — --no-checkpoints (§11's survival argument is off)"
+    minutes = (
+        "never"
+        if policy.interval_seconds is None
+        else f"every {policy.interval_seconds / 60:.0f} min"
     )
+    return (
+        f"{policy.directory}  (every epoch and {minutes}; "
+        f"keep last {policy.keep_last} + milestones {list(policy.milestones)})"
+    )
+
+
+def describe_sink(cfg: RunConfig) -> str:
+    """Where §10's numbers go — the W&B mode and project, or that the sink is off."""
+    m = cfg.monitoring
+    if m.wandb_mode == "disabled":
+        return "wandb disabled — nothing leaves this process (§11)"
+    entity = "" if m.wandb_entity is None else f"{m.wandb_entity}/"
+    return f"wandb {m.wandb_mode}, {entity}{m.wandb_project}, run {cfg.run_id}"
 
 
 def format_recompile_warning(frames: int, step: int) -> str:
@@ -114,12 +180,12 @@ def format_recompile_warning(frames: int, step: int) -> str:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Assemble the config, confirm the levers, run the loop, and report what it achieved."""
+def build_parser() -> argparse.ArgumentParser:
+    """The command. Split out from :func:`main` so `--help` is one readable thing to review."""
     p = add_config_arguments(
         argparse.ArgumentParser(
             prog="python -m pretrain.launch",
-            description="Launch a DEMAE Phase-1 pretraining run (#95).",
+            description="Launch a DEMAE Phase-1 pretraining run (#95, #106).",
         )
     )
     length = p.add_mutually_exclusive_group()
@@ -132,26 +198,72 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the header, the levers and the step count; train nothing",
+        help="print the header, the levers, the step count and the destinations; train nothing",
     )
-    args = p.parse_args(argv)
+    p.add_argument(
+        "--checkpoint-dir",
+        default=None,
+        help="§11 checkpoints go here (default: runs/<run_id>)",
+    )
+    p.add_argument(
+        "--checkpoint-minutes",
+        type=float,
+        default=DEFAULT_INTERVAL_SECONDS / 60,
+        help="wall-clock checkpoint interval beside the per-epoch one; §11 asks for 30-60",
+    )
+    p.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="write none — a laptop or a test, never a rented box (§11)",
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="start fresh even if --checkpoint-dir already holds a run",
+    )
+    return p
 
-    cfg = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-        overrides=args.overrides,
-    )
-    print(format_header(cfg, fingerprint_for(cfg)))
+
+def main(argv: list[str] | None = None) -> int:
+    """Assemble the config, confirm the levers, run the loop, and report what it achieved."""
+    args = build_parser().parse_args(argv)
+
+    cfg = config_from_args(args)
+    fingerprint = fingerprint_for(cfg)
+    print(format_header(cfg, fingerprint))
     print()
 
-    # The loader is built before anything is spent on a model: it is what says how many steps
-    # an epoch is, and #89's split containment check (plan §15.2) fires at its construction.
+    # The loader is built before anything is spent on a model: it is what says how many steps an
+    # epoch is, and #89's split containment check (plan §15.2) fires at its construction. It is
+    # then dropped — the run builds its own inside the loop, because the DataLoader generator a
+    # checkpoint records has to be the one the loop is actually reading through (§11).
     loader = build_loader(cfg, cfg.data.train_split)
     steps = resolve_steps(cfg, loader, steps=args.steps, epochs=args.epochs)
     print(f"running          {steps} steps ({steps_per_epoch_for(loader, cfg)} per epoch)")
+    del loader
+
+    directory = checkpoint_directory(cfg, args.checkpoint_dir)
+    policy = (
+        None
+        if args.no_checkpoints
+        else CheckpointPolicy.from_config(
+            cfg, directory=directory, interval_seconds=args.checkpoint_minutes * 60
+        )
+    )
+    print(f"checkpoints      {describe_checkpoints(policy)}")
+    print(f"monitoring       {describe_sink(cfg)}")
+    # Said before the first step, not discovered in a curve afterwards: a relaunch that silently
+    # started over, or one that silently continued the wrong run, both look like a normal run.
+    # There is nothing to resume from without a policy, and `resume` is forced off rather than
+    # passed as a flag the run would ignore.
+    resume = policy is not None and not args.no_resume
+    if policy is not None:
+        found = resolve_resume(policy.directory, resume)
+        print(
+            "resuming         (nothing to resume from — this is a first launch)"
+            if found is None
+            else f"resuming         {found}"
+        )
     if args.dry_run:
         print("\n--dry-run: nothing was trained")
         return 0
@@ -162,39 +274,31 @@ def main(argv: list[str] | None = None) -> int:
     # memory leak inside the thing measuring the run's health. #97's sink is what records the
     # per-step history off-instance; this prints and forgets.
     run = steady = summarize([])
-    epoch = summarize([])
     first_loss = last_loss = None
-    warned = False
+    started = warned = False
 
     def announce(trainer: Trainer) -> None:
         print(runtime_line(trainer.model, cfg, device=trainer.device))
         print()
 
-    def close_epoch() -> None:
-        """Print the epoch that has just ended, if any steps landed in it."""
-        if epoch.steps:
-            print(format_epoch_line(epoch), flush=True)
-
     def report(record: StepRecord) -> None:
-        nonlocal run, steady, epoch, first_loss, last_loss, warned
-        counters = record.throughput  # always set: `train` times every step it takes
-        if record.step == 0:
-            # Step 0 *is* the compile (§7.3). Anything counted after this point is a recompile,
-            # which is the one way the compile lever turns into a loss rather than a win.
+        nonlocal run, steady, first_loss, last_loss, started, warned
+        counters = record.throughput  # always set: the loop times every step it takes
+        if not started:
+            # The first step *this process* takes is the compile (§7.3) — which is the first
+            # step of a resumed run too, so this keys on the process rather than on step 0.
+            # Anything counted after it is a recompile, the one way the compile lever loses.
+            started = True
             watch.reset()
             first_loss = record.loss
-            epoch = summarize([], epoch=counters.epoch)
-        elif counters.epoch != epoch.epoch:
-            # An epoch's line is only correct once its last step has landed, which is observable
-            # only when the next epoch's first step arrives. The final epoch is closed below.
-            close_epoch()
-            epoch = summarize([], epoch=counters.epoch)
-        last_loss = record.loss
-        epoch = epoch.plus(counters)
-        run = run.plus(counters)
-        if record.step > 0:
+        else:
             steady = steady.plus(counters)
-        if record.step % args.log_every == 0 or record.step + 1 == steps:
+        last_loss = record.loss
+        run = run.plus(counters)
+        # The first line of *this* process, the cadence, and the run's last step — the middle
+        # one is an absolute step index, so a resumed run's lines stay on the same grid the
+        # killed one's were on rather than restarting the count.
+        if run.steps == 1 or record.step % args.log_every == 0 or record.step + 1 == steps:
             print(format_step_line(record, steps), flush=True)
         if watch.compiled and not warned:
             # Said the moment it happens rather than in the footer. A recompile loop is the one
@@ -203,9 +307,33 @@ def main(argv: list[str] | None = None) -> int:
             warned = True
             print(format_recompile_warning(watch.compiled, record.step), flush=True)
 
-    train(cfg, steps=steps, device=args.device, on_step=report, on_start=announce, loader=loader)
+    def close_epoch(record: EpochRecord) -> None:
+        """§10's row: the losses, the LR, the counters — and §10.3's probe on its cadence."""
+        print(format_epoch(record), flush=True)
+        if record.probe is not None:
+            # Printed as well as logged, and with §10.3's caveat attached — the person most
+            # likely to over-read a probe number is the one watching the run it came out of.
+            print(format_probe(record.probe), flush=True)
 
-    close_epoch()
+    def announce_alarm(alarm: Alarm) -> None:
+        # Printed as well as logged: an alarm that exists only in W&B is one nobody sees during
+        # the run that fired it, which is the run where it is still worth acting on.
+        print(f"  {alarm}", flush=True)
+
+    with open_run_logger(cfg, fingerprint) as logger:
+        train_epochs(
+            cfg,
+            steps=steps,
+            device=args.device,
+            logger=logger,
+            policy=policy,
+            resume=resume,
+            on_start=announce,
+            on_step=report,
+            on_epoch=close_epoch,
+            on_alarm=announce_alarm,
+        )
+
     print()
     if first_loss is not None:
         print(f"{run.steps} steps: loss {first_loss:.4f} -> {last_loss:.4f}")
@@ -217,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
             f"steady           {format_throughput(steady)}"
             "   (excluding step 1: compile + loader warmup)"
         )
+    if policy is not None:
+        print(f"checkpoints      {describe_checkpoints(policy)}")
     if watch.compiled:
         print(f"\n{format_recompile_warning(watch.compiled, run.steps - 1)}")
     return 0

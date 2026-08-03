@@ -423,7 +423,12 @@ step "7/8  Throughput — §15 item 1, and it does NOT transfer between hosts"
 if [[ "$SKIP_ENV" -eq 1 || "$PROBE_STEPS" -eq 0 ]]; then
     ok "skipped"
 else
-    (cd "$ROOT" && uv run python -m pretrain.launch --steps "$PROBE_STEPS" --log-every 50) \
+    # `--no-checkpoints` and a disabled sink: since #106 the launcher is the *whole* run, so
+    # left alone the probe would write §11 checkpoints into runs/R1 and open a W&B run for
+    # something that is a measurement of this box rather than an experiment. What the probe
+    # needs is the loop and the counters, which is what is left.
+    (cd "$ROOT" && uv run python -m pretrain.launch --steps "$PROBE_STEPS" --log-every 50 \
+        --no-checkpoints --set 'monitoring.wandb_mode="disabled"') \
         || die "the throughput probe did not complete"
     echo
     echo "   Read the footer above before starting a real run:"
@@ -459,6 +464,11 @@ $(printf '\033[1m')Provisioned.$(printf '\033[0m')  Start a run from $ROOT, unde
 
     cd $ROOT && tmux new -s r1
     uv run python -m pretrain.launch --vit-base --set 'monitoring.wandb_mode="online"'
+
+That writes §11 checkpoints to $ROOT/runs/R1 (the run id), every epoch and every 45 minutes,
+and it resumes from there if the box you are on is a replacement for one that vanished — the
+same command either way. Start sync_checkpoints.sh against the same directory in a second
+window; the trainer writes locally and nothing in src/pretrain pushes off-instance.
 
 Before you destroy this box: confirm the last checkpoint is in the bucket AND re-read it from
 there. Sync-then-verify-then-destroy — a self-destruct after an unverified sync loses the run.

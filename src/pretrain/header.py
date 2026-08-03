@@ -167,6 +167,35 @@ def build_config(
     return base
 
 
+def config_from_args(args: argparse.Namespace) -> RunConfig:
+    """:func:`build_config` off the namespace :func:`add_config_arguments` filled. Use this.
+
+    The two halves of one flag set, written next to each other so they cannot come apart. Every
+    entrypoint used to spell the consumer half out — six keyword arguments, retyped per module —
+    and ``pretrain.monitor`` shipped one that named five of them: ``--set`` was *defined*, parsed
+    into ``args.overrides``, and then never passed to :func:`build_config`. The flag was accepted
+    and discarded, so ``monitor --set masking.ratio=0.9`` masked 75% and reported R1's config
+    hash. R2 (#83) and R3 (#84) are precisely ``--set`` ablations, and on that path they would
+    have run R1's recipe and read out as "no difference" — the one failure mode a config hash
+    exists to make visible, arriving through the code that computes it.
+
+    A copy of an argument list can drift visibly; a copy of a *call* loses an argument silently.
+    So there is one call, here, and
+    `test_every_command_offering_set_consumes_it_through_the_one_consumer` holds it — by reading
+    the package's own source for modules that offer the shared flags and refusing any that
+    assembles a config some other way. Written against the call rather than the flag because
+    neither broken command's *parser* was ever wrong.
+    """
+    return build_config(
+        config_path=args.config,
+        vit_base=args.vit_base,
+        corpus=args.corpus,
+        assignment=args.assignment,
+        blocks=args.blocks,
+        overrides=args.overrides,
+    )
+
+
 def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """The six flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
 
@@ -174,6 +203,9 @@ def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     (``python -m pretrain`` here, ``python -m pretrain.train`` in #93, ``python -m
     pretrain.launch`` in #95), and two copies of one option list drift into two slightly
     different ways to name the corpus.
+
+    :func:`config_from_args` is the other half. Call the pair; do not hand-write the six
+    keyword arguments at an entrypoint, for the reason that function's docstring gives.
     """
     parser.add_argument("--corpus", default=None, help="corpus directory (default: the 500k tier)")
     parser.add_argument("--config", default=None, help="JSON file of the knobs this run moves")
@@ -204,14 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true", help="emit the record a checkpoint carries")
     args = p.parse_args(argv)
 
-    config = build_config(
-        config_path=args.config,
-        vit_base=args.vit_base,
-        corpus=args.corpus,
-        assignment=args.assignment,
-        blocks=args.blocks,
-        overrides=args.overrides,
-    )
+    config = config_from_args(args)
     fingerprint = fingerprint_for(config)
     if args.json:
         print(json.dumps(run_record(config, fingerprint), indent=2))

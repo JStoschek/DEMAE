@@ -92,7 +92,11 @@ wrong. MAE gives few in-flight signals, so these are the ones that exist:
   §10.1's val loss comparable at all, §4's per-patch loss distribution cross-tabbed against
   patch flatness (which is what §4's variance-floor rule is actually adjudicated on, and a mean
   cannot answer), the throughput panel over #95's counters, and the alarms checked on the epoch
-  series. ``python -m pretrain.monitor --epochs N`` runs it against a real corpus.
+  series — and, since #106, :func:`~pretrain.monitor.train_epochs`, which is **the run**: #94's
+  resumable loop with all of that on its epoch boundary. There is deliberately no ``python -m
+  pretrain.monitor``; a second command that trained was a second recipe to keep in step, and the
+  one nobody watched was the one that drifted (it discarded ``--set``). ``python -m
+  pretrain.launch --epochs N`` is how §10 is exercised against a real corpus.
 
 #98 is the visual channel of the same section — §10.2 — and the first place a *terrain-shaped*
 failure shows itself, which is a thing no scalar in the list above can report:
@@ -126,10 +130,14 @@ rather than on the decoder's inpainting, and half of what #85 adjudicates the re
   untrained epoch-0 baseline so the natural read is movement rather than level.
 
 ``python -m pretrain`` prints the config + fingerprint header a real run would record;
-``python -m pretrain.train --steps N`` runs the bare loop. **``python -m pretrain.launch`` is
-how a run is actually started** (:mod:`pretrain.launch`): a config file plus repeatable
-``--set group.knob=value`` overrides, the levers confirmed before the first step, the counters
-reported throughout, and a ``--dry-run`` that assembles everything and spends nothing.
+``python -m pretrain.train --steps N`` runs the bare loop, as a tracer bullet rather than as a
+way to start anything. **``python -m pretrain.launch`` is the one command that trains**
+(:mod:`pretrain.launch`): a config file plus repeatable ``--set group.knob=value`` overrides,
+the levers confirmed before the first step, the counters reported throughout, §11's checkpoints
+and resume, §10's whole panel and the W&B run it goes to, and a ``--dry-run`` that assembles
+everything and spends nothing. It composes rather than reimplements, and #106 is the ticket
+where that stopped being aspirational: before it, the documented command wrote no checkpoints
+and opened no run.
 
 Note what this module re-exports and what it does not: :mod:`~pretrain.model`,
 :mod:`~pretrain.data`, :mod:`~pretrain.augment`, :mod:`~pretrain.loss`, :mod:`~pretrain.init`,
