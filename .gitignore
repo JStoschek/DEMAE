@@ -50,3 +50,15 @@ prototypes/
 # OS
 .DS_Store
 notebooks/out/
+
+# Provision/teardown scratch (scripts/): the box identity a run should be tagged with, and the
+# hauled artifacts a destroyed instance left behind.
+.box_identity
+
+# The code version shipped to a box with no `.git` (dataset.provenance.SHA_FILE). Generated per
+# push and never committed: in a real checkout git answers first, so a committed copy could only
+# ever be a stale value riding along to the next box.
+.git_sha
+
+# Teardown hauls land beside the repo, one directory per destroyed instance.
+teardown-*/

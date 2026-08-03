@@ -10,6 +10,18 @@ of a heavier module so importing them never drags in a reader, a pipeline, or nu
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
+
+#: Where :func:`git_sha` looks when git cannot answer — a one-line file beside the code,
+#: written by whoever shipped that code to a machine without its history.
+#:
+#: Phase 1 rents a GPU box per session and rsyncs seven paths to it, ``.git`` deliberately
+#: not among them: at 128 MB it is the largest thing that would move, and shipping it would
+#: make the answer *wrong* rather than merely expensive — ``git status --porcelain`` on the
+#: box sees every unshipped path (``docs/``, ``notebooks/``, ``CONTEXT.md``) as deleted, so
+#: every run would stamp ``-dirty`` from a clean commit. A file carries the laptop's answer,
+#: computed where the history actually is.
+SHA_FILE = ".git_sha"
 
 
 def git_sha() -> str:
@@ -18,6 +30,12 @@ def git_sha() -> str:
     Never raises: a checkout without git, or outside a repo, degrades to ``"unknown"``
     rather than failing an artifact write. The ``-dirty`` suffix is the honest signal
     that an artifact was produced from uncommitted code.
+
+    Git is asked **first** and its answer is never overridden. Only when it cannot answer
+    — no binary, or not a repo — does :data:`SHA_FILE` in the working directory get read.
+    That ordering is the point: the fallback can only improve the degraded case, so a stale
+    ``.git_sha`` left in a real checkout is inert rather than a lie. Both paths are relative
+    to the process's working directory, which is what ``git rev-parse`` already keys on.
     """
     try:
         sha = subprocess.run(
@@ -27,11 +45,26 @@ def git_sha() -> str:
             check=True,
         ).stdout.strip()
     except (subprocess.SubprocessError, FileNotFoundError):
-        return "unknown"
+        return _sha_from_file()
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], capture_output=True, text=True
     ).stdout.strip()
     return f"{sha}-dirty" if dirty else sha
+
+
+def _sha_from_file() -> str:
+    """:data:`SHA_FILE`'s first line, or ``"unknown"`` — the no-git fallback.
+
+    Deliberately incurious about the *shape* of what it reads: this is provenance, and a
+    value someone chose to write is more informative than a rejection. It takes only the
+    first line and strips it, so a trailing newline or an accidental second line cannot
+    reach a W&B tag (:data:`pretrain.sink.MAX_TAG_CHARS`) or a checkpoint header.
+    """
+    try:
+        first = Path(SHA_FILE).read_text().splitlines()
+    except OSError:
+        return "unknown"
+    return first[0].strip() if first and first[0].strip() else "unknown"
 
 
 def today() -> str:
