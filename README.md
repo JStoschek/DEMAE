@@ -118,6 +118,13 @@ rebuilt after warmup.
 
 `python -m pretrain` prints the same header and trains nothing;
 `python -m pretrain.train --steps N` is the minimal loop underneath the launcher.
+`python -m pretrain.panel` draws and commits §10.2's fixed 40-tile val panel, once per
+corpus tier, and `python -m pretrain.recon` renders that panel on an untrained model and
+writes the two contact sheets to look at — *garbage in, garbage rendered*, which is item 5
+of the pre-flight checklist. `python -m pretrain.probe --draw` commits §10.3's probe set
+the same once-per-tier way, and without `--draw` takes a single probe point off a
+checkpoint — or off an untrained encoder, which is the epoch-0 baseline later points are a
+delta against.
 
 ## Visualize
 
@@ -183,6 +190,14 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   train.py        # the step and the loop around it (bf16, accumulation, the seed)
   runtime.py      # §7's levers — `torch.compile`, and SDPA confirmed on the built blocks
   throughput.py   # §7.5's counters — samples/s, step time, loader wait fraction
+  monitor.py      # §10 — what a run reports every epoch, and the alarms wired onto it
+  alarms.py       # §10.1's failure conditions, as pure functions over loss trajectories
+  artifact.py     # the committed `tile_id,stratum_id` contract — one format, two artifacts
+  panel.py        # §10.2's fixed 40-tile val panel — drawn once, committed, re-read by runs
+  recon.py        # §10.2's grids — masked -> predicted -> truth in metres, plus hillshade
+  probe.py        # §10.3's kNN probe over a frozen encoder — trends, never an absolute bar
+  sink.py         # §11's metrics sink — every scalar, histogram and grid goes through here
+  checkpoint.py   # §11's exact resume — weights, optimizer, five RNG streams, the config
   header.py       # `python -m pretrain` — the config + fingerprint header a run records
   launch.py       # `python -m pretrain.launch` — the way a run is started
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
