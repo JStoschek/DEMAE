@@ -2,8 +2,8 @@
 
 **Scope:** everything between "I have a plan and a budget" and "the box is gone and the run survived it." The recipe itself lives in [`phase1-pretraining-plan.md`](phase1-pretraining-plan.md); this is the operational wrapper around it.
 **Hardware:** single rented GPU, vast.ai. **Store:** Cloudflare R2, account `79083f36be71e95fad1b0b06d2bb62a1`.
-**Scripts:** [`provision_box.sh`](../scripts/provision_box.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
-**Status:** v1, 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
+**Scripts:** [`push_code.sh`](../scripts/push_code.sh), [`provision_box.sh`](../scripts/provision_box.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
+**Status:** v2, 2026-08-03 — the four gaps R0 hit on a live box are closed in the scripts (#107); v1 was 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
 
 ---
 
@@ -14,7 +14,7 @@
 | 1 | Verify the corpus in R2 | laptop | `check_corpus.py --bucket` |
 | 2 | Rent the instance | vast console | — |
 | 3 | Add the SSH alias | laptop | — |
-| 4 | Push code, then provision | laptop → box | `provision_box.sh` |
+| 4 | Push code, then provision | laptop → box | `push_code.sh --provision` |
 | 5 | Read the provision footer | — | — |
 | 6 | Start training and the sync loop | box, tmux | `sync_checkpoints.sh` |
 | 7 | Let it run | — | — |
@@ -68,9 +68,9 @@ In the vast console. Requirements come from provision's preflight, which is deli
 | Setting | Value | Enforced at |
 |---|---|---|
 | Image | `vastai/pytorch` (any recent py311–py313 tag) | — |
-| GPU | 1 (multi-GPU warns, does not block) | [`:107`](../scripts/provision_box.sh:107) |
-| RAM | ≥ 60 GB | [`:110`](../scripts/provision_box.sh:110) |
-| Free disk at `/workspace` | ≥ 70 GB | [`:119`](../scripts/provision_box.sh:119) |
+| GPU | 1 (multi-GPU warns, does not block) | [`:203`](../scripts/provision_box.sh:203) |
+| RAM | ≥ 60 GB | [`:206`](../scripts/provision_box.sh:206) |
+| Free disk at `/workspace` | ≥ what still has to land — 70 GB on a fresh box | [`:226`](../scripts/provision_box.sh:226) |
 | Onstart | `env >> /etc/environment` | — |
 | Env vars | see §11 | — |
 
@@ -94,16 +94,26 @@ printf 'Host demae-box\n  HostName <IP>\n  User root\n  Port <PORT>\n  IdentityF
 
 ## 5. Push the code, then provision
 
-`provision_box.sh` runs **on the box**, streamed over the SSH connection so it never lands on that disk as a file. It cannot copy your code itself — it has no access to your laptop, and giving a rented machine inbound credentials to your Mac would be strictly worse than pushing. So the rsync is a real prerequisite:
+`provision_box.sh` runs **on the box**, streamed over the SSH connection so it never lands on that disk as a file. It cannot copy your code itself — it has no access to your laptop, and giving a rented machine inbound credentials to your Mac would be strictly worse than pushing. So the push is a real prerequisite, and [`push_code.sh`](../scripts/push_code.sh) is it:
 
 ```bash
-uv run python -c 'from dataset.provenance import git_sha; print(git_sha())' > .git_sha \
-  && rsync -az --delete src tests artifacts scripts pyproject.toml uv.lock README.md .git_sha demae-box:/workspace/DEMAE/ \
-  && ssh demae-box 'bash -s -- --root /workspace/DEMAE' < scripts/provision_box.sh
+scripts/push_code.sh --host demae-box --provision
 ```
 
-**The first line is what puts a code version on every run.** `.git` is deliberately not in the
-rsync list — at 128 MB it is the largest thing that would move, and shipping it would make the
+That is one command because R0 proved it had to be. This step used to be a three-line `&&` chain
+typed from this document, whose first line generated `.git_sha`; the code went up without it and
+a whole run recorded `git sha unknown` (#107). The sha is now regenerated and shipped by the same
+command that ships the code, so there is no ordering left to get wrong. Pass provisioning's own
+flags after `--`:
+
+```bash
+scripts/push_code.sh --host demae-box --provision -- --skip-corpus --skip-env
+```
+
+Use `--dry-run` to see the exact `rsync` and `ssh` it would run without touching the box.
+
+**`.git_sha` is what puts a code version on every run.** `.git` is deliberately not in the
+payload — at 128 MB it is the largest thing that would move, and shipping it would make the
 answer *wrong* rather than merely expensive: `git status --porcelain` on the box sees every
 unshipped path (`docs/`, `notebooks/`, `CONTEXT.md`) as deleted, so every run would stamp
 `-dirty` from a clean commit. So the laptop computes the SHA where the history actually is and
@@ -111,23 +121,69 @@ ships the one-line answer. [`dataset.provenance.git_sha`](../src/dataset/provena
 first and reads `.git_sha` only when git cannot answer, which is why a stale copy in a real
 checkout is inert.
 
-Generate it through the project's own `git_sha()` rather than `git rev-parse` directly — that is
-what carries the `-dirty` suffix, and a run from uncommitted code should say so. Re-run the line
-on every push: a `.git_sha` from three pushes ago is a confident wrong answer, which is worse
-than the `unknown` it replaced. Provisioning step 6 prints the value it found and warns if the
-file is missing.
+It is generated through the project's own `git_sha()` rather than `git rev-parse` — that is what
+carries the `-dirty` suffix, and a run from uncommitted code should say so. It is recomputed on
+every push and never reused: a `.git_sha` from three pushes ago is a confident wrong answer,
+which is worse than the `unknown` it replaced. For the same reason the script refuses to ship the
+literal `unknown` — writing it would leave a *non-empty* file on the box, silencing provisioning's
+step-6 warning while recording nothing. Provisioning step 6 prints the value it found and warns if
+the file is missing.
 
-The `&&` means a failed rsync never reaches provisioning. Three separate `die` paths exist for missing code — [`:128`](../scripts/provision_box.sh:128) (no `uv.lock`), [`:189`](../scripts/provision_box.sh:189) (no `check_corpus.py`), [`:206`](../scripts/provision_box.sh:206) (no `artifacts/`).
+A failed rsync never reaches provisioning. Three separate `die` paths exist for missing code — [`:241`](../scripts/provision_box.sh:241) (no `uv.lock`), [`:368`](../scripts/provision_box.sh:368) (no `check_corpus.py`), [`:385`](../scripts/provision_box.sh:385) (no `artifacts/`).
 
-Idempotent throughout: `rclone copy` re-transfers only what disagrees and every other step checks whether it is already done, so a run that dies on a flaky download resumes by re-running the same command rather than from zero.
+**`--delete` reaches only the directories being pushed.** rsync scopes deletion to each
+transferred source, so `data/`, `runs/`, `.venv/` and `.box_identity` at the destination root
+survive — which is what makes the push safe to re-run against a box that already holds a corpus.
+Re-check that property before adding anything to the payload list.
 
-Useful flags: `--skip-corpus` (verify what is already on disk), `--skip-env` (skip `uv sync`), `--probe-steps 0` (skip the throughput probe), `--recheck` (re-hash after the copy; moves no bytes).
+Idempotent throughout: `rclone copy` re-transfers only what disagrees and every other step checks whether it is already done, so a run that dies on a flaky download resumes by re-running the same command rather than from zero. **This is now actually reachable** — until #107, preflight rejected any box that had already downloaded a corpus, which took the resume path and `--skip-corpus` with it. See §6.
+
+Useful flags: `--skip-corpus` (verify what is already on disk), `--skip-env` (skip `uv sync`), `--probe-steps 0` (skip the throughput probe), `--recheck` (re-hash after the copy; moves no bytes), `--rclone-version` (which rclone to install; see §6).
 
 ---
 
 ## 6. Read the provision footer
 
-The eight steps are: preflight → Python env → corpus copy → corpus completeness → committed artifacts → config/fingerprints → throughput probe → box identity.
+The eight steps are: preflight → Python env → rclone and corpus copy → corpus completeness → committed artifacts → config/fingerprints → throughput probe → box identity.
+
+**Step 1 asks what still has to land, not what the finished article occupies.** The old check
+compared a flat 70 GB against total free space, and 70 GB is exactly what corpus + venv + a run's
+own writes *add up to* — so the moment the corpus was down, the disk holding it failed the check
+reserving room for it. R0's box (102 GB disk, 53 GB of it the corpus and venv provisioning had
+itself put there, 50 GB free) could not be re-provisioned at all. The budget is now its three
+parts, and only the remainder of each is required: 47 GB corpus minus whatever `du` finds on
+disk, 8 GB venv (2 GB if `.venv` already exists), and a **15 GB reserve that is never subtracted**
+— §11 retention keeps the last 3 checkpoints plus the 4 milestones, which is 7 files at ~1.2 GB
+each for ViT-B, and those writes are always still ahead. On a fresh box the sum is 70 GB, i.e.
+the constant it replaces: this loosened nothing for the case the old check was written for.
+
+**Step 3 settles rclone before it looks at `--skip-corpus`**, because the thing an
+already-provisioned box still needs rclone for is shipping checkpoints for the next 43 hours. The
+vastai image ships `v1.60.1-DEV`, a 2022 build; against R2 every checkpoint upload failed
+`NotImplemented (501)` on attempt 1 and succeeded on attempt 2, three for three in R0. The bytes
+were never in doubt — a re-downloaded checkpoint hashed identically — but a healthy pass logging
+three ERROR lines is how a real failure gets ignored.
+
+Both of the issue's levers are pulled, and they are not equally well founded:
+
+- **The pin.** Anything below the **1.65.0 floor** is replaced with a pinned **v1.69.1**, and the
+  version lands in `.box_identity`. Note what is *not* claimed: no release was bisected, so this
+  is a move off the 2022 series rather than a fix. What it buys regardless is that R1–R5 all ship
+  through the same client and the run record says which.
+- **`--s3-no-check-bucket`**, on every upload path (`sync_checkpoints.sh`, and teardown's default
+  catch-up command). This one has a mechanism: rclone probes its destination bucket and will try
+  to *create* it before the first upload, caching the result per process. The box holds an Object
+  Read & Write token, which cannot create a bucket, and R2 may answer that with 501. Because the
+  sync loop runs a fresh `rclone copy` per pass, that predicts exactly one failure per pass on
+  attempt 1 — which is what R0 saw, three for three. Still a hypothesis: it was never confirmed
+  on the box. It is safe either way, since the buckets are created by hand long beforehand.
+
+**An old rclone warns; it does not block provisioning.** Absence is fatal — the corpus arrives
+through rclone and the checkpoints leave through it — but age is not, because R0 proved an old
+one ships a run, noisily, for 43 hours. Dying there would hand back what the step-1 fix above
+just stopped doing: refusing to re-provision a box that has already paid for its corpus, over
+something cosmetic. The hard gate is `sync_checkpoints.sh --once`, which a human runs before
+committing GPU hours (§7).
 
 **[verified locally]** steps 4, 5, and 6 pass against the real corpus on this laptop — `check_corpus.py` reports complete, all four `artifacts/phase1/` files are present, and `pretrain.launch --dry-run` resolves cleanly (92,400 steps, 231/epoch, containment assertion passes).
 
@@ -139,7 +195,7 @@ Step 7 is the one that does **not** transfer between hosts. The loader ≥2× ga
 
 The probe deliberately uses the ViT-S default rather than `--vit-base`: §12 plans ViT-S at ~3,000 img/s against ViT-B's ~1,300, so the small model is the *stricter* test. A box that feeds ViT-S feeds ViT-B; the converse does not follow.
 
-Step 8 writes `.box_identity` — paste those values into the W&B run tags. When a throughput number looks wrong six weeks from now, the host needs to be attributable rather than reconstructed.
+Step 8 writes `.box_identity` — paste those values into the W&B run tags. When a throughput number looks wrong six weeks from now, the host needs to be attributable rather than reconstructed. It now carries `rclone=` alongside the GPU and RAM, for the same reason.
 
 ---
 
@@ -151,6 +207,7 @@ Two tmux windows. Training first:
 cd /workspace/DEMAE && tmux new -s r1
 uv run python -m pretrain.launch --vit-base --set 'monitoring.wandb_mode="online"'
 ```
+
 
 Then the checkpoint sync, in its own window:
 
@@ -167,7 +224,14 @@ scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/r1 \
   --remote bucket:demae-checkpoints/r1/ --once
 ```
 
+`--once` also **refuses to run** on an rclone below the 1.65.0 floor, and the loop only warns
+about the same thing. That asymmetry is deliberate: `--once` is this pre-run probe, where nothing
+is training and the fix is to re-run provisioning; the loop is started *during* a run, and exiting
+to avoid some ERROR lines would end checkpoint shipping for the next 40 hours — the exact trade
+the script exists to refuse.
+
 **This loop is not optional.** §11 requires checkpoints off-instance every epoch and every 30–60 minutes, because vast instances vanish permanently rather than pause. Nothing in `src/pretrain` implements that — `checkpoint.py` writes to local disk and mentions syncing only in a comment, and teardown calls its own pass "the safety net, not the mechanism." Without this window, a box that disappears at hour 40 of a 43-hour run takes every checkpoint with it, not merely the last interval's worth.
+
 
 The loop exits by itself once training has started and then stopped, after a final pass.
 
@@ -243,12 +307,15 @@ and every future box logs itself in.
 
 Project **`demae-phase1`**, matching the default at [`config.py:603`](../src/pretrain/config.py:603), so no run passes a project flag. **[verified] 2026-08-03** — entity `jonathan-stoschek-purdue-university`, project reachable, zero runs; R0 is the first.
 
-`monitoring.wandb_entity` is `None`, meaning "the key's current default entity" — a mutable
-account setting rather than a fact about this project. Consider pinning it: the whole of §10's
-decision rule reads R0–R5 against each other, and a default that shifts mid-phase splits them
-across two entities with nothing in the run record saying so. It is an `ENVIRONMENT` field, so
-pinning costs no `config_hash` change and cannot make a §11 resume look like a different
-experiment.
+`monitoring.wandb_entity` is **pinned to `jonathan-stoschek-purdue-university`** at
+[`config.py:612`](../src/pretrain/config.py:612), so no run passes an entity flag either. It used
+to be `None`, meaning "the key's current default entity" — a mutable account setting rather than a
+fact about this project. R0 pinned it through a config file for its own run; #107 moved that into
+the repo. The whole of §10's decision rule reads R0–R5 against each other, and a default that
+shifts mid-phase files the later arms under a different entity with nothing in the run record
+saying so. It is an `ENVIRONMENT` field, so the pin cost no `config_hash` change and cannot make a
+§11 resume look like a different experiment — which is also why it was safe to change *after* R0
+had already run. A fork of this repo wants `None` back.
 
 Offline mode needs none of this — it is the default and the tested path, which is why #97 never
 waited on this section.
@@ -283,6 +350,7 @@ Set a **time-based** rule, prefix `r1/`, retention outliving the run plus the an
 | `bucket:` rclone remote undocumented in provision's `--help` | documented in §11 above; the script's own help is still incomplete |
 | Both script headers say the checkpoint key is safe "with versioning enabled" on R2 | **factually wrong — R2 has no object versioning.** [`provision_box.sh:23`](../scripts/provision_box.sh:23) and [`teardown_box.sh:22`](../scripts/teardown_box.sh:22) still carry it. §11 records the real mechanism (bucket locks); the headers need correcting |
 | R2 cannot express the two-scoped-key design in the script headers | headers describe B2 semantics; §11 above records the R2 reality |
-| Runs recorded `git sha unknown` — the box has no `.git` and §5's rsync did not ship one | **closed 2026-08-03.** `.git_sha` is generated on the laptop and rsynced; `git_sha()` falls back to it. Step 6 prints the value and warns when it is absent — a warning rather than a `die`, because re-provisioning an already-corpused box is blocked by the row below |
-| Preflight's `MIN_FREE_GB=70` is checked against total free space, so it fails on any already-provisioned box | **open.** 102 GB disk − 53 GB (corpus + venv) = 50 GB free, and the check is unconditional at step 1/8. This makes §5's "re-run the same command to resume" and the `--skip-corpus` flag unreachable. The threshold wants headroom for what still has to *land*, not total free space |
+| Runs recorded `git sha unknown` — the box has no `.git` and §5's rsync did not ship one | **closed 2026-08-03 (#107).** The mechanism landed with #80 and the file still did not reach R0's box, because generating it was a line in this document. `push_code.sh` now regenerates and ships it in the same command as the code, and refuses to write the literal `unknown`. Step 6 still prints the value and warns rather than dies |
+| Preflight's `MIN_FREE_GB=70` is checked against total free space, so it fails on any already-provisioned box | **closed 2026-08-03 (#107).** Step 1/8 now sums what still has to land — corpus remainder by `du`, venv (or a re-sync's worth), and a 15 GB reserve that is never subtracted. Reduces to 70 GB on a fresh box, so §5's resume path and `--skip-corpus` are reachable without loosening the original check. Arithmetic pinned in `tests/test_ops_scripts.py` |
+| rclone 501s on the first upload attempt of every checkpoint | **closed 2026-08-03 (#107)** at the level the evidence supports. Step 3 replaces anything below 1.65.0 with a pinned v1.69.1 and records it in `.box_identity`; every upload path now passes `--s3-no-check-bucket`; `sync_checkpoints.sh` names the symptom when it sees an old client, fatally under `--once`. **Neither lever is confirmed on the box** — the flag has a mechanism that fits R0's evidence, the pin does not, and R5's ~1.2 GB checkpoints (4× what R0 tested) are still unexercised at any version. The first R1 sync pass is what settles it: zero ERROR lines means done |
 | `sync_checkpoints.sh` tested only against a local rclone remote | its logic is verified, including the prune-does-not-propagate property; behavior against R2 is not. The `--once` probe on the box closes this in seconds |

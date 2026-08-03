@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prove the box holds nothing unique, then let it go — run this on the **laptop**, not the box.
 #
-#     ./scripts/teardown_box.sh --host demae-box --checkpoint-dir /workspace/DEMAE/runs/r1 \
+#     ./scripts/teardown_box.sh --host demae-box --checkpoint-dir /workspace/DEMAE/runs/R1 \
 #         --bucket demae-corpus --prefix checkpoints/r1/ \
 #         --endpoint-url https://s3.us-west-004.backblazeb2.com
 #
@@ -152,7 +152,11 @@ step "3/7  Catch-up sync (§11 syncs continuously; this is the safety net, not t
 if [[ "$DO_SYNC" -eq 0 ]]; then
     ok "skipped (--no-sync)"
 else
-    [[ -n "$SYNC_CMD" ]] || SYNC_CMD="rclone copy '$CKPT_DIR' 'bucket:$BUCKET/$PREFIX' --checksum --progress"
+    # --s3-no-check-bucket for the same reason sync_checkpoints.sh passes it (#107): rclone's
+    # bucket-existence probe is a create the box's Object Read & Write token cannot perform, and
+    # R2 may answer it with NotImplemented (501). This is the *last* sync before a destroy, so a
+    # spurious failure here is the most expensive one in the workflow.
+    [[ -n "$SYNC_CMD" ]] || SYNC_CMD="rclone copy '$CKPT_DIR' 'bucket:$BUCKET/$PREFIX' --checksum --progress --s3-no-check-bucket"
     echo "   on $HOST: $SYNC_CMD"
     ssh "$HOST" "$SYNC_CMD" || die "the catch-up sync failed — nothing has been destroyed"
     ok "sync returned clean"

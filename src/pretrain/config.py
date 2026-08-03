@@ -601,9 +601,17 @@ class Monitoring(_Frozen):
     #: The W&B project runs report into. #80's ops deliverable; the default is a placeholder
     #: that an offline run never contacts and R0 (#81) is where a real one is first used.
     wandb_project: str = field(default="demae-phase1", metadata=ENVIRONMENT)
-    #: The W&B team/user the project lives under. ``None`` means the account's default, which
-    #: is what an offline run has.
-    wandb_entity: str | None = field(default=None, metadata=ENVIRONMENT)
+    #: The W&B team/user the project lives under. Pinned rather than left at ``None``, which
+    #: meant "the API key's current default entity" — an account setting editable from a web
+    #: page, not a fact about this project. §10's decision rule reads R0-R5 against each other,
+    #: and a default that shifts mid-phase files the later arms under a different entity with
+    #: nothing in either run record saying so (#107). ``None`` still means the account default
+    #: and is what a fork of this repo wants. Pinning is free because this is ``ENVIRONMENT``:
+    #: it moves no :attr:`RunConfig.config_hash`, so R0 — which ran against this entity through
+    #: a config file — and every run after it still hash as the same recipe.
+    wandb_entity: str | None = field(
+        default="jonathan-stoschek-purdue-university", metadata=ENVIRONMENT
+    )
     #: Where offline runs are written. ``None`` means the process's working directory, i.e.
     #: `./wandb/`, which is W&B's own default.
     wandb_dir: str | None = field(default=None, metadata=ENVIRONMENT)

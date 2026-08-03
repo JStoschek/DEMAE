@@ -3,7 +3,7 @@
 # its own tmux window beside the training one:
 #
 #     tmux new-window -t r1 -n sync
-#     scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/r1 \
+#     scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 \
 #         --remote bucket:demae-checkpoints/r1/
 #
 # Why this exists. Plan §11 asks for every checkpoint to land off-instance "every epoch *and*
@@ -53,6 +53,14 @@ VERIFY=0
 FOREVER=0
 PATTERN='checkpoint_*.pt'
 
+# The rclone floor, kept in step with provision_box.sh's — tests/test_ops_scripts.py asserts the
+# two agree, because a floor that drifted would let provisioning bless what this script rejects.
+# The 2022 build the vastai image ships fails the first upload attempt of every checkpoint with
+# `NotImplemented (501)` and succeeds on the retry (R0, #81: three for three against R2). This
+# script is where that matters most, because the failure arrives as ERROR lines in a tmux window
+# somebody is meant to be able to read for 43 hours — see the check just below the helpers.
+RCLONE_MIN="1.65.0"
+
 usage() {
     cat <<'EOF'
 sync_checkpoints.sh — copy checkpoints off the box on an interval, while the run is still going.
@@ -70,6 +78,50 @@ Exits on its own when training has started and then stopped, after one final pas
 window closes itself at the end of a run rather than leaving a loop nobody remembers to stop.
 EOF
 }
+
+step()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+ok()    { printf '   ok    %s\n' "$*"; }
+warn()  { printf '   \033[33mwarn\033[0m  %s\n' "$*"; }
+die()   { printf '\n\033[31mSTOPPED: %s\033[0m\n' "$*" >&2; exit 1; }
+stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+
+# --- The rclone version, read as three numbers ------------------------------------------------
+# Carried here as well as in provision_box.sh rather than shared through a file both source: this
+# script runs on the box in its own tmux window, started by hand, and can assume nothing about
+# what provisioning left behind — the same reason the R2 signing-region swap is repeated by every
+# bucket-touching path in this repo. tests/test_ops_scripts.py drives both copies.
+
+# "rclone v1.60.1-DEV" -> "1.60.1". Suffixes are dropped; unreadable input reads as 0.0.0, which
+# fails the floor rather than passing it.
+rclone_semver() {
+    if [[ "$1" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+        printf '%s.%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    elif [[ "$1" =~ ([0-9]+)\.([0-9]+) ]]; then
+        printf '%s.%s.0\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+        printf '0.0.0\n'
+    fi
+}
+
+# rclone_version_lt <have> <floor> — numeric per component, because 1.9 is older than 1.65 and
+# every comparison that treats these as text says the opposite.
+rclone_version_lt() {
+    local have floor h f i have_n floor_n
+    have="$(rclone_semver "$1")"; floor="$(rclone_semver "$2")"
+    IFS=. read -r -a h <<< "$have"
+    IFS=. read -r -a f <<< "$floor"
+    for i in 0 1 2; do
+        have_n="${h[$i]:-0}"; floor_n="${f[$i]:-0}"
+        if (( 10#$have_n < 10#$floor_n )); then return 0; fi
+        if (( 10#$have_n > 10#$floor_n )); then return 1; fi
+    done
+    return 1
+}
+
+# Sourcing with DEMAE_LIB set stops here, before argv is read — see tests/test_ops_scripts.py.
+if [[ -n "${DEMAE_LIB:-}" ]]; then
+    return 0
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -89,13 +141,26 @@ done
 [[ -n "$REMOTE" ]]   || { echo "--remote is required" >&2; exit 2; }
 [[ "$REMOTE" == *:* ]] || { echo "--remote must be an rclone remote (name:path)" >&2; exit 2; }
 
-step()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-ok()    { printf '   ok    %s\n' "$*"; }
-warn()  { printf '   \033[33mwarn\033[0m  %s\n' "$*"; }
-die()   { printf '\n\033[31mSTOPPED: %s\033[0m\n' "$*" >&2; exit 1; }
-stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-
 command -v rclone >/dev/null || die "no rclone on PATH — provision_box.sh installs it"
+
+RCLONE_HAVE="$(rclone_semver "$(rclone version 2>/dev/null | head -1 || true)")"
+if rclone_version_lt "$RCLONE_HAVE" "$RCLONE_MIN"; then
+    # `--once` is the pre-run credential probe the runbook has you run before committing GPU
+    # hours, so it is the one place a hard stop is cheap: nothing is training yet, and the fix
+    # is to re-run provisioning. The loop must never die of this — it is started *during* a run,
+    # and exiting would end checkpoint shipping for the next 40 hours to avoid some ERROR lines,
+    # which is precisely the trade this script's header refuses to make.
+    BELOW_FLOOR="rclone $RCLONE_HAVE is below the $RCLONE_MIN floor. A client this old failed the
+        first upload attempt of every checkpoint against R2 with NotImplemented (501) and
+        succeeded on the retry, three for three in R0 — so a *healthy* pass logs ERROR lines, and
+        a real failure then has somewhere to hide (#107). Replace it from the repo root on this
+        box:
+            scripts/provision_box.sh --root \"\$PWD\" --skip-corpus --skip-env --probe-steps 0"
+    if [[ "$ONCE" -eq 1 ]]; then
+        die "$BELOW_FLOOR"
+    fi
+    warn "$BELOW_FLOOR"
+fi
 
 PASS=0
 FAILS=0
@@ -119,12 +184,28 @@ sync_once() {
     # --checksum, matching provision_box.sh's corpus fetch and for the same reason: compare
     # content hashes rather than size+mtime, so a pass moves only what genuinely differs and a
     # re-run after a killed transfer resumes instead of restarting.
+    # --s3-no-check-bucket is #107's second lever, and it is the one with a *mechanism* behind
+    # it rather than a version number. Before its first upload, rclone's S3 backend probes the
+    # bucket and will try to create it; it then caches the answer for the life of the process.
+    # That shape matches R0's evidence exactly — one failure per pass, on attempt 1, then a
+    # success, three for three — because this loop runs a fresh `rclone copy` per pass, so the
+    # probe happens once per pass and not once per run. The box's token is Object Read & Write,
+    # which cannot create a bucket, and R2 is entitled to answer that with NotImplemented (501).
+    # The flag skips the probe outright.
+    #
+    # Stated honestly: this was never confirmed on the box, so it is a hypothesis and the pinned
+    # rclone in provisioning is the other half. It is safe whether or not it is the cause — the
+    # buckets are created by a human long before this runs, the token could not create one
+    # anyway, and skipping the probe only turns "rclone silently creates it" into a clear error.
+    # Harmless on a non-S3 remote too, which is what the local-remote tests use.
+    #
     # Timeouts are not optional here. rclone's defaults retry a dead endpoint for a very long
     # time, and a pass that hangs does not merely fail — it stops the loop from ever reaching the
     # next interval, so checkpoint shipping stops with no warning printed. Bounded retries turn a
     # network partition into a visible failed pass that the loop comes back from.
     if rclone copy "$CKPT_DIR" "$REMOTE" \
         --include "$PATTERN" --checksum --stats-one-line --stats 60s \
+        --s3-no-check-bucket \
         --contimeout 30s --timeout 5m --retries 3 --low-level-retries 5; then
         SHIPPED="$n"
         FAILS=0
@@ -140,7 +221,7 @@ sync_once() {
         # the bucket are expected and fine — they are the ones retention has already pruned here,
         # which is the whole point of copy-not-sync.
         if rclone check "$CKPT_DIR" "$REMOTE" --include "$PATTERN" --checksum --one-way \
-            --contimeout 30s --timeout 5m --retries 3; then
+            --s3-no-check-bucket --contimeout 30s --timeout 5m --retries 3; then
             ok "$(stamp)  verified — every local checkpoint hash-matches the bucket"
         else
             FAILS=$(( FAILS + 1 ))
@@ -161,7 +242,7 @@ final_pass() {
 trap final_pass INT TERM
 
 step "Checkpoint sync — $CKPT_DIR -> $REMOTE"
-ok "interval ${INTERVAL}s, pattern '$PATTERN', verify=$VERIFY"
+ok "interval ${INTERVAL}s, pattern '$PATTERN', verify=$VERIFY, rclone v$RCLONE_HAVE"
 echo "   note  this is copy-only; retention pruning on this box never reaches the bucket"
 
 if [[ "$ONCE" -eq 1 ]]; then

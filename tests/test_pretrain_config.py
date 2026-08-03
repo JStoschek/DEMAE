@@ -371,6 +371,23 @@ def test_the_measurement_is_recipe_and_the_sink_is_environment():
     assert resunk.to_dict() != cfg.to_dict()  # but still recorded
 
 
+def test_the_wandb_entity_is_pinned_and_still_costs_no_config_hash():
+    """#107 item 3: the entity is a fact about this project, not the key's current default.
+
+    `None` resolved to whatever entity the API key happens to default to — an account setting
+    that can be changed from a web page between R1 and R2. §10's decision rule reads R0-R5
+    against each other, so a default that shifts mid-phase splits the arms across two entities
+    with nothing in either run record saying so. Pinning it is only safe because the field is
+    `ENVIRONMENT`: the assertion below is the one that makes a resume of R1 under the pin still
+    look like R1, and it is why this could be changed after R0 had already run.
+    """
+    cfg = RunConfig()
+    assert cfg.monitoring.wandb_entity == "jonathan-stoschek-purdue-university"
+    elsewhere = cfg.replace(monitoring=cfg.monitoring.replace(wandb_entity="somewhere-else"))
+    assert elsewhere.config_hash == cfg.config_hash
+    assert elsewhere.to_dict() != cfg.to_dict()  # but still recorded
+
+
 def test_the_monitoring_group_round_trips_and_refuses_a_typo():
     cfg = RunConfig.from_dict({"monitoring": {"wandb_mode": "disabled"}})
     assert cfg.monitoring.wandb_mode == "disabled"
