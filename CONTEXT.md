@@ -444,6 +444,12 @@ GitHub issue #1.
   the kill-and-resume test now runs with real workers. The general rule it leaves behind: state
   that must survive a resume belongs in a *pure function of position*, and only what genuinely
   cannot — optimizer moments, the mask draw's generator — belongs in the checkpoint payload.
+  Claimed and tested **on a device**, too, and for the same reason: the suite trained at
+  `device = "cpu"` while every run is on a GPU, and
+  [#105](https://github.com/JStoschek/DEMAE/issues/105) found two separate resume bugs waiting
+  behind that one fixture default. The pattern under both tickets is worth stating once —
+  *the axis a gate is blind on is whatever its fixture hardcodes* — and the defence is to run
+  the gate at every value the box can actually reach rather than at the convenient one.
 - **RNG stream** — one independent source of randomness a run draws from, of which there are
   five and not one: the ambient torch generator (the in-model mask draw), CUDA's per-device
   generators, NumPy's legacy global, Python's `random`, and the DataLoader's own
@@ -451,7 +457,14 @@ GitHub issue #1.
   because a stream captured in one place and restored in neither of the other two is a stream
   that silently is not restored. The augmentation was a sixth until #104 removed the stream
   rather than the restore; a pre-#104 checkpoint still carries the dead key and still resumes,
-  which is why the checkpoint format version is unchanged.
+  which is why the checkpoint format version is unchanged. "Ambient" means **per device**: the
+  mask draw reads whichever generator belongs to the tensor it is drawing on, so the list is
+  one entry per device type the run might train on rather than a fixed pair.
+  [#105](https://github.com/JStoschek/DEMAE/issues/105) added `mps` for that reason — not
+  because anything ships on Apple silicon, but because the laptop that runs the test suite is
+  where the resume gate is now measured on a real accelerator. It sits in a second list,
+  `OPTIONAL_RNG_STREAMS`, whose absence from a payload is not an error, so checkpoints written
+  before it existed still resume — the same trade #104 made, for the same reason.
 - **Epoch order** — the sequence a training epoch reads its tiles in, derived as a pure
   function of `(seed, epoch)` (`pretrain.train.EpochShuffleSampler`) rather than drawn from a
   rolling generator. The distinction is what makes a **mid-epoch resume** continue the order it

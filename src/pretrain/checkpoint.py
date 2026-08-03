@@ -18,6 +18,8 @@ rest are the ones that fail quietly:
 - **Every RNG stream** — :data:`RNG_STREAMS`. Five of them, and they are genuinely independent:
   the ambient torch generator the in-model mask draw reads, CUDA's per-device generators, NumPy's
   legacy global, Python's :mod:`random`, and the DataLoader's own :class:`torch.Generator`.
+  Plus :data:`OPTIONAL_RNG_STREAMS`, which is the same list continued onto devices a checkpoint
+  may predate — "the ambient generator" is per device, and CUDA is not the only one (#105).
 - **The full config** — so a checkpoint says what recipe produced it without reference to a
   file that may not have travelled with it, and #97/#14 can read a released artifact's recipe
   off the artifact.
@@ -48,6 +50,49 @@ change still resumes, which is the entire point of §11. What it does not get is
 with the run that was killed, since its dihedral elements from that point on come from the hash
 rather than from the stream the checkpoint recorded. That is a code change, not a corrupt
 checkpoint, and it is what the fingerprint's ``git_sha`` is for.
+
+## The device the block arrives on, and why the fix is at the sink
+
+The hole above had a twin, and it is on the page for the same reason.
+:func:`pretrain.train.train_resumable` loads with ``map_location=trainer.device``, so on a GPU
+box *every* tensor in the payload arrives on the GPU — the RNG block included, whose streams
+are CPU ``ByteTensor``s by definition. :func:`restore_rng` then converted each one with
+``.to(torch.uint8)``, which names a dtype and not a device: it returned a tensor that was
+already ``uint8`` and still on the GPU, and ``torch.set_rng_state`` refused it. Exact resume —
+§11's gate and item 4 of §15's checklist — therefore raised on every real run while the suite
+stayed green, because the suite trains at ``device="cpu"`` where ``map_location`` moves nothing
+(#105). That is #104's shape on a second axis, and #104's lesson did not generalise past the
+axis it was learned on.
+
+**The fix is at the sink**, in :func:`_cpu_byte`, at all three call sites. The alternative was
+to stop device-mapping the block at :func:`load_checkpoint`, and it was not taken:
+``map_location`` is one argument to one ``torch.load`` and cannot be applied per key, so
+honouring it for the weights but not for the RNG block means either a second read of the file
+or the same copy-back one layer further from the requirement. The requirement belongs to
+``torch.set_rng_state``, not to the loader — and :func:`restore_rng` is public and also takes
+dicts that never came from a file. The copy is free at this size: the block is ~10 KB against a
+~300 MB payload at the shipped 24.7 M-parameter recipe, once per resume.
+
+## And how a gate like that gets tested at all
+
+The premise that this needs a rented box is wrong, in the useful direction. ``set_rng_state``
+wants a CPU tensor from **every** accelerator, not from CUDA specially, so an Apple-silicon
+laptop with no CUDA at all reproduces #105 line for line on ``mps`` — and the laptop is where
+this suite runs. ``test_a_checkpoint_resumes_when_the_payload_arrived_on_a_device`` is therefore
+an ordinary test, parametrized over whatever non-CPU devices the box has, asserting the same
+bit-identity §15.4 asks for. It runs on ``mps`` here and on ``cuda`` on the rented box with
+nothing changed, and it skips *visibly* on a box with neither.
+
+It paid for itself on the first run: with the device-mapping fixed the resume stopped raising
+and was still not bit-identical, because :func:`pretrain.model.random_masking` draws from the
+ambient generator **of the tensor's own device** and only the CPU's and CUDA's were ever
+captured. Hence :data:`OPTIONAL_RNG_STREAMS`. Two bugs, one axis, and neither reachable from a
+test that trains on the CPU.
+
+Beside it sit two tests that need no accelerator at all — one standing in for a device-mapped
+stream, one for the CUDA surface — because a gate that only runs where the hardware happens to
+be is how this file got here twice. Those hold the *class* anywhere; the device test holds the
+*path* wherever there is a device to hold it on.
 
 ## Retention, and why the milestone set is read rather than written down
 
@@ -92,6 +137,47 @@ FORMAT_VERSION: Final = 1
 #: that they round-trip all read one list — a stream added to two of the three is a stream that
 #: silently is not restored.
 RNG_STREAMS: Final = ("torch", "cuda", "numpy", "python", "dataloader")
+
+@dataclass(frozen=True)
+class _DeviceStream:
+    """An accelerator's ambient generator, as the three calls capturing and restoring it need.
+
+    The functions are wrapped rather than referenced, so the ``torch`` attribute behind each is
+    resolved when it is *called* and only after ``available`` has said yes. A rented Linux box
+    imports this module too, and an accelerator's namespace is not somewhere to find out at
+    import time whether it exists on the platform.
+    """
+
+    get: Callable[[], torch.Tensor]
+    set: Callable[[torch.Tensor], None]
+    available: Callable[[], bool]
+
+
+#: The optional streams, keyed by the name their payload entry carries. One entry per device,
+#: read by :func:`capture_rng` and :func:`restore_rng` *both* — which is the point, and the same
+#: point :data:`RNG_STREAMS`' comment makes: a stream named in one of the two and not the other
+#: is a stream that silently is not restored, and a single entry holding both halves is what
+#: makes that unrepresentable rather than merely discouraged.
+#:
+#: ``mps`` is the only one because the ambient generator the in-model mask draw reads is *the
+#: one belonging to the tensor's device* (:func:`pretrain.model.random_masking`), and "torch
+#: plus CUDA" is not the whole set of devices — only the set this project rents. The laptop's is
+#: the other one, and #105's gate runs there.
+_DEVICE_STREAMS: Final = {
+    "mps": _DeviceStream(
+        lambda: torch.mps.get_rng_state(),
+        lambda state: torch.mps.set_rng_state(state),
+        lambda: torch.backends.mps.is_available(),
+    ),
+}
+
+#: Streams whose *absence* from a payload is not a defect. The key is written on every box,
+#: present device or not, so absence means one thing only: a checkpoint older than the stream.
+#: They are kept out of :data:`RNG_STREAMS` — which :func:`restore_rng` refuses a checkpoint for
+#: missing — for the same reason :data:`FORMAT_VERSION` was not bumped for #104's removal: every
+#: checkpoint already sitting on a box predates this key, and refusing those would cost exactly
+#: what §11 exists to protect.
+OPTIONAL_RNG_STREAMS: Final = tuple(_DEVICE_STREAMS)
 
 #: The fingerprint fields a resume refuses to disagree on: *which data*. ``corpus_dir`` and
 #: ``git_sha`` are deliberately absent — §11 resumes on a fresh instance where the corpus is
@@ -179,12 +265,30 @@ def _restore_numpy_global(state: dict) -> None:
     )
 
 
+def _cpu_byte(state: torch.Tensor) -> torch.Tensor:
+    """The one form every ``set_rng_state`` on this page accepts: a CPU ``ByteTensor``.
+
+    The **device** is named here and not only the dtype, and that is #105 in a line: ``.to()``
+    given a dtype alone preserves the device, so on a box where the checkpoint was loaded with
+    ``map_location="cuda"`` a conversion to ``torch.uint8`` returns a tensor that was already
+    ``uint8`` and is still on the GPU. Every stream restored below goes through here, including
+    the CUDA ones — CUDA's generators keep their state on the host like the rest.
+    """
+    return state.to("cpu", torch.uint8)
+
+
 def capture_rng(*, generator: torch.Generator | None = None) -> dict:
-    """Snapshot :data:`RNG_STREAMS` — all of them, from wherever each one lives.
+    """Snapshot every stream — :data:`RNG_STREAMS` and :data:`OPTIONAL_RNG_STREAMS` both — from
+    wherever each one lives.
 
     ``generator`` is the DataLoader's (:func:`pretrain.train.seeded_generator`). It is optional
     so a checkpoint written outside a loop still records the four ambient streams rather than
     silently recording none.
+
+    An optional stream's key is written on every box whether or not the device is there, so the
+    payload's *shape* does not depend on what wrote it — only its values do. A reader can then
+    tell "this box had no MPS" (``None``) from "this checkpoint predates the stream" (no key),
+    and only the second is something :func:`restore_rng` has to reason about.
 
     The read path contributes nothing here, and that is the #104 fix rather than an omission:
     :class:`pretrain.augment.DihedralDataset` holds no stream to snapshot.
@@ -196,11 +300,23 @@ def capture_rng(*, generator: torch.Generator | None = None) -> dict:
         "numpy": _numpy_global_state(),
         "python": random.getstate(),
         "dataloader": None if generator is None else generator.get_state(),
+        **{
+            name: stream.get() if stream.available() else None
+            for name, stream in _DEVICE_STREAMS.items()
+        },
     }
 
 
 def restore_rng(state: dict, *, generator: torch.Generator | None = None) -> None:
     """Put every captured stream back where it was.
+
+    Every stream is installed as a CPU ``ByteTensor`` (:func:`_cpu_byte`) whatever device it
+    arrived on, and the optional ones (:data:`OPTIONAL_RNG_STREAMS`) are put back when this box
+    has the device and skipped when the payload predates them. ``state`` usually comes from
+    :attr:`Checkpoint.rng`, and
+    :func:`pretrain.train.train_resumable` loads with ``map_location=trainer.device`` — so on a
+    GPU box the block arrives on the GPU along with the weights, and putting it back is this
+    function's job rather than the loader's (#105; the module docstring argues the seam).
 
     CUDA state is restored only when the resumed box has as many devices as the killed one had.
     §11's resume lands on a *fresh* instance, and a single-GPU run moving to a single-GPU box is
@@ -213,10 +329,10 @@ def restore_rng(state: dict, *, generator: torch.Generator | None = None) -> Non
     missing = sorted(set(RNG_STREAMS) - set(state))
     if missing:
         raise ValueError(f"the checkpoint's RNG block is missing {missing}: it cannot resume exactly")
-    torch.set_rng_state(state["torch"].to(torch.uint8))
+    torch.set_rng_state(_cpu_byte(state["torch"]))
     if state["cuda"] and torch.cuda.is_available():
         if len(state["cuda"]) == torch.cuda.device_count():
-            torch.cuda.set_rng_state_all(state["cuda"])
+            torch.cuda.set_rng_state_all([_cpu_byte(s) for s in state["cuda"]])
         else:
             warnings.warn(
                 f"the checkpoint carries CUDA RNG state for {len(state['cuda'])} device(s) and "
@@ -224,11 +340,22 @@ def restore_rng(state: dict, *, generator: torch.Generator | None = None) -> Non
                 f"so the resumed run will not be bit-identical to the killed one (plan §11)",
                 stacklevel=2,
             )
+    # Silent when absent, unlike the CUDA mismatch above, and the asymmetry is worth arguing
+    # rather than assuming. A missing optional stream matters only to a run that trains *on*
+    # that device, and no §11 run does: nothing this project rents is an MPS box, so the only
+    # payloads with the key absent *and* the device in use would be ones a developer wrote
+    # locally with `--device mps` before this key existed — which is not a shape that outlives
+    # the change, because those runs are not the ones checkpoints are synced off-instance for.
+    # Warning on absence alone would instead fire on the common case, a Mac reading a rented
+    # checkpoint at `device="cpu"` to debug one, where the stream is never consulted at all.
+    for name, stream in _DEVICE_STREAMS.items():
+        if state.get(name) is not None and stream.available():
+            stream.set(_cpu_byte(state[name]))
     _restore_numpy_global(state["numpy"])
     version, internal, gauss = state["python"]
     random.setstate((version, tuple(internal), gauss))
     if generator is not None and state["dataloader"] is not None:
-        generator.set_state(state["dataloader"].to(torch.uint8))
+        generator.set_state(_cpu_byte(state["dataloader"]))
 
 
 # --- The file on disk ---------------------------------------------------------
@@ -534,6 +661,7 @@ __all__ = [
     "CheckpointPolicy",
     "DATA_IDENTITY",
     "FORMAT_VERSION",
+    "OPTIONAL_RNG_STREAMS",
     "RNG_STREAMS",
     "RunState",
     "atomic_save",

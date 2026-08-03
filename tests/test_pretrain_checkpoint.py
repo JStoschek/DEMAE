@@ -1,8 +1,10 @@
 """Survival: atomic checkpoints, retention, and kill-and-resume equivalence (#94, plan §11).
 
 vast.ai instances vanish permanently rather than pausing, so exact resume is plan §11's gate
-and item 4 of the §15 pre-flight checklist. The tests here are in four groups, and the split
-matters because only the last one would fail visibly on a rented box.
+and item 4 of the §15 pre-flight checklist. The tests here are in five groups, and the split
+matters because only two of them — **Equivalence** and **The device** — would fail visibly on a
+rented box. The other three fail on a laptop, which is why they are cheap to keep honest and
+why the two that do not have twice been the ones found wrong.
 
 **The artifact.** What a checkpoint carries, and that a killed process cannot leave one that
 half-loads. A truncated checkpoint that `torch.load` accepts is the worst outcome available:
@@ -25,6 +27,15 @@ that no amount of reading the code substitutes for. It runs **at two worker coun
 #94 first shipped it at ``num_workers = 0`` while the default was 8 and the dihedral draw did
 not survive the difference (#104); a gate that holds only at a configuration nobody runs is not
 a gate, and the extra process spawn is the cheapest thing in this file.
+
+**The device.** The same gate again on the axis the fixtures above hardcode. Every equivalence
+test in this file trains at ``device="cpu"``, and #105 was two separate resume bugs sitting
+behind that one default — a payload device-mapped onto the accelerator with the RNG block
+inside it, and a mask stream drawn from a device generator nothing captured. Neither is
+CUDA-specific and neither needs a rented box: ``mps`` reproduces both, and the laptop this
+suite runs on has one. What cannot be reached without hardware — the CUDA branch — is stood in
+for rather than skipped, because a group that runs only where the hardware happens to be is
+what let this file be green through both bugs.
 """
 
 from __future__ import annotations
@@ -111,7 +122,9 @@ def test_a_checkpoint_carries_everything_needed_to_continue(cfg, policy):
     assert loaded.config == cfg and loaded.config_hash == cfg.config_hash
     assert set(loaded.model) == set(trainer.model.state_dict())
     assert loaded.optimizer["param_groups"][0]["name"] == "decay"
-    assert set(loaded.rng) == set(ckpt_mod.RNG_STREAMS)
+    # The optional streams are *written* on every box, present or not, so the payload's shape
+    # does not depend on what wrote it — only their values do (#105).
+    assert set(loaded.rng) == set(ckpt_mod.RNG_STREAMS) | set(ckpt_mod.OPTIONAL_RNG_STREAMS)
     assert loaded.fingerprint == fingerprint_for(cfg)
     assert loaded.fingerprint.dataset_version and loaded.fingerprint.selection_list_md5
 
@@ -241,6 +254,190 @@ def test_a_checkpoint_written_before_the_stream_removal_still_resumes(cfg, polic
     loaded = ckpt_mod.load_checkpoint(path)
     ckpt_mod.restore_rng(loaded.rng, generator=train_mod.seeded_generator(cfg))
     assert trajectory(cfg, steps=6, policy=policy, resume=True)[0].step == 4
+
+
+# --- The device the RNG block arrives on --------------------------------------
+
+#: Every non-CPU device this box actually has.
+#:
+#: :func:`~pretrain.train.train_resumable` loads with ``map_location=trainer.device``, so on any
+#: of them the whole payload arrives off the CPU — the RNG block included, whose streams are CPU
+#: ``ByteTensor``s by definition. #105 was that the restore did not put them back.
+#:
+#: **This is not a CUDA-only gate, which is the whole reason it can live here.**
+#: ``torch.set_rng_state`` wants a CPU tensor from *every* accelerator, so an Apple-silicon
+#: laptop with no CUDA at all reproduces #105's traceback line for line on ``mps`` — and the
+#: laptop is where this suite runs. On the rented box the same test runs on ``cuda`` with
+#: nothing changed.
+ACCELERATORS = [
+    name
+    for name, available in (
+        ("cuda", torch.cuda.is_available()),
+        ("mps", torch.backends.mps.is_available()),
+    )
+    if available
+]
+
+
+class ArrivedOnADevice:
+    """An RNG stream as ``map_location`` leaves it: on an accelerator, and staying there.
+
+    Not a tensor and not trying to be one — it implements ``.to`` and ``.device`` and nothing
+    else, because those are what a restore touches. What it stands in for is the single property
+    that made #105 possible and that a box with no accelerator cannot otherwise show:
+    ``.to(dtype)`` names a dtype and not a device, so it preserves the device. That is the whole
+    bug — three conversions that changed the dtype of a tensor already ``uint8``, and moved it
+    nowhere. ``cuda:0`` because that is where the payload really lands; any non-CPU device
+    would do, which is the point.
+
+    The two overloads real ``Tensor.to`` offers here are honoured in the order it demands —
+    ``to(dtype)`` and ``to(device, dtype)`` — so a call this accepts is one the production code
+    could actually make.
+    """
+
+    def __init__(self, state: torch.Tensor):
+        self._state = state
+        self.device = torch.device("cuda:0")
+
+    def to(self, *args, **kwargs):
+        target, dtype = kwargs.get("device"), kwargs.get("dtype")
+        if args and isinstance(args[0], torch.dtype):
+            dtype = args[0]  # `.to(dtype)` — a device may not follow it
+        elif args:
+            target = args[0]
+            dtype = args[1] if len(args) > 1 else dtype
+        if target is None or torch.device(target).type != "cpu":
+            return self  # converted, unmoved, and still unusable
+        return self._state if dtype is None else self._state.to(dtype)
+
+
+def test_restore_rng_installs_cpu_state_when_the_block_arrived_on_a_device(cfg):
+    """#105's torch and DataLoader streams, on a box with no accelerator at all.
+
+    The device test below is the one that measures the real path, and it is skipped on a
+    CPU-only box. This one cannot be: it is what keeps the *class* pinned wherever the suite
+    runs, which after #104 is the property worth paying for. It fails before the fix with the
+    same ``TypeError`` a GPU raises.
+    """
+    generator = train_mod.build_loader(cfg, "train").generator
+    torch.manual_seed(7)
+    state = ckpt_mod.capture_rng(generator=generator)
+    expected = (torch.rand(3), torch.rand(3, generator=generator))
+
+    torch.manual_seed(99)
+    generator.manual_seed(99)
+    on_device = dict(
+        state,
+        torch=ArrivedOnADevice(state["torch"]),
+        dataloader=ArrivedOnADevice(state["dataloader"]),
+    )
+    ckpt_mod.restore_rng(on_device, generator=generator)
+
+    assert torch.equal(torch.rand(3), expected[0])
+    assert torch.equal(torch.rand(3, generator=generator), expected[1])
+
+
+def test_the_cuda_streams_are_put_back_on_the_cpu_too(cfg, monkeypatch):
+    """#105's third site, which no accelerator available here reaches.
+
+    ``torch.cuda.set_rng_state_all`` wants CPU ``ByteTensor``s exactly as
+    ``torch.set_rng_state`` does — CUDA's generators keep their state on the host — so the
+    stream device-mapped onto ``cuda:0`` is refused there too. Only a CUDA box runs this
+    branch for real, so the CUDA surface is stood in for and what the call *receives* is what
+    is asserted on. It is the cheapest way to stop the one site the fix could have missed from
+    being the third axis.
+    """
+    state = dict(ckpt_mod.capture_rng(), cuda=[ArrivedOnADevice(torch.get_rng_state())])
+    installed: list = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "set_rng_state_all", installed.append)
+
+    ckpt_mod.restore_rng(state)
+
+    [streams] = installed
+    assert [s.device.type for s in streams] == ["cpu"]
+    assert [s.dtype for s in streams] == [torch.uint8]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="this box has no mps device")
+def test_the_mps_stream_round_trips_where_that_device_exists():
+    """The stream the gate below turned up, asserted on its own so a failure says which.
+
+    :func:`pretrain.model.random_masking` draws from the ambient generator *of the tensor's
+    device*, so on ``mps`` the mask comes from a stream that "torch plus CUDA" does not name.
+    Uncaptured, the resumed run drew a different mask from the kill point on and the loss
+    trajectory parted in the fourth decimal — a resume that looks like a rounding difference
+    and is not one.
+    """
+    torch.mps.manual_seed(7)
+    state = ckpt_mod.capture_rng()
+    expected = torch.rand(3, device="mps")
+
+    torch.mps.manual_seed(99)
+    ckpt_mod.restore_rng(state)
+    assert torch.equal(torch.rand(3, device="mps"), expected)
+
+
+def test_a_checkpoint_written_without_the_optional_streams_still_resumes(cfg, policy):
+    """The mirror of the pre-#104 test, for the key #105 added.
+
+    :data:`~pretrain.checkpoint.OPTIONAL_RNG_STREAMS` is deliberately not in the set a resume
+    refuses a checkpoint for missing, and this is the assertion that says so. Every checkpoint
+    already sitting on a rented box was written before the key existed, and a run in flight
+    surviving the change is the entire point of §11.
+    """
+    path = write_one(policy, cfg, epoch=1, step=4)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    for stream in ckpt_mod.OPTIONAL_RNG_STREAMS:
+        payload["rng"].pop(stream)
+    ckpt_mod.atomic_save(payload, path)
+
+    loaded = ckpt_mod.load_checkpoint(path)
+    ckpt_mod.restore_rng(loaded.rng, generator=train_mod.seeded_generator(cfg))
+    assert trajectory(cfg, steps=6, policy=policy, resume=True)[0].step == 4
+
+
+@pytest.mark.parametrize(
+    "device",
+    ACCELERATORS
+    or [
+        pytest.param(
+            "cpu",
+            marks=pytest.mark.skip(
+                reason="this box has no non-CPU device, so #105's gate did not run here"
+            ),
+        )
+    ],
+)
+def test_a_checkpoint_resumes_when_the_payload_arrived_on_a_device(cfg, policy, device):
+    """§15.4's gate again, on the axis it was blind on: the device the run trains on.
+
+    Every assertion above this line trains at ``device="cpu"``, where ``map_location`` moves
+    nothing and the RNG block is never anywhere it should not be. R0 (#81) ran the real thing
+    on a rented GPU and it raised before the first resumed step — the gate had been green
+    throughout at a device no run uses, which is #104's shape on a second axis.
+
+    So this runs wherever the box can put a tensor. It is deliberately the *whole* loop rather
+    than a load-and-restore unit: what broke was ``train_resumable``'s
+    ``map_location=trainer.device``, and a test that hands ``restore_rng`` a dict of its own
+    making would not have seen it.
+
+    It earned that scope immediately. With #105's device-mapping fixed the resume stopped
+    raising and was still not bit-identical, because the mask draw reads the ambient generator
+    of *its own device* and only the CPU's and CUDA's were ever captured — a second stream
+    missing on a second axis, found by the first test to run the loop anywhere but the CPU. The
+    ``lr`` assertion is the schedule's, and it holds regardless; the ``loss`` one is the one
+    that both of those bugs broke.
+    """
+    uninterrupted = trajectory(cfg, steps=DEVICE_TOTAL, device=device)
+
+    trajectory(cfg, steps=KILL_AT, policy=policy, device=device)
+    resumed = trajectory(cfg, steps=DEVICE_TOTAL, policy=policy, resume=True, device=device)
+
+    assert [r.step for r in resumed] == list(range(KILL_AT, DEVICE_TOTAL))
+    assert [r.loss for r in resumed] == [r.loss for r in uninterrupted[KILL_AT:]]
+    assert [r.lr for r in resumed] == [r.lr for r in uninterrupted[KILL_AT:]]
 
 
 # --- Retention ----------------------------------------------------------------
@@ -434,10 +631,18 @@ def test_a_val_loader_is_read_in_manifest_order_rather_than_shuffled(cfg):
 KILL_AT = 5
 TOTAL = KILL_AT + 50
 
+#: The device gate's total. Shorter than :data:`TOTAL` on purpose: §15.4 asks for ≥50 steps of
+#: agreement from the *equivalence* gate, and it gets them on the CPU. What the device axis adds
+#: is whether the payload survives arriving on an accelerator at all (#105), which the first
+#: resumed step settles — 15 further steps across three whole-epoch boundaries is margin, not
+#: the measurement, and every one of them is paid for three times on hardware the laptop shares
+#: with everything else it is doing.
+DEVICE_TOTAL = KILL_AT + 15
 
-def trajectory(cfg, *, steps, policy=None, resume=False, on_step=None):
+
+def trajectory(cfg, *, steps, policy=None, resume=False, on_step=None, device="cpu"):
     return train_mod.train_resumable(
-        cfg, steps=steps, policy=policy, resume=resume, device="cpu", on_step=on_step
+        cfg, steps=steps, policy=policy, resume=resume, device=device, on_step=on_step
     )
 
 
