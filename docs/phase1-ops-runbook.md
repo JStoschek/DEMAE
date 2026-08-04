@@ -2,8 +2,8 @@
 
 **Scope:** everything between "I have a plan and a budget" and "the box is gone and the run survived it." The recipe itself lives in [`phase1-pretraining-plan.md`](phase1-pretraining-plan.md); this is the operational wrapper around it.
 **Hardware:** single rented GPU, vast.ai. **Store:** Cloudflare R2, account `79083f36be71e95fad1b0b06d2bb62a1`.
-**Scripts:** [`push_code.sh`](../scripts/push_code.sh), [`provision_box.sh`](../scripts/provision_box.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
-**Status:** v2, 2026-08-03 — the four gaps R0 hit on a live box are closed in the scripts (#107); v1 was 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
+**Scripts:** [`push_code.sh`](../scripts/push_code.sh), [`provision_box.sh`](../scripts/provision_box.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`watch_run.sh`](../scripts/watch_run.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
+**Status:** v3, 2026-08-04 — R1 ran end-to-end on a live box (#82); step 7 is no longer "let it run" and the idle-billing gap it exposed is closed by `watch_run.sh`. v2 was 2026-08-03 (#107's four R0 gaps), v1 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
 
 ---
 
@@ -17,7 +17,7 @@
 | 4 | Push code, then provision | laptop → box | `push_code.sh --provision` |
 | 5 | Read the provision footer | — | — |
 | 6 | Start training and the sync loop | box, tmux | `sync_checkpoints.sh` |
-| 7 | Let it run | — | — |
+| 7 | Let it run, and be told when it stops | laptop | `watch_run.sh` |
 | 8 | Verify, then destroy | laptop | `teardown_box.sh` |
 | 9 | Sync the hauled W&B runs | laptop | `wandb sync` |
 
@@ -256,6 +256,26 @@ The loop exits by itself once training has started and then stopped, after a fin
 - **If the box vanishes, run the exact same command on the replacement.** Resume is the default: the launcher picks up the newest checkpoint in `runs/R1` and prints which one before spending anything. Pull the directory back from the bucket first — the box that vanished took its copy with it.
 - `wandb_mode="online"` avoids offline run directories entirely. If you run offline instead, those directories are unique to the box until `wandb sync` ships them, and teardown will warn about them.
 
+**Be told when it ends, from the laptop:**
+
+```bash
+scripts/watch_run.sh --host demae-box --run-id R1
+```
+
+One line per event on stdout, so it drives a notifier or a `| while read` loop; silence means healthy. It emits a milestone line every 50 epochs and exactly one terminal event — `finished` (0), `died` (1), or `unreachable` (2) — and those three are deliberately **not** interchangeable. A vanished box, a crashed trainer and a clean finish all look identical from the process table, so `finished` is keyed on the summary line `pretrain.launch` prints at [`launch.py:339`](../src/pretrain/launch.py:339) rather than on the *absence* of a process. An unreachable box is never reported as a finish: on vast that state means hurry, not done.
+
+**Prove it on the box first, before trusting its silence** — seconds, no GPU risk, exactly like `sync_checkpoints.sh --once`:
+
+```bash
+scripts/watch_run.sh --host demae-box --run-id R1 --once
+```
+
+That runs the self-test and one poll and exits, so a watcher that cannot see the run says so while you are still at the keyboard, rather than by staying quiet for eight hours. **Run this every time; the plumbing is per-box.**
+
+`--max-hours` (default 24) is the backstop for the case where every other check is wrong: it fires on the clock alone, having observed nothing, so a run that *measures* as healthy forever still ends the watch. R5 at 400–800 epochs needs an explicit larger value — and note it reports `OVERDUE`, never a completion.
+
+**It refuses to arm until it has proven its own liveness check works, in both directions** — that a sentinel process which cannot exist reads as absent, and that the run you pointed it at reads as present. R1 (#82) is why. Its watcher asked the box `pgrep -fc "pretrain.launch"`, and `pgrep -f` matches full command lines *including ssh's own*, so the count could never reach zero, the completion branch never fired, and the box billed for 7.6 idle hours (~$3.05, more than R1's own $2.90 of GPU) before a human noticed. Nothing was lost but the money. The generalisable part is why the self-test is fatal rather than a warning: **a check whose failure mode is silence needs a positive test that it can fire at all**, because a watcher that cannot observe completion is indistinguishable from a run that has not completed — for as long as you keep paying.
+
 ---
 
 ## 9. Teardown
@@ -367,4 +387,5 @@ Set a **time-based** rule, prefix `r1/`, retention outliving the run plus the an
 | Runs recorded `git sha unknown` — the box has no `.git` and §5's rsync did not ship one | **closed 2026-08-03 (#107).** The mechanism landed with #80 and the file still did not reach R0's box, because generating it was a line in this document. `push_code.sh` now regenerates and ships it in the same command as the code, and refuses to write the literal `unknown`. Step 6 still prints the value and warns rather than dies |
 | Preflight's `MIN_FREE_GB=70` is checked against total free space, so it fails on any already-provisioned box | **closed 2026-08-03 (#107).** Step 1/8 now sums what still has to land — corpus remainder by `du`, venv (or a re-sync's worth), and a 15 GB reserve that is never subtracted. Reduces to 70 GB on a fresh box, so §5's resume path and `--skip-corpus` are reachable without loosening the original check. Arithmetic pinned in `tests/test_ops_scripts.py` |
 | rclone 501s on the first upload attempt of every checkpoint | **closed 2026-08-03 (#107)** at the level the evidence supports. Step 3 replaces anything below 1.65.0 with a pinned v1.69.1 and records it in `.box_identity`; every upload path now passes `--s3-no-check-bucket`; `sync_checkpoints.sh` names the symptom when it sees an old client, fatally under `--once`. **Neither lever is confirmed on the box** — the flag has a mechanism that fits R0's evidence, the pin does not, and R5's ~1.2 GB checkpoints (4× what R0 tested) are still unexercised at any version. The first R1 sync pass is what settles it: zero ERROR lines means done |
+| Nothing told the operator a run had ended, so a finished box kept billing | **closed 2026-08-04 (#82).** R1 finished at ~07:17 UTC and was destroyed at ~14:53 — 7.6 idle hours, ~$3.05, more than the run's own $2.90. The watcher's liveness check was `pgrep -fc "pretrain.launch"` run over ssh, which matched the ssh command line carrying the pattern and so could never return zero. [`watch_run.sh`](../scripts/watch_run.sh) replaces it: the bracket form `[p]retrain.launch` cannot match itself, `finished` is keyed on the launcher's completion line rather than process absence, `unreachable` is its own state, and it refuses to arm until it has proven both directions of its own check on the live box. Pinned in `tests/test_ops_scripts.py`, including that the naive pattern *does* self-match |
 | `sync_checkpoints.sh` tested only against a local rclone remote | its logic is verified, including the prune-does-not-propagate property; behavior against R2 is not. The `--once` probe on the box closes this in seconds |

@@ -29,6 +29,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 PROVISION = SCRIPTS / "provision_box.sh"
 SYNC = SCRIPTS / "sync_checkpoints.sh"
 PUSH = SCRIPTS / "push_code.sh"
+WATCH = SCRIPTS / "watch_run.sh"
 
 
 def call(script: Path, snippet: str) -> str:
@@ -204,3 +205,122 @@ def test_the_push_refuses_a_provision_it_cannot_reach():
     done = subprocess.run([str(PUSH), "--dry-run"], capture_output=True, text=True)
     assert done.returncode == 2
     assert "--host" in done.stderr
+
+
+# --- Watching a run to its end (#82's idle-cost bug) --------------------------
+
+
+def matches(pattern: str, command_line: str) -> bool:
+    """Would ``pgrep -f pattern`` match a process whose command line is ``command_line``?
+
+    ``pgrep -f`` applies an extended regular expression to each process's *full command line*,
+    so that is the operation modelled here — ``grep -E`` over the literal string, which is the
+    same match on the same two inputs.
+
+    Not spawning a real process and calling ``pgrep``, for two reasons that both matter: the
+    box is Linux while this suite runs on the laptop, and macOS's ``pgrep`` has no ``-c`` at
+    all — so the "real" version would exercise a usage error here and pass for the wrong
+    reason. Racing a ``Popen`` against a process-table scan would make it flaky on top.
+    """
+    done = subprocess.run(
+        ["grep", "-qE", pattern],
+        input=command_line,
+        capture_output=True,
+        text=True,
+    )
+    return done.returncode == 0
+
+
+def test_the_liveness_pattern_cannot_match_its_own_command_line():
+    """The #82 bug, pinned: `pgrep -f "pretrain.launch"` matches the ssh that carries it.
+
+    R1 finished at ~07:17 UTC and billed until ~14:53 because of this one property. The
+    watcher asked the box `pgrep -fc "pretrain.launch"`, and `pgrep -f` matches full command
+    lines — so the shell ssh spawned to run the question was itself an answer. The count never
+    reached zero, the completion branch never ran, and 7.6 idle hours cost more than the run.
+
+    So the assertion is not "the pattern finds the trainer" — the broken one did that too. It
+    is that the pattern **fails to find itself**, which is the property that lets zero mean
+    zero.
+    """
+    raw = "pretrain.launch"
+    probed = call(WATCH, f'probe_pattern "{raw}"')
+
+    # It still describes the same processes...
+    assert matches(probed, "uv run python -m pretrain.launch --set foo=1")
+    # ...but a command line quoting the probe itself is not one of them. This is the whole fix.
+    assert not matches(probed, f"ssh demae-box pgrep -fc '{probed}'")
+    # And the naive form is exactly what fails that, which is why the bracket has to stay.
+    assert matches(raw, f"ssh demae-box pgrep -fc '{raw}'")
+
+
+def test_an_unreachable_box_is_never_reported_as_a_finished_run():
+    """The three non-running states are distinct, and conflating them is the expensive bug.
+
+    A vanished vast instance, a crashed trainer and a clean finish all present as "no process".
+    Reporting the first two as `finished` sends someone to tear down a box whose checkpoints
+    still needed rescuing; reporting a finish as anything else keeps paying for an idle GPU.
+    """
+    # ssh failed: the state is unknown, and unknown is never success — regardless of what the
+    # last poll happened to see.
+    assert call(WATCH, 'classify 0 0 1') == "unreachable"
+    assert call(WATCH, 'classify 0 0 0') == "unreachable"
+    # Reachable and alive is the quiet case.
+    assert call(WATCH, 'classify 1 3 0') == "running"
+    # Gone, with launch.py:339's summary line in the log: the run ended on its own terms.
+    assert call(WATCH, 'classify 1 0 1') == "finished"
+    # Gone without it: killed, OOMed, or crashed. Not a finish, and not a teardown signal.
+    assert call(WATCH, 'classify 1 0 0') == "died"
+
+
+def test_finishing_is_a_positive_signal_rather_than_an_absence():
+    """`finished` requires the completion line, so a killed run cannot be mistaken for a done one.
+
+    Process absence is symmetric — it is what a finish, a crash and a `kill -9` all look like
+    from outside. The only asymmetric evidence is the line `pretrain.launch` prints when it
+    completes (launch.py:339), so that is what the state is keyed on.
+    """
+    assert call(WATCH, 'classify 1 0 1') == "finished"
+    assert call(WATCH, 'classify 1 0 0') != "finished"
+
+
+def test_the_deadline_fires_without_observing_the_run():
+    """The backstop for the case where I am wrong about the rest of the watcher.
+
+    Every other check here measures something — a process table, a log, whether ssh answered —
+    and each can be wrong in the direction that costs money, because the expensive failure is
+    always "looks like it is still running". #82 was one way to get that. A deadline is the
+    only check that cannot be fooled by a bad measurement, because it does not take one.
+    """
+    hour = 3600
+    assert not truth(WATCH, f"overdue $(( 23 * {hour} )) 24")
+    assert truth(WATCH, f"overdue $(( 25 * {hour} )) 24")
+    # Exactly at the limit is not yet past it.
+    assert not truth(WATCH, f"overdue $(( 24 * {hour} )) 24")
+    # 0 disables — R5 may legitimately run 86 hours, and a backstop that fires mid-run would
+    # train the operator to ignore it, which is worse than not having one.
+    assert not truth(WATCH, f"overdue $(( 500 * {hour} )) 0")
+
+
+def test_the_watcher_refuses_to_arm_without_a_host():
+    done = subprocess.run([str(WATCH)], capture_output=True, text=True)
+    assert done.returncode == 2
+    assert "--host" in done.stderr
+
+
+def test_an_unreachable_box_fails_loudly_rather_than_with_ssh_s_bare_255():
+    """A watcher that dies in silence is the failure it exists to prevent, one level up.
+
+    `set -e` plus a failing ssh inside a command substitution kills the script at the
+    assignment, so the diagnosis never prints and the operator gets a bare 255 — which reads
+    like a broken invocation rather than an unreachable box. Found while testing the fix for
+    #82, which is the point: the same silence, one layer out.
+    """
+    done = subprocess.run(
+        [str(WATCH), "--host", "demae-nonexistent.invalid"],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 2, f"expected a diagnosed exit, got {done.returncode}"
+    assert "cannot reach" in done.stderr
+    assert "255" not in done.stderr
