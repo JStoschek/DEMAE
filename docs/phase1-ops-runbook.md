@@ -2,8 +2,8 @@
 
 **Scope:** everything between "I have a plan and a budget" and "the box is gone and the run survived it." The recipe itself lives in [`phase1-pretraining-plan.md`](phase1-pretraining-plan.md); this is the operational wrapper around it.
 **Hardware:** single rented GPU, vast.ai. **Store:** Cloudflare R2, account `79083f36be71e95fad1b0b06d2bb62a1`.
-**Scripts:** [`push_code.sh`](../scripts/push_code.sh), [`provision_box.sh`](../scripts/provision_box.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`watch_run.sh`](../scripts/watch_run.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
-**Status:** v3, 2026-08-04 — R1 ran end-to-end on a live box (#82); step 7 is no longer "let it run" and the idle-billing gap it exposed is closed by `watch_run.sh`. v2 was 2026-08-03 (#107's four R0 gaps), v1 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
+**Scripts:** [`push_code.sh`](../scripts/push_code.sh), [`provision_box.sh`](../scripts/provision_box.sh), [`run.sh`](../scripts/run.sh), [`sync_checkpoints.sh`](../scripts/sync_checkpoints.sh), [`watch_run.sh`](../scripts/watch_run.sh), [`teardown_box.sh`](../scripts/teardown_box.sh), [`check_corpus.py`](../scripts/check_corpus.py).
+**Status:** v4, 2026-08-04 — §7's start command is [`run.sh`](../scripts/run.sh) rather than two commands that only worked when typed by hand (#108), and the sync loop now leaves evidence that it started. v3 (2026-08-04) closed the idle-billing gap R1 exposed with `watch_run.sh` (#82); v2 was 2026-08-03 (#107's four R0 gaps), v1 2026-07-31. Steps marked **[verified]** were run end-to-end on this laptop; steps marked **[untested]** need a live box.
 
 ---
 
@@ -16,7 +16,7 @@
 | 3 | Add the SSH alias | laptop | — |
 | 4 | Push code, then provision | laptop → box | `push_code.sh --provision` |
 | 5 | Read the provision footer | — | — |
-| 6 | Start training and the sync loop | box, tmux | `sync_checkpoints.sh` |
+| 6 | Start the sync loop and training | box, tmux | `run.sh --run-id R1` |
 | 7 | Let it run, and be told when it stops | laptop | `watch_run.sh` |
 | 8 | Verify, then destroy | laptop | `teardown_box.sh` |
 | 9 | Sync the hauled W&B runs | laptop | `wandb sync` |
@@ -201,50 +201,131 @@ Step 8 writes `.box_identity` — paste those values into the W&B run tags. When
 
 ## 7. Start the run
 
-Two tmux windows. Training first:
+One command, on the box, **by absolute path**:
 
 ```bash
-cd /workspace/DEMAE && tmux new -s r1
-uv run python -m pretrain.launch --vit-base --set 'monitoring.wandb_mode="online"'
+/workspace/DEMAE/scripts/run.sh --run-id R1
 ```
 
-That one command is the whole run: §11's checkpoints on both triggers, §10's val pass, alarms,
-per-patch distribution, reconstruction grids and kNN probe, and the W&B run they all go to. It
-did not used to be — [#106](https://github.com/JStoschek/DEMAE/issues/106) composed it, and
-before that this command called the plain training loop and produced none of them.
-
-**Checkpoints go to `/workspace/DEMAE/runs/R1`** — `runs/<run_id>`, and `run_id` defaults to
-`R1`. `--checkpoint-dir` moves it; `--set run_id=R2` moves it with the arm, which is what keeps
-an ablation from resuming the baseline's weights. Read the `checkpoints` line the launcher
-prints in its first ten lines rather than trusting this paragraph: it names the directory, both
-triggers and the retention rule, and the sync loop below has to point at the same place.
-
-Then the checkpoint sync, in its own window:
+Each arm passes its own recipe after `--`, and nothing else changes:
 
 ```bash
-tmux new-window -t r1 -n sync
-scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 \
-  --remote bucket:demae-checkpoints/r1/
+/workspace/DEMAE/scripts/run.sh --run-id R2 -- --set masking.ratio=0.9
+/workspace/DEMAE/scripts/run.sh --run-id R3 -- --set loss.norm_pix_loss=false
+/workspace/DEMAE/scripts/run.sh --run-id R5 -- --vit-base
 ```
 
-Prove the credentials first, before committing GPU hours — `--once` probes the remote even when no checkpoint exists yet:
+`--dry-run` prints the whole plan — every command, in order — and touches nothing.
 
-```bash
-scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 \
-  --remote bucket:demae-checkpoints/r1/ --once
-```
+**[verified] 2026-08-04, on a live RTX 5090 box** (instance 46808051), start to finish. The bug
+reproduced first: a pane created with `tmux new-session -c /workspace/DEMAE` reported
+`pane_current_path` `/workspace`, and `scripts/sync_checkpoints.sh` from it answered `No such
+file or directory`. Then, through `run.sh` from a pane sitting in `/workspace`: the probe
+authenticated, the sync loop came up and wrote its heartbeat, training ran 250 steps at ~5,840
+samples/s (loader wait 1.1% steady), wrote `checkpoint_e0001_s000000231.pt`, and the loop
+shipped it to the bucket, saw training exit, made its final pass and closed itself. The
+laptop-side watcher armed against the same run and reported `R9 FINISHED cleanly` off the log
+`run.sh` tees.
 
-`--once` also **refuses to run** on an rclone below the 1.65.0 floor, and the loop only warns
-about the same thing. That asymmetry is deliberate: `--once` is this pre-run probe, where nothing
-is training and the fix is to re-run provisioning; the loop is started *during* a run, and exiting
-to avoid some ERROR lines would end checkpoint shipping for the next 40 hours — the exact trade
-the script exists to refuse.
+Both failure paths were exercised on the same box, not just the working one. With
+`sync_checkpoints.sh` moved aside, the run stopped at the heartbeat gate **in one second** — the
+dead pane's `status 127` printed, the session killed, no GPU time spent. And with the sync window
+killed *under* a healthy run, the watcher reported `SYNC STALLED — no heartbeat for 1 min` from
+the laptop, with the command to restart that window, while training carried on normally.
 
-**This loop is not optional.** §11 requires checkpoints off-instance every epoch and every 30–60 minutes, because vast instances vanish permanently rather than pause. Nothing in `src/pretrain` pushes off-instance — the launcher writes §11's checkpoints to local disk (since #106; before it, to nowhere) and `checkpoint.py` mentions syncing only in a comment, while teardown calls its own pass "the safety net, not the mechanism." Without this window, a box that disappears at hour 40 of a 43-hour run takes every checkpoint with it, not merely the last interval's worth.
+**Why this is a script and not the two commands this section used to print.** Both of them were
+correct, and neither ran ([#108](https://github.com/JStoschek/DEMAE/issues/108)). The version
+here through v3 was `cd /workspace/DEMAE && tmux new -s r1`, and the vastai image's shell rc
+`cd`s every new pane to `/workspace` — overriding even `tmux new-session -c /workspace/DEMAE`,
+confirmed on R1's box where `tmux display-message -p '#{pane_current_path}'` answered
+`/workspace` for a pane created with `-c`. Typed by hand into an already-attached pane it
+happened to work. Driven any other way — `send-keys`, a detached session, a script, an agent —
+the two halves broke differently, and the asymmetry is the whole point:
 
-**Check the first pass reports a file rather than `ok` over nothing.** The loop reports `ok` whether or not the directory holds anything, which is correct behaviour for a sync and was how the empty-directory case survived unnoticed until #106. One epoch in, `ls /workspace/DEMAE/runs/R1` should show a `checkpoint_e*.pt`.
+- **Training failed loudly.** `uv run` found no `pyproject.toml`, fell back to the image's
+  interpreter, and died with `ModuleNotFoundError: No module named 'pretrain'`.
+- **The sync loop failed silently.** `scripts/sync_checkpoints.sh: No such file or directory` —
+  one line, in a window nobody is watching, with no retry and no rising failure count, because
+  the loop that prints those never started.
+
+R1 escaped it only because the loud half failed at the same instant and forced a look. Had the
+cwd been right for `uv run` and wrong for the relative path — or had the two windows been started
+separately, which is what this section told you to do — R1 would have trained 7.2 hours with no
+checkpoint ever leaving the box. This is [#106](https://github.com/JStoschek/DEMAE/issues/106)'s
+shape on a third axis: #106 was the *launcher* composing no sync, this was the *documented
+command* not starting one. A paragraph cannot be tested, and this whole class of bug is
+"documented correctly, executed differently" — so the fix is a committed script, and every
+property that failed is pinned in `tests/test_ops_scripts.py`.
+
+What [`run.sh`](../scripts/run.sh) does, in order:
+
+1. **Resolves every path from its own location**, never from the caller's cwd. That is a fact
+   about the checkout; a cwd is a fact about somebody's shell.
+2. **Probes the remote** — `sync_checkpoints.sh --once`, the gate below, which costs seconds.
+   `--skip-probe` if it has just been run.
+3. **Starts the sync loop first**, and waits for its heartbeat. The old ordering was the other
+   way round, so the cheap half's failure arrived after the expensive half was already spending.
+4. **Refuses to start training** if that heartbeat does not appear (120 s default,
+   `--heartbeat-wait`). It prints the sync window's output, kills the session, and stops.
+5. **Starts training**, tee'd to `/workspace/DEMAE/r1_train.log` — which is exactly where
+   `watch_run.sh` looks (§8). That default has always been there; until #108 nothing wrote it.
+
+**One run id, threaded everywhere:** the config's `run_id`, `runs/R1`, the bucket prefix `r1/`,
+the log, the tmux session. This section used to name the run four times across two commands and
+got one of them wrong — it passed `--vit-base` in the R1/R2/R3 position, and
+[`RunConfig.vit_base()`](../src/pretrain/config.py:753) sets `run_id="R5"`, so following it
+literally for R1 would have trained a ViT-B into `runs/R5` while the sync window shipped
+`runs/R1`. `--run-id` now moves all of them together, and a `--set run_id=` after `--` is
+refused rather than allowed to move the config alone.
+
+Read the `checkpoints` line the launcher prints in its first ten lines rather than trusting this
+paragraph: it names the directory, both triggers and the retention rule, and it has to be the
+directory the sync window was pointed at.
+
+**The sync loop is not optional.** §11 requires checkpoints off-instance every epoch and every
+30–60 minutes, because vast instances vanish permanently rather than pause. Nothing in
+`src/pretrain` pushes off-instance — the launcher writes §11's checkpoints to local disk (since
+#106; before it, to nowhere) and `checkpoint.py` mentions syncing only in a comment, while
+teardown calls its own pass "the safety net, not the mechanism." Without that window, a box that
+disappears at hour 40 of a 43-hour run takes every checkpoint with it, not merely the last
+interval's worth.
+
+**The heartbeat is what makes "never started" a different observation from "started and found
+nothing".** The loop writes `runs/R1/.sync_heartbeat` — one line, a UTC stamp, the pass number,
+the remote — as soon as it is up and again after every pass, including the passes that find an
+empty directory and the ones that fail. An empty run directory early in a run is the *normal*
+state, so silence there could never be read as health. `--once` deliberately writes none: the
+probe proving the credentials is not the loop proving it started, and R1 ran the probe
+successfully while the loop it was meant to bless never came up. The file is a dotfile and the
+include pattern is `checkpoint_*.pt`, so it never reaches the bucket.
+
+**Check the first pass reports a file rather than `ok` over nothing.** The loop reports `ok`
+whether or not the directory holds anything, which is correct behaviour for a sync and was how
+the empty-directory case survived unnoticed until #106. One epoch in, `ls
+/workspace/DEMAE/runs/R1` should show a `checkpoint_e*.pt`.
 
 The loop exits by itself once training has started and then stopped, after a final pass.
+
+**If `run.sh` is not there** — an old push, or a box whose `scripts/` predates it — the two
+halves by hand, absolute throughout, are:
+
+```bash
+tmux new-session -d -s r1 -n sync /workspace/DEMAE/scripts/sync_checkpoints.sh --checkpoint-dir /workspace/DEMAE/runs/R1 --remote bucket:demae-checkpoints/r1/
+tmux new-window -t r1: -n train "cd /workspace/DEMAE && uv run python -m pretrain.launch --set run_id=R1 --set monitoring.wandb_mode=online 2>&1 | tee -a /workspace/DEMAE/r1_train.log"
+```
+
+Two long lines rather than four wrapped ones, on purpose: a `\`-continued command pasted into a
+pane is one more thing that behaves differently depending on how it is delivered, which is the
+bug above. Nothing relative, nothing that assumes a pane's cwd, the run id said explicitly, and
+the `cd` inside the quotes rather than before them. Check `runs/R1/.sync_heartbeat` exists before
+walking away — started this way, nothing else will. Fix the push instead if you can: `scripts/`
+is in `push_code.sh`'s payload, so `run.sh` ships with every push.
+
+`--once` **refuses to run** on an rclone below the 1.65.0 floor, and the loop only warns about
+the same thing. That asymmetry is deliberate: `--once` is the pre-run probe, where nothing is
+training and the fix is to re-run provisioning; the loop is started *during* a run, and exiting
+to avoid some ERROR lines would end checkpoint shipping for the next 40 hours — the exact trade
+the script exists to refuse.
 
 ---
 
@@ -262,6 +343,8 @@ The loop exits by itself once training has started and then stopped, after a fin
 scripts/watch_run.sh --host demae-box --run-id R1
 ```
 
+It reads `/workspace/DEMAE/r1_train.log` by default — `<root>/<run-id lowercased>_train.log`, which is where [`run.sh`](../scripts/run.sh) tees the trainer. That default has always been here; until #108 nothing wrote the file, so a watcher pointed at a perfectly healthy run read an empty log and could never see the completion line it keys `finished` on. `--log` still overrides it.
+
 One line per event on stdout, so it drives a notifier or a `| while read` loop; silence means healthy. It emits a milestone line every 50 epochs and exactly one terminal event — `finished` (0), `died` (1), or `unreachable` (2) — and those three are deliberately **not** interchangeable. A vanished box, a crashed trainer and a clean finish all look identical from the process table, so `finished` is keyed on the summary line `pretrain.launch` prints at [`launch.py:339`](../src/pretrain/launch.py:339) rather than on the *absence* of a process. An unreachable box is never reported as a finish: on vast that state means hurry, not done.
 
 **Prove it on the box first, before trusting its silence** — seconds, no GPU risk, exactly like `sync_checkpoints.sh --once`:
@@ -271,6 +354,15 @@ scripts/watch_run.sh --host demae-box --run-id R1 --once
 ```
 
 That runs the self-test and one poll and exits, so a watcher that cannot see the run says so while you are still at the keyboard, rather than by staying quiet for eight hours. **Run this every time; the plumbing is per-box.**
+
+**It also watches the sync loop, not just the trainer.** `run.sh` gates on the heartbeat once, at
+startup, which closes #108's failure — the loop that never came up. A loop that dies at hour 3
+looks identical from the training side, and this is the only process observing the box from
+somewhere the box cannot take with it. So when `runs/R1/.sync_heartbeat` goes older than
+`--sync-stale-minutes` (default 90 — two of the loop's own 30-minute passes plus room for a slow
+upload; 0 disables), it prints `SYNC STALLED` with the command to restart that window, and keeps
+watching. It is deliberately **not** a terminal state: the run is worth finishing and the
+checkpoints are still on the box. It says so once, and says so again when the heartbeat recovers.
 
 `--max-hours` (default 24) is the backstop for the case where every other check is wrong: it fires on the clock alone, having observed nothing, so a run that *measures* as healthy forever still ends the watch. R5 at 400–800 epochs needs an explicit larger value — and note it reports `OVERDUE`, never a completion.
 
@@ -388,4 +480,7 @@ Set a **time-based** rule, prefix `r1/`, retention outliving the run plus the an
 | Preflight's `MIN_FREE_GB=70` is checked against total free space, so it fails on any already-provisioned box | **closed 2026-08-03 (#107).** Step 1/8 now sums what still has to land — corpus remainder by `du`, venv (or a re-sync's worth), and a 15 GB reserve that is never subtracted. Reduces to 70 GB on a fresh box, so §5's resume path and `--skip-corpus` are reachable without loosening the original check. Arithmetic pinned in `tests/test_ops_scripts.py` |
 | rclone 501s on the first upload attempt of every checkpoint | **closed 2026-08-03 (#107)** at the level the evidence supports. Step 3 replaces anything below 1.65.0 with a pinned v1.69.1 and records it in `.box_identity`; every upload path now passes `--s3-no-check-bucket`; `sync_checkpoints.sh` names the symptom when it sees an old client, fatally under `--once`. **Neither lever is confirmed on the box** — the flag has a mechanism that fits R0's evidence, the pin does not, and R5's ~1.2 GB checkpoints (4× what R0 tested) are still unexercised at any version. The first R1 sync pass is what settles it: zero ERROR lines means done |
 | Nothing told the operator a run had ended, so a finished box kept billing | **closed 2026-08-04 (#82).** R1 finished at ~07:17 UTC and was destroyed at ~14:53 — 7.6 idle hours, ~$3.05, more than the run's own $2.90. The watcher's liveness check was `pgrep -fc "pretrain.launch"` run over ssh, which matched the ssh command line carrying the pattern and so could never return zero. [`watch_run.sh`](../scripts/watch_run.sh) replaces it: the bracket form `[p]retrain.launch` cannot match itself, `finished` is keyed on the launcher's completion line rather than process absence, `unreachable` is its own state, and it refuses to arm until it has proven both directions of its own check on the live box. Pinned in `tests/test_ops_scripts.py`, including that the naive pattern *does* self-match |
+| §7's start command landed in the wrong directory, and its sync half failed silently | **closed 2026-08-04 (#108).** The image's rc `cd`s every new pane to `/workspace`, overriding `tmux new-session -c /workspace/DEMAE`, so §7's two commands worked only when typed by hand into an attached pane: `uv run` died loudly with `ModuleNotFoundError`, and `scripts/sync_checkpoints.sh` — a relative path — printed one "No such file or directory" and never started, with no retry and no rising failure count. [`run.sh`](../scripts/run.sh) replaces both: absolute throughout, sync started *first* and required to prove itself alive before any GPU time, one `--run-id` threaded through the config, the directory, the bucket prefix, the log and the session. The loop now writes `.sync_heartbeat` so "never started" and "started and found nothing" are different observations, and `--once` deliberately writes none. Pinned in `tests/test_ops_scripts.py`, including that §7's own fenced commands hold no relative script path — and **verified on a live box**, both the working path and the refusal |
+| §7 documented `--vit-base` in the R1/R2/R3 position | **closed 2026-08-04 (#108).** `RunConfig.vit_base()` sets `run_id="R5"`, so following §7 literally for R1 would have trained a ViT-B into `runs/R5` while the sync window shipped `runs/R1`. R1 used the bare default and escaped it. `run.sh --run-id` now sets the config's run id explicitly on every run, refuses a second `run_id=` in the passthrough args, and warns when `--vit-base` is attached to another arm; a test refuses any `--vit-base` example in this document that does not name R5 |
+| `watch_run.sh` could never arm: its self-test read every zero count as two lines | **closed 2026-08-04**, found on a live box while verifying #108. `pgrep -fc` and `grep -c` both print their count *and* exit non-zero when it is zero, so the `\|\| echo 0` guard — there for the different failure of the command being absent — fired on the ordinary empty case too and the answer arrived as `0\n0`. Every comparison against `"0"` then read false, in both directions: the self-test decided its impossible sentinel was running and refused to arm as if #82 were back, and `completed_marker` decided the completion line was present, which reports a **crashed** run as `finished`. One parse function now, with anything non-numeric still meaning "unknown" rather than zero. Pinned in `tests/test_ops_scripts.py`; the armed watcher then reported a real run's finish from the laptop |
 | `sync_checkpoints.sh` tested only against a local rclone remote | its logic is verified, including the prune-does-not-propagate property; behavior against R2 is not. The `--once` probe on the box closes this in seconds |

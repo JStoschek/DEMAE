@@ -58,6 +58,10 @@ ONCE=0
 # value. Deliberately not derived from the config: a backstop computed from the same numbers the
 # run trusts would fail in the same direction the run does.
 MAX_HOURS=24
+# Two of the sync loop's own 30-minute passes, plus room for a slow upload. One missed pass is a
+# big checkpoint on a slow uplink; three is a loop that is not there.
+SYNC_STALE_MINUTES=90
+HEARTBEAT=""
 
 # --- The two pure functions, and the whole point of the file ----------------------------------
 
@@ -91,6 +95,63 @@ overdue() {
     (( elapsed_s > max_h * 3600 ))
 }
 
+# What a remote count actually said, or nothing at all.
+#
+# `pgrep -fc` and `grep -c` both print their count **and exit non-zero when it is zero**, so the
+# `|| echo 0` guard below — which is there for the different failure of the command not existing
+# — fires on the ordinary empty case as well, and the answer comes back as two lines: `0\n0`.
+# Every comparison against the literal `"0"` then reads false. Found on a live box while testing
+# #108, and it broke this file in both directions at once: `self_test` decided its impossible
+# sentinel was running and refused to arm as if the #82 bug were back, and `completed_marker`
+# decided the completion line was present — which would report a *crashed* run as `finished`,
+# the exact conflation this file exists to prevent.
+#
+# Anything that is not a number reads as empty rather than as zero. ssh having failed and
+# nothing being alive are different observations, and only one of them is a run that ended.
+#
+# `|| true` because this file runs under `set -o pipefail` and `grep` reports "no match" as a
+# failed pipeline — which would take the script down at the assignment, with ssh's bare exit
+# status and none of the diagnosis, exactly as an unhandled ssh failure used to.
+read_count() {
+    local found
+    found="$(printf '%s\n' "$1" | grep -E '^[0-9]+$' | tail -1 || true)"
+    printf '%s\n' "$found"
+}
+
+# Has the checkpoint sync gone quiet?
+#
+# `run.sh` gates on the heartbeat once, when it starts a run, and that closes the failure #108
+# describes: the loop that never came up. The loop can also *stop* — a closed pane, a full disk,
+# a kill — and that failure looks identical from the training side, which is the whole reason
+# the heartbeat exists. This is the only process watching the box from somewhere the box cannot
+# take with it, so the observation belongs here.
+#
+# Deliberately not a terminal state: the run is still worth finishing and the checkpoints are
+# still on the box. What is wanted is one line in front of the operator while there is still time
+# to restart the window.
+sync_stalled() {
+    local age_s="$1" max_min="$2"
+    [[ "${max_min%.*}" -gt 0 ]] || return 1        # 0 disables
+    (( age_s > max_min * 60 ))
+}
+
+# Where the sync loop's heartbeat is, given the repo root on the box and a run id. Carried by
+# both the script that writes it and the one that reads it, like `train_log_path` below and
+# `RCLONE_MIN` between provisioning and the loop; the tests hold the copies equal.
+heartbeat_path() { printf '%s/runs/%s/.sync_heartbeat\n' "$1" "$2"; }
+
+# Where the training log is, given the repo root on the box and a run id.
+#
+# This default has always been here; until #108 nothing wrote the file. §7 printed training to a
+# tmux pane and no further, so a watcher pointed at a perfectly healthy run read an empty log and
+# could never see the completion line it keys `finished` on. `scripts/run.sh` tees the trainer
+# here, and carries its own copy of this expression for the same reason `RCLONE_MIN` is carried
+# twice: that one runs on the box, this one on the laptop, and neither can source the other at
+# the moment it needs the answer. tests/test_ops_scripts.py holds the two in step.
+train_log_path() {
+    printf '%s/%s_train.log\n' "$1" "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+}
+
 # Turn what was observed into one of the four states. Split out so the decision is testable
 # without a box, and so `unreachable` cannot be silently folded into `finished` by a later edit.
 classify() {
@@ -112,6 +173,8 @@ watch_run.sh — watch a run on a rented box and report, once, when it stops.
   --run-id ID          run id; sets the default log path (default: R1)
   --root DIR           repo root on the box (default: /workspace/DEMAE)
   --log PATH           training log to read (default: <root>/<run-id lowercased>_train.log)
+  --heartbeat PATH     the sync loop's heartbeat (default: <root>/runs/<run-id>/.sync_heartbeat)
+  --sync-stale-minutes N  warn when that heartbeat is older than N (default: 90; 0 disables)
   --interval SECONDS   poll interval (default: 300)
   --milestone-every N  emit a progress line every N epochs (default: 50; 0 disables)
   --once               run the self-test and one poll, print the state, exit
@@ -128,6 +191,8 @@ while [[ $# -gt 0 ]]; do
         --run-id) RUN_ID="$2"; shift 2 ;;
         --root) ROOT="$2"; shift 2 ;;
         --log) LOG="$2"; shift 2 ;;
+        --heartbeat) HEARTBEAT="$2"; shift 2 ;;
+        --sync-stale-minutes) SYNC_STALE_MINUTES="$2"; shift 2 ;;
         --interval) INTERVAL="$2"; shift 2 ;;
         --milestone-every) MILESTONE_EVERY="$2"; shift 2 ;;
         --once) ONCE=1; shift ;;
@@ -138,7 +203,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$HOST" ]] || { echo "--host is required" >&2; usage >&2; exit 2; }
-[[ -n "$LOG" ]] || LOG="$ROOT/$(printf '%s' "$RUN_ID" | tr '[:upper:]' '[:lower:]')_train.log"
+[[ -n "$LOG" ]] || LOG="$(train_log_path "$ROOT" "$RUN_ID")"
+[[ -n "$HEARTBEAT" ]] || HEARTBEAT="$(heartbeat_path "$ROOT" "$RUN_ID")"
 
 die() { printf 'watch_run: %s\n' "$*" >&2; exit 2; }
 
@@ -156,15 +222,25 @@ remote() { ssh -o ConnectTimeout=20 -o BatchMode=yes "$HOST" "$1" 2>/dev/null ||
 # reports as a finished run.
 count_alive() {
     local pattern; pattern="$(probe_pattern "$PROCESS_MATCH")"
-    remote "pgrep -fc '$pattern' 2>/dev/null || echo 0"
+    read_count "$(remote "pgrep -fc '$pattern' 2>/dev/null || echo 0")"
 }
 
 completed_marker() {
     # launch.py:339's one-line summary. Anchored, so a mention in a traceback cannot pass for it.
-    remote "grep -cE '^[0-9]+ steps: loss ' '$LOG' 2>/dev/null || echo 0"
+    read_count "$(remote "grep -cE '^[0-9]+ steps: loss ' '$LOG' 2>/dev/null || echo 0")"
 }
 
 last_epoch() { remote "grep -E '^epoch ' '$LOG' 2>/dev/null | tail -1 | awk '{print \$2}'"; }
+
+# How long ago the sync loop last said anything, in seconds. Computed **on the box**, against the
+# box's own clock, so a laptop whose clock disagrees cannot invent a stall. A missing heartbeat
+# answers with the age of the epoch — enormous — because a file that is not there is the loop
+# never having started, which is the failure this whole ticket is about and not a healthy state.
+# ssh failing answers with nothing at all, and nothing is never a stall.
+heartbeat_age() {
+    read_count "$(remote "if [ -f '$HEARTBEAT' ]; then
+            expr \$(date -u +%s) - \$(stat -c %Y '$HEARTBEAT'); else date -u +%s; fi")"
+}
 
 # --- The self-test: prove the check can fire, before trusting its silence ------------------------
 #
@@ -183,7 +259,7 @@ self_test() {
     local sentinel absent present
     sentinel="demae-watch-sentinel-no-such-process-$$"
 
-    absent="$(remote "pgrep -fc '$(probe_pattern "$sentinel")' 2>/dev/null || echo 0")"
+    absent="$(read_count "$(remote "pgrep -fc '$(probe_pattern "$sentinel")' 2>/dev/null || echo 0")")"
     [[ -n "$absent" ]] || die "self-test: cannot reach $HOST"
     [[ "$absent" == "0" ]] || die \
         "self-test: the liveness check reports $absent process(es) matching a sentinel that
@@ -207,6 +283,7 @@ self_test
 
 strikes=0
 last_milestone=0
+sync_warned=0
 
 while true; do
     # Asked first, and independently of everything below, so a run that measures as healthy
@@ -241,6 +318,28 @@ while true; do
     fi
 
     state="$(classify "$reachable" "${alive:-0}" "$completed")"
+
+    # Only while it is running: once training has stopped the loop makes its final pass and
+    # exits on purpose, and a stale heartbeat then is the design working.
+    if [[ "$state" == "running" ]]; then
+        age="$(heartbeat_age)"
+        if [[ -n "$age" ]] && sync_stalled "$age" "$SYNC_STALE_MINUTES"; then
+            if (( sync_warned == 0 )); then
+                sync_warned=1
+                printf '%s SYNC STALLED — no heartbeat for %s min; checkpoints are not leaving the box.\n' \
+                    "$RUN_ID" "$(( age / 60 ))"
+                printf 'Training is fine, which is the problem: this is the half that fails quietly (#108).\n'
+                printf 'Restart it on the box:  tmux new-window -t %s -n sync %s/scripts/run.sh --exec sync --run-id %s\n' \
+                    "$(printf '%s' "$RUN_ID" | tr '[:upper:]' '[:lower:]')" "$ROOT" "$RUN_ID"
+                remote "cat '$HEARTBEAT' 2>/dev/null || echo '(no heartbeat file at all)'"
+            fi
+        elif [[ -n "$age" ]]; then
+            # Said once when it comes back, so the earlier warning cannot be left hanging.
+            (( sync_warned == 1 )) && printf '%s sync recovered — heartbeat %s min old\n' \
+                "$RUN_ID" "$(( age / 60 ))"
+            sync_warned=0
+        fi
+    fi
 
     case "$state" in
         running)

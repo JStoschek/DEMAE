@@ -62,3 +62,9 @@ notebooks/out/
 
 # Teardown hauls land beside the repo, one directory per destroyed instance.
 teardown-*/
+
+# What a run writes at the repo root on the box: the checkpoint directories §11 prunes and syncs
+# (`runs/<run_id>`), and the training log `scripts/run.sh` tees for `watch_run.sh` to read.
+# Neither is ever committed — the checkpoints ship to the bucket and the log to the run record.
+runs/
+*_train.log

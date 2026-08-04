@@ -41,7 +41,21 @@
 #
 # Credentials: --remote names an rclone remote configured from the environment, exactly like the
 # corpus one (RCLONE_CONFIG_<NAME>_TYPE, _PROVIDER, _ENDPOINT, _ACCESS_KEY_ID, …). It needs write
-# on the checkpoint prefix and nothing else. Nothing is written to this box's disk.
+# on the checkpoint prefix and nothing else.
+#
+# The heartbeat, and the one thing this script writes locally (#108). Until it existed, "started
+# and found nothing" and "never started" were the same observation: an empty bucket, an empty run
+# directory, and no local evidence either way. Early in a run the empty case is *normal* — the
+# first checkpoint is an epoch away — so silence there could not be read as health, and #108's
+# failure was exactly that: the loop never started (a relative path, from a pane one directory
+# up), printed one line into a window nobody was watching, and left nothing behind to assert on.
+#
+# So the loop writes `<ckpt-dir>/.sync_heartbeat` as soon as it is up, before its first pass, and
+# again after every pass. `scripts/run.sh` refuses to start training until it appears — which is
+# why `--once` deliberately writes **no** heartbeat: the probe is a different run of a different
+# thing, and letting it satisfy that gate would make the gate agree with the exact confusion it
+# was built to remove. The file is a dotfile, and the include pattern is `checkpoint_*.pt`, so it
+# is never shipped to the bucket: it is evidence about this box, not an artifact.
 
 set -euo pipefail
 
@@ -52,6 +66,7 @@ ONCE=0
 VERIFY=0
 FOREVER=0
 PATTERN='checkpoint_*.pt'
+HEARTBEAT=""           # <checkpoint-dir>/.sync_heartbeat, once --checkpoint-dir is known
 
 # The rclone floor, kept in step with provision_box.sh's — tests/test_ops_scripts.py asserts the
 # two agree, because a floor that drifted would let provisioning bless what this script rejects.
@@ -76,6 +91,10 @@ sync_checkpoints.sh — copy checkpoints off the box on an interval, while the r
 
 Exits on its own when training has started and then stopped, after one final pass — so the
 window closes itself at the end of a run rather than leaving a loop nobody remembers to stop.
+
+The loop records that it is alive in <checkpoint-dir>/.sync_heartbeat, before its first pass and
+after every one. There is no flag to turn that off: a loop that leaves no evidence it ever ran is
+the state this file exists to make impossible to be in unknowingly. `--once` writes none.
 EOF
 }
 
@@ -118,6 +137,16 @@ rclone_version_lt() {
     return 1
 }
 
+# --- The heartbeat line -------------------------------------------------------------------------
+# One line, whole-file rewritten each time, leading with a UTC stamp so a reader can age it
+# without parsing the rest. `pass=0` is the loop announcing itself before its first pass — which
+# is the state run.sh gates on, and it is deliberately not the same fact as "a pass succeeded":
+# a first pass against a slow remote can take minutes, and "the loop is running" should not wait
+# on the network to become sayable.
+heartbeat_line() {
+    printf '%s pass=%s shipped=%s fails=%s remote=%s\n' "$1" "$2" "$3" "$4" "$5"
+}
+
 # Sourcing with DEMAE_LIB set stops here, before argv is read — see tests/test_ops_scripts.py.
 if [[ -n "${DEMAE_LIB:-}" ]]; then
     return 0
@@ -140,6 +169,7 @@ done
 [[ -n "$CKPT_DIR" ]] || { echo "--checkpoint-dir is required" >&2; exit 2; }
 [[ -n "$REMOTE" ]]   || { echo "--remote is required" >&2; exit 2; }
 [[ "$REMOTE" == *:* ]] || { echo "--remote must be an rclone remote (name:path)" >&2; exit 2; }
+HEARTBEAT="$CKPT_DIR/.sync_heartbeat"
 
 command -v rclone >/dev/null || die "no rclone on PATH — provision_box.sh installs it"
 
@@ -232,6 +262,19 @@ sync_once() {
     return 0
 }
 
+# Written by the loop only, and by every iteration of it — including the ones that found nothing
+# and the ones that failed, because "the loop is running and the remote is refusing it" and "the
+# loop is not running" need to be different observations too. Written to a temp file and renamed
+# so a reader never catches a half-written line; failure to write is a warning rather than a
+# death, since a full disk is not a reason to stop shipping checkpoints off a box.
+write_heartbeat() {
+    mkdir -p "$(dirname "$HEARTBEAT")" 2>/dev/null || true
+    if ! { heartbeat_line "$(stamp)" "$1" "$SHIPPED" "$FAILS" "$REMOTE" > "$HEARTBEAT.tmp" \
+        && mv "$HEARTBEAT.tmp" "$HEARTBEAT"; }; then
+        warn "cannot write $HEARTBEAT — nothing outside this window can tell this loop is alive"
+    fi
+}
+
 # A pass on the way out, so an interrupted loop still ships whatever landed since the last one.
 final_pass() {
     step "Final pass"
@@ -246,6 +289,8 @@ ok "interval ${INTERVAL}s, pattern '$PATTERN', verify=$VERIFY, rclone v$RCLONE_H
 echo "   note  this is copy-only; retention pruning on this box never reaches the bucket"
 
 if [[ "$ONCE" -eq 1 ]]; then
+    # No heartbeat on this path. See the header: the probe proving the credentials is not the
+    # loop proving it started, and #108 is what conflating those two costs.
     PASS=1
     # Probe the remote first. Without this, --once on a run that has not written its first
     # checkpoint yet returns 0 having never touched the network — which is exactly backwards for
@@ -261,9 +306,16 @@ if [[ "$ONCE" -eq 1 ]]; then
     exit 0
 fi
 
+# Said before the first pass rather than after it, so "the loop is up" does not wait on a remote
+# that may be slow — and so the gate in run.sh fails only when the loop genuinely is not there.
+write_heartbeat 0
+ok "heartbeat at $HEARTBEAT — this is how anything outside this window can tell the loop
+         started at all (#108)"
+
 while true; do
     PASS=$(( PASS + 1 ))
     sync_once || true
+    write_heartbeat "$PASS"
 
     # Exit condition, checked *after* a pass so the last checkpoint of a finished run is always
     # shipped. Only fires once training has actually been seen: starting this window before the

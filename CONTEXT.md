@@ -444,6 +444,28 @@ GitHub issue #1.
   training loop (`pretrain.monitor.train_epochs`, over `pretrain.train.train_resumable`) and one
   command; `python -m pretrain.monitor` was a second one and is gone, along with a `--set` it
   accepted and discarded. `pretrain.train` remains a tracer bullet, documented as not a run.
+- **The start command** — `scripts/run.sh --run-id R1`, a committed script rather than a runbook
+  paragraph ([#108](https://github.com/JStoschek/DEMAE/issues/108)). The general shape, and the
+  reason it is named here beside the composition above: *a command that lives in a document is
+  tested by whoever types it*. §7's two commands were correct and neither ran — the vastai
+  image's shell rc `cd`s every new pane to `/workspace`, overriding even
+  `tmux new-session -c /workspace/DEMAE`, so they worked when typed by hand into an attached pane
+  and failed every other way. Training failed loudly (`ModuleNotFoundError`); the relative
+  `scripts/sync_checkpoints.sh` failed **silently**, printing one line into a window nobody
+  watches. The fix is the same one `push_code.sh` is: make the two halves inseparable and make
+  the whole thing testable. Absolute paths resolved from the script's own location, the sync loop
+  started *first* and required to prove itself alive before any GPU time, and one `--run-id`
+  threaded through the config's `run_id`, the checkpoint directory, the bucket prefix, the
+  training log and the tmux session — because §7 named the run four times and got one wrong.
+- **Sync heartbeat** — `runs/<run_id>/.sync_heartbeat`, written by the checkpoint sync loop when
+  it comes up and after every pass. It exists to make **"never started" a different observation
+  from "started and found nothing"** (#108): an empty run directory early in a run is the normal
+  state, so an absent bucket object could never distinguish a healthy minute zero from a loop
+  that died before its first pass. `--once` — the pre-run credential probe — deliberately writes
+  none, because the probe proving the credentials is not the loop proving it started, and R1 ran
+  the probe successfully while the loop it was meant to bless never came up. The generalizable
+  half: *a process whose failure mode is silence has to emit something while it is healthy*,
+  which is the same argument `watch_run.sh`'s self-test makes one layer out.
 - **Checkpoint directory** — `runs/<run_id>`, derived rather than fixed. Two arms writing into
   one directory is how R2 resumes R1's weights, and since a relaunch resumes by default that
   would be silent; the run id is what already distinguishes two arms and what §15.7 tags the

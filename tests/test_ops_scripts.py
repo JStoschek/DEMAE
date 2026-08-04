@@ -20,16 +20,22 @@ the box runs.
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+REPO = Path(__file__).resolve().parent.parent
+SCRIPTS = REPO / "scripts"
 PROVISION = SCRIPTS / "provision_box.sh"
 SYNC = SCRIPTS / "sync_checkpoints.sh"
 PUSH = SCRIPTS / "push_code.sh"
 WATCH = SCRIPTS / "watch_run.sh"
+RUN = SCRIPTS / "run.sh"
+RUNBOOK = REPO / "docs" / "phase1-ops-runbook.md"
 
 
 def call(script: Path, snippet: str) -> str:
@@ -302,6 +308,67 @@ def test_the_deadline_fires_without_observing_the_run():
     assert not truth(WATCH, f"overdue $(( 500 * {hour} )) 0")
 
 
+def test_a_count_of_zero_comes_back_as_two_lines_and_still_reads_as_zero():
+    """Found on a live box while testing #108: `watch_run.sh --once` could never arm.
+
+    Both counting commands the watcher runs — `pgrep -fc` and `grep -c` — print their count
+    **and exit non-zero when that count is zero**. The `|| echo 0` guard exists for the other
+    failure (the command missing entirely), and it fires on the ordinary empty case too, so the
+    answer arrives as `0\\n0`. Every comparison against the literal `"0"` then reads false, and
+    the two of them fail in opposite directions:
+
+    - the self-test decides its sentinel *is* running, calls it the #82 bug, and refuses to arm
+    - `completed_marker` decides the completion line *is* in the log — so a crashed run would
+      be reported as `finished`, which is precisely the conflation that file exists to prevent
+
+    So the parse is one function, and an unparseable answer still means "unknown" rather than
+    zero, because ssh failing and nothing running must not be the same observation.
+    """
+    assert call(WATCH, "read_count \"$(printf '0\\n0')\"") == "0"
+    assert call(WATCH, 'read_count "3"') == "3"
+    assert call(WATCH, "read_count \"$(printf '2\\n0')\"") == "0", "the fallback's line wins"
+    # ssh failed: nothing at all, and nothing is not zero.
+    assert call(WATCH, 'read_count ""') == ""
+    assert call(WATCH, 'read_count "ssh: connect to host demae-box port 22: No route"') == ""
+
+
+def test_the_watcher_notices_the_sync_loop_going_quiet():
+    """#108 item 2's other half: the loop can also stop *after* it has started.
+
+    `run.sh` gates on the heartbeat once, at startup, and that closes the failure the issue
+    describes — the loop that never came up. It cannot see the loop killed at hour 3 by a closed
+    pane or a full disk, and that failure has the same shape: training stays healthy and the
+    checkpoints stop leaving the box. The watcher is already the thing polling this box every
+    five minutes from somewhere the box cannot take with it, so it is where the observation
+    belongs.
+
+    Not a terminal state. The run is still worth finishing and the checkpoints are still on the
+    box; what is wanted is a line in front of the operator while there is still time to restart
+    the window — so it warns and keeps watching.
+    """
+    minute = 60
+    assert not truth(WATCH, f"sync_stalled $(( 20 * {minute} )) 90")
+    assert truth(WATCH, f"sync_stalled $(( 95 * {minute} )) 90")
+    # The default tolerates two missed passes at the loop's own 30-minute interval; one slow
+    # upload is not a stall, and a warning that cries wolf is one the operator learns to skip.
+    assert int(call(WATCH, "printf %s $SYNC_STALE_MINUTES")) >= 2 * 30
+    # 0 disables, like every other backstop here.
+    assert not truth(WATCH, f"sync_stalled $(( 500 * {minute} )) 0")
+
+
+def test_the_watcher_and_the_loop_agree_on_where_the_heartbeat_is():
+    """A watcher looking in the wrong place reports a stall that is not happening, forever.
+
+    Same shape as `RCLONE_MIN` and `train_log_path`: the path is carried by the script that
+    writes it and the script that reads it, on two different machines, and this is what keeps
+    the copies equal.
+    """
+    for run_id in ("R1", "R5"):
+        assert call(RUN, f'heartbeat_for /workspace/DEMAE {run_id}') == call(
+            WATCH, f'heartbeat_path /workspace/DEMAE {run_id}'
+        )
+
+
 def test_the_watcher_refuses_to_arm_without_a_host():
     done = subprocess.run([str(WATCH)], capture_output=True, text=True)
     assert done.returncode == 2
@@ -324,3 +391,418 @@ def test_an_unreachable_box_fails_loudly_rather_than_with_ssh_s_bare_255():
     assert done.returncode == 2, f"expected a diagnosed exit, got {done.returncode}"
     assert "cannot reach" in done.stderr
     assert "255" not in done.stderr
+
+
+# --- Starting a run from wherever you are standing (#108) ---------------------
+#
+# The bug: §7's start command was `cd /workspace/DEMAE && tmux new -s r1`, and the vastai image's
+# shell rc `cd`s every new pane back to `/workspace`. Typed by hand into an attached pane it
+# happened to work; driven any other way the pane started one directory up, `uv run` found no
+# `pyproject.toml`, and — the half that matters — `scripts/sync_checkpoints.sh` was not there to
+# run. Training died loudly; the sync loop printed one "No such file or directory" into a window
+# nobody was watching and never started, with no retry and no rising failure count to notice.
+#
+# So the fix is a committed script rather than a corrected paragraph: this whole class of bug is
+# "documented correctly, executed differently", and a paragraph cannot be tested.
+
+
+def plan(*args: str, cwd: Path | str | None = None) -> subprocess.CompletedProcess:
+    """``run.sh --dry-run`` from ``cwd``. Prints what it would do and touches nothing.
+
+    ``--dry-run`` goes first because everything after ``--`` belongs to the launcher.
+    """
+    return subprocess.run(
+        [str(RUN), "--dry-run", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd) if cwd is not None else None,
+    )
+
+
+def test_the_plan_does_not_depend_on_the_directory_it_is_invoked_from(tmp_path):
+    """The #108 bug, pinned at its root: the pane's cwd must not reach the commands.
+
+    R1's pane was created with `tmux new-session -c /workspace/DEMAE` and started in
+    `/workspace` anyway, because the image's rc `cd`s. Every path this script emits is therefore
+    resolved from the script's *own* location, which is a fact about the checkout rather than
+    about whoever's shell started it.
+    """
+    from_repo = plan("--run-id", "R1", cwd=REPO)
+    from_elsewhere = plan("--run-id", "R1", cwd=tmp_path)
+    assert from_repo.returncode == 0, from_repo.stderr
+    assert from_elsewhere.returncode == 0, from_elsewhere.stderr
+    assert from_repo.stdout == from_elsewhere.stdout
+
+
+def test_nothing_in_the_plan_is_a_relative_path(tmp_path):
+    """`scripts/sync_checkpoints.sh` is the exact string that failed, so no line may hold it.
+
+    A relative invocation is right only for a cwd nobody controls. Absolute is the property —
+    not "the documented cwd is correct", which it already was.
+    """
+    done = plan("--run-id", "R1", cwd=tmp_path)
+    offenders = [
+        line
+        for line in done.stdout.splitlines()
+        if "scripts/" in line and f"{REPO}/scripts/" not in line
+    ]
+    assert not offenders, f"relative script invocation(s) in the plan:\n" + "\n".join(offenders)
+
+
+def test_the_run_id_reaches_every_place_that_has_to_agree_on_it():
+    """One argument, threaded — the config, the checkpoint dir, the bucket prefix, the log.
+
+    §7 used to name the run four times in two commands, and #108 item 3 is what that costs: its
+    example passed `--vit-base`, whose preset sets `run_id="R5"`, in the R1/R2/R3 position — so
+    following it literally for R1 trained a ViT-B and wrote it to `runs/R5` while the sync
+    window shipped `runs/R1`.
+    """
+    done = plan("--run-id", "R3")
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert f"{REPO}/runs/R3" in out
+    assert "run_id=R3" in out                       # the config's own run id, set explicitly
+    assert "demae-checkpoints/r3/" in out           # the bucket prefix
+    assert f"{REPO}/r3_train.log" in out            # where watch_run.sh looks by default
+    assert "tmux session     r3" in out             # and the session you attach to
+
+
+def test_the_trainer_writes_where_the_watcher_reads():
+    """`watch_run.sh` defaults to `<root>/<run-id lowercased>_train.log` and nothing wrote it.
+
+    Its own default is only useful if something produces that file; §7's command printed to a
+    tmux pane and no further. The two expressions are carried in both scripts, like `RCLONE_MIN`
+    is, and this is what holds them in step.
+    """
+    for run_id in ("R1", "R5", "R10"):
+        assert call(RUN, f'train_log_path /workspace/DEMAE {run_id}') == call(
+            WATCH, f'train_log_path /workspace/DEMAE {run_id}'
+        )
+
+
+def test_the_release_preset_cannot_be_silently_attached_to_another_arm():
+    """`--vit-base` is R5's, because `RunConfig.vit_base()` sets `run_id="R5"` itself.
+
+    Not fatal — an operator may legitimately want a ViT-B smoke test under another id, and
+    `--set run_id=` now makes the config agree with the directory either way. But it is said,
+    because the silent version of this is a run whose recipe and whose label disagree.
+    """
+    mismatched = plan("--run-id", "R1", "--", "--vit-base")
+    assert mismatched.returncode == 0, mismatched.stderr
+    assert "R5" in mismatched.stderr, "the preset's own run id is not mentioned"
+
+    matched = plan("--run-id", "R5", "--", "--vit-base")
+    assert matched.returncode == 0, matched.stderr
+    assert "R5" not in matched.stderr
+
+
+@pytest.mark.parametrize(
+    "passthrough, why",
+    [
+        (["--set", "run_id=R9"], "moves the config's run id away from the directories"),
+        (["--set=run_id=R9"], "argparse's equals form is the same flag"),
+        (["--checkpoint-dir", "/workspace/ckpt"], "moves where the trainer writes"),
+        (["--checkpoint-dir=/workspace/ckpt"], "same, spelled with an equals sign"),
+        (["--no-checkpoints"], "leaves the loop shipping a directory nothing writes to"),
+    ],
+)
+def test_a_passthrough_that_moves_the_checkpoints_out_from_under_the_loop_is_refused(
+    passthrough, why
+):
+    """Each of these reaches #108's outcome *through* the flag meant to prevent it.
+
+    The sync loop is pointed at one directory, chosen from `--run-id` before anything starts.
+    A launcher flag that sends the checkpoints somewhere else — or stops them being written —
+    leaves a run that trains healthily, writes a heartbeat, passes every check here, and never
+    gets a checkpoint off the box. That is the issue's own sentence: *"a 400-epoch run whose
+    checkpoints never leave the box, with the training side looking perfectly healthy"*.
+    """
+    done = plan("--run-id", "R2", "--", *passthrough)
+    assert done.returncode == 2, f"accepted a passthrough that {why}"
+    assert "--run-id" in done.stderr
+
+
+@pytest.mark.parametrize("flag", ["--heartbeat-wait", "--interval"])
+def test_a_gate_that_would_wait_no_time_is_refused(flag):
+    """`(( waited < abc ))` reads `abc` as zero, and a gate that waits no time passes anything.
+
+    The one check this whole file exists to hold cannot be turned off by a typo — which is the
+    same argument that makes `--run-id` validated rather than trusted.
+    """
+    done = plan("--run-id", "R1", flag, "abc")
+    assert done.returncode == 2
+    assert flag in done.stderr
+
+
+def test_the_run_id_is_a_run_id():
+    """It names a directory and a bucket prefix, so it is validated before either is built."""
+    for bad in ("", "r1 ", "../etc", "R1;rm"):
+        done = plan("--run-id", bad)
+        assert done.returncode == 2, f"{bad!r} was accepted"
+
+
+def test_starting_a_run_needs_a_run_id():
+    done = subprocess.run([str(RUN)], capture_output=True, text=True)
+    assert done.returncode == 2
+    assert "--run-id" in done.stderr
+
+
+def test_the_sync_loop_is_proven_up_before_any_gpu_time_is_spent():
+    """The ordering is the fix for the silent half, and it is the reverse of §7's.
+
+    §7 started training first and the sync loop second, so the loop's failure arrived after the
+    GPU was already spending — into a window nobody had a reason to look at yet. Starting the
+    cheap half first and refusing to start the expensive one until it has proven itself alive
+    turns a silent 7.2-hour loss into a failure at the keyboard.
+    """
+    out = plan("--run-id", "R1").stdout
+    positions = {
+        key: out.index(key)
+        for key in ("sync_checkpoints.sh", ".sync_heartbeat", "pretrain.launch")
+    }
+    assert positions["sync_checkpoints.sh"] < positions["pretrain.launch"]
+    assert positions[".sync_heartbeat"] < positions["pretrain.launch"]
+
+
+def test_the_plan_prints_the_commands_it_would_actually_run():
+    """A dry-run that prints a hand-written copy of the command is this bug, again.
+
+    #108 is "documented correctly, executed differently". A plan assembled separately from the
+    execution path would reproduce exactly that, one layer in — so both come from the same
+    arrays, and this asserts the plan carries the whole invocation rather than a summary.
+    """
+    out = plan("--run-id", "R2", "--", "--set", 'masking.ratio=0.9').stdout
+    assert "python -m pretrain.launch" in out
+    assert "masking.ratio=0.9" in out               # the passthrough reaches the trainer
+    assert "--checkpoint-dir" in out and "--remote" in out   # and the sync half is spelled out
+
+
+def test_the_run_reports_online_without_being_asked_to():
+    """`monitoring.wandb_mode` defaults to `offline`, and §7's old command overrode it by hand.
+
+    An override typed once per run is one more thing to forget, and forgetting it is quiet: the
+    run trains fine and writes an offline directory that only exists on a box which is going to
+    be destroyed. This runs on a rented box by definition, so it is what the flag was always
+    set to — and an operator who wants otherwise says so after `--`, which is applied later and
+    therefore wins.
+    """
+    out = plan("--run-id", "R1").stdout
+    assert "monitoring.wandb_mode=online" in out
+
+    overridden = plan("--run-id", "R1", "--", "--set", "monitoring.wandb_mode=offline").stdout
+    launch = [ln for ln in overridden.splitlines() if "pretrain.launch" in ln][0]
+    assert launch.index("wandb_mode=online") < launch.index("wandb_mode=offline"), (
+        "the operator's override has to come last, or it is the one that loses"
+    )
+
+
+def test_the_heartbeat_wait_answers_both_ways(tmp_path):
+    """The gate itself: absent means the loop never came up, present means it did."""
+    beat = tmp_path / ".sync_heartbeat"
+    assert not truth(RUN, f'wait_for_heartbeat "{beat}" 1')
+    beat.write_text("2026-08-04T00:00:00Z pass=0\n")
+    assert truth(RUN, f'wait_for_heartbeat "{beat}" 1')
+
+
+def test_the_gate_gives_up_the_moment_the_window_is_gone(tmp_path):
+    """#108's own failure kills the loop in milliseconds; waiting 120s to say so trains
+    the operator to ignore the wait. So the gate takes a liveness check and believes it."""
+    beat = tmp_path / ".sync_heartbeat"
+    started = time.monotonic()
+    assert not truth(RUN, f'dead() {{ return 0; }}; wait_for_heartbeat "{beat}" 120 dead')
+    assert time.monotonic() - started < 20, "it waited out the deadline it could have skipped"
+    # And a live window still gets its full wait rather than being cut short.
+    assert not truth(RUN, f'alive() {{ return 1; }}; wait_for_heartbeat "{beat}" 1 alive')
+
+
+def test_both_scripts_agree_on_the_sync_interval():
+    """The plan prints a cadence; the loop runs one. A drifted copy documents the wrong run."""
+    assert call(RUN, "printf %s $INTERVAL") == call(SYNC, "printf %s $INTERVAL")
+
+
+# --- "Started and found nothing" is not "never started" (#108 item 2) ---------
+
+
+@pytest.fixture
+def fake_rclone(tmp_path):
+    """An rclone that is new enough and always succeeds.
+
+    The sync loop's own logic is what is under test here, not rclone's — and a real one would
+    need a remote. It answers the version probe with something above the floor so the script
+    takes its normal path rather than the below-floor one, which has its own tests above.
+    """
+    binary = tmp_path / "bin" / "rclone"
+    binary.parent.mkdir(parents=True)
+    binary.write_text('#!/bin/sh\ncase "$1" in version) echo "rclone v1.69.1";; esac\nexit 0\n')
+    binary.chmod(0o755)
+    env = dict(os.environ, PATH=f"{binary.parent}:{os.environ['PATH']}")
+    return env
+
+
+def run_the_loop_until_it_beats(env, ckpt_dir: Path, seconds: float = 20) -> Path:
+    """Start the sync loop, wait for its heartbeat, stop it. Returns the heartbeat path.
+
+    Stopped by signalling the whole process group, not just bash: the loop spends most of its
+    life inside `sleep`, and bash defers a trap until the foreground command it is running
+    returns — so a bare SIGTERM to the script alone would be held for a whole interval.
+    """
+    beat = ckpt_dir / ".sync_heartbeat"
+    loop = subprocess.Popen(
+        [
+            str(SYNC),
+            "--checkpoint-dir", str(ckpt_dir),
+            "--remote", "fake:demae-checkpoints/r1/",
+            "--interval", "1",
+        ],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and not beat.exists():
+            time.sleep(0.1)
+    finally:
+        os.killpg(os.getpgid(loop.pid), signal.SIGTERM)
+        loop.wait(timeout=20)
+    return beat
+
+
+def test_the_loop_says_it_is_alive_even_with_nothing_to_ship(fake_rclone, tmp_path):
+    """The distinction the whole item turns on.
+
+    `sync_checkpoints.sh` could not tell "started and found nothing" from "never started": both
+    are an empty bucket and no local evidence. An empty run directory early in a run is the
+    *normal* state — the first checkpoint is an epoch away — so silence there cannot be read as
+    health. The loop now writes a heartbeat the moment it is up, before its first pass, and
+    again after every one.
+    """
+    ckpt = tmp_path / "runs" / "R1"          # deliberately not created: this is minute zero
+    beat = run_the_loop_until_it_beats(fake_rclone, ckpt)
+    assert beat.exists(), "the loop ran and left nothing an assert could see"
+    line = beat.read_text().strip()
+    assert "pass=" in line
+    assert "fake:demae-checkpoints/r1/" in line, "the heartbeat names what it is shipping to"
+    assert line.split()[0].endswith("Z"), f"no UTC stamp to age: {line!r}"
+
+
+def test_a_window_started_from_the_wrong_directory_still_finds_everything(
+    fake_rclone, tmp_path
+):
+    """The ticket itself, driven rather than planned — no tmux, but the same command.
+
+    `--exec sync` is what a tmux window runs, and the whole failure was that the window's cwd
+    was one directory up from the repo. So this starts it from `/`, through a checkout laid out
+    the way `push_code.sh` leaves one, and asserts the loop came up anyway. The dry-run tests
+    above check what would be *printed*; this checks what a window actually does with it.
+
+    A separate root rather than this checkout because the sync loop writes its heartbeat into
+    `<root>/runs/<run-id>`, and a test has no business writing into the working tree.
+    """
+    root = tmp_path / "workspace" / "DEMAE"
+    (root / "scripts").mkdir(parents=True)
+    for script in (RUN, SYNC):
+        (root / "scripts" / script.name).symlink_to(script)
+
+    window = subprocess.Popen(
+        [
+            str(root / "scripts" / "run.sh"),
+            "--exec", "sync",
+            "--run-id", "R1",
+            "--remote", "fake:demae-checkpoints/r1/",
+            "--interval", "1",
+        ],
+        cwd="/",                          # the pane the image's rc actually hands you
+        env=fake_rclone,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    beat = root / "runs" / "R1" / ".sync_heartbeat"
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not beat.exists():
+            time.sleep(0.1)
+    finally:
+        os.killpg(os.getpgid(window.pid), signal.SIGTERM)
+        output = window.communicate(timeout=20)[0]
+
+    assert beat.exists(), f"the window found nothing to run from `/`:\n{output}"
+    assert str(root / "runs" / "R1") in output, "it shipped from somewhere other than the root"
+
+
+def test_the_credential_probe_leaves_no_heartbeat_behind(fake_rclone, tmp_path):
+    """`--once` must not be able to satisfy the assert that the *loop* started.
+
+    This is the exact confusion #108 describes: R1 ran `--once` successfully, and the loop that
+    then failed to start produced no signal at all. If the probe wrote the same file, a launcher
+    checking for it would be reassured by the run before the one it cares about.
+    """
+    ckpt = tmp_path / "runs" / "R1"
+    ckpt.mkdir(parents=True)
+    done = subprocess.run(
+        [
+            str(SYNC),
+            "--checkpoint-dir", str(ckpt),
+            "--remote", "fake:demae-checkpoints/r1/",
+            "--once",
+        ],
+        env=fake_rclone,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not (ckpt / ".sync_heartbeat").exists()
+
+
+def test_the_heartbeat_is_never_shipped_to_the_bucket():
+    """It is local evidence about this box, not an artifact. The include pattern is what says so."""
+    assert call(SYNC, "printf %s \"$PATTERN\"") == "checkpoint_*.pt"
+    assert call(SYNC, 'heartbeat_line 2026-08-04T00:00:00Z 3 2 0 r:/').startswith("2026-")
+
+
+# --- The document, held to the same standard as the scripts -------------------
+
+
+def section(name: str) -> str:
+    """One `## ` section of the runbook, by its heading prefix."""
+    text = RUNBOOK.read_text()
+    start = text.index(f"\n## {name}")
+    end = text.find("\n## ", start + 1)
+    return text[start : end if end != -1 else len(text)]
+
+
+def fenced_commands(markdown: str) -> list[str]:
+    """Every line inside a ```bash fence."""
+    lines, inside, out = markdown.splitlines(), False, []
+    for line in lines:
+        if line.startswith("```"):
+            inside = line.startswith("```bash")
+            continue
+        if inside and line.strip():
+            out.append(line)
+    return out
+
+
+def test_section_seven_never_invokes_a_script_by_a_relative_path():
+    """The documented command is the artifact that failed, so it is asserted on.
+
+    Not a substitute for the script — the point of `run.sh` is that the paragraph stops being
+    load-bearing. But §7 still shows a fallback for a box where something has gone wrong, and a
+    fallback that reintroduces the bug is worse than no fallback.
+    """
+    offenders = [
+        line for line in fenced_commands(section("7."))
+        if "scripts/" in line and "/workspace/DEMAE/scripts/" not in line
+    ]
+    assert not offenders, "relative script path(s) in §7:\n" + "\n".join(offenders)
+
+
+def test_the_runbook_only_shows_the_release_preset_under_its_own_run_id():
+    """`--vit-base` sets `run_id="R5"`, so any example carrying it has to say R5."""
+    for line in fenced_commands(RUNBOOK.read_text()):
+        if "--vit-base" in line:
+            assert "R5" in line, f"--vit-base outside its arm: {line!r}"
