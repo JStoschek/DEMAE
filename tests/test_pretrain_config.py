@@ -36,9 +36,11 @@ def test_vit_base_preset_widens_the_decoder_and_holds_the_effective_batch():
     b = RunConfig.vit_base()
     assert (b.architecture.encoder_dim, b.architecture.encoder_depth) == (768, 12)
     assert (b.architecture.decoder_depth, b.architecture.decoder_dim) == (4, 512)  # §2.2
-    # §6 drops the physical batch for ViT-B; accumulation absorbs it so the effective
-    # batch — and therefore the LR — is the same recipe as ViT-S.
-    assert b.optimization.batch_size == 512
+    # §6 hedged "drop to 512 for ViT-B if needed". R0 measured that it is not needed — ViT-B
+    # at 1024 x 2 peaks at 17.82 GiB of 31.35 — so the batch arithmetic is ViT-S's untouched
+    # (#81, ADR-0010 §1). Holding this at 1024 is what makes §12's budget table, which is
+    # built on the 3,001.2 samples/s measured *at this batch*, describe the shipping config.
+    assert (b.optimization.batch_size, b.optimization.accum_iter) == (1024, 2)
     assert b.effective_batch == RunConfig().effective_batch == 2048
     assert b.lr == pytest.approx(1.2e-3)
 
@@ -297,9 +299,13 @@ def test_the_r4_preset_is_r5_with_the_initialization_moved():
     assert r4.architecture.pos_encoding == "sincos2d_rowfirst"
     assert r5.architecture.pos_encoding == "sincos2d"  # R5's is untouched
 
-    # §12's R4 row, and §6's *rule* (5% warmup) rather than R1's 20 at a third the length.
-    assert (r4.schedule.epochs, r4.schedule.warmup_epochs) == (150, 8)
-    assert r4.schedule.milestones == (50, 100)  # 200 and 400 are past the end and drop
+    # R5's schedule exactly, not §12's original 150 (ADR-0010 §4): §10's amended cross-arm
+    # rule compares at a *matched epoch*, and 150-against-400 has none — the probe fires on
+    # multiples of 20, so a 150-epoch run's endpoint is unmeasured, and at the last shared
+    # epoch (140) R4 would be 93% through its cosine against R5's 35%. 20 is §6's 5% rule at
+    # 400, the same number and the same reasoning as R5's.
+    assert (r4.schedule.epochs, r4.schedule.warmup_epochs) == (400, 20)
+    assert r4.schedule.milestones == r5.schedule.milestones == (50, 100, 200, 400)
 
     # The encoder shape, the decoder, the batch arithmetic and the LR are R5's exactly: the arm
     # only means something if the recipe is held fixed.

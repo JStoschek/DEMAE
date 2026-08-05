@@ -713,10 +713,20 @@ class RunConfig(_Frozen):
         move:
 
         1. ``init.mode = 'imagenet_mae'`` with ``checkpoint`` — the arm itself.
-        2. **150 epochs**, §12's R4 row, against R5's 400.
-        3. ``warmup_epochs = 8``, because §6's rule is *5% of the schedule* and inheriting R1's
-           20 would make it 13% of a schedule a third the length. The rule is the cited thing;
-           the 20 is what the rule produces at 400 epochs.
+        2. **400 epochs**, R5's schedule exactly *(changed from §12's 150 on 2026-08-05 —
+           [ADR-0010](../../docs/adr/0010-frozen-phase1-release-recipe.md) §4)*. §10's amended
+           cross-arm rule compares arms at a **matched epoch**, and 150-against-400 has no
+           usable one: the probe fires on multiples of 20, so a 150-epoch run's own endpoint is
+           never measured and the last epoch the two arms share is 140 — where R4 would be 93%
+           through its cosine against R5's 35%, carrying an anneal advantage that has nothing
+           to do with the warm start, in the direction §8's hypothesis predicts. R2-vs-R1 had
+           the same asymmetry running the *other* way, which is what made it dismissible there.
+           At ~11 extra GPU-hours (~$4.35) every 20-epoch probe becomes a valid paired reading,
+           and GFM's "8× less compute" claim still reads off this pair at R4's epoch-150 point
+           against R5's epoch-400.
+        3. ``warmup_epochs = 20``, which is what §6's *5% of the schedule* rule produces at 400
+           — the same number R5 uses, for the same reason. (At the old 150 this was 8; the rule
+           is the cited thing, the number is only ever its output.)
         4. ``pos_encoding = 'sincos2d_rowfirst'``, because mmselfsup's fixed sin-cos positional
            embedding is the **transpose** of MAE's and these weights learned mmselfsup's
            ([P102](../../docs/research/p102-mmselfsup-mae-layout.md) §4). Nothing about the
@@ -727,12 +737,13 @@ class RunConfig(_Frozen):
            §11 resume rebuilds the same buffer from the same config.
 
         Everything else is R5's, deliberately: the whole point of the arm is that the *recipe*
-        is held fixed and only the initialization moves.
+        is held fixed and only the initialization moves — which, since knob 2 above, is
+        literally rather than approximately true.
         """
         base = cls.vit_base().replace(
             run_id="R4",
             init=Init(mode="imagenet_mae", checkpoint=checkpoint),
-            schedule=Schedule(epochs=150, warmup_epochs=8),
+            schedule=Schedule(epochs=400, warmup_epochs=20),
         )
         base = base.replace(
             architecture=base.architecture.replace(pos_encoding="sincos2d_rowfirst")
@@ -743,11 +754,20 @@ class RunConfig(_Frozen):
     def vit_base(cls, **changes) -> RunConfig:
         """The ViT-B/16 release configuration (plan §2.1, §2.2, §6).
 
-        Three deltas from ViT-S and nothing else: the 86M encoder, the 512-wide decoder, and a
-        halved physical batch with doubled accumulation — which holds the effective batch at
-        2048, so the LR rule lands on the same 1.2e-3 and the recipe stays comparable. Decoder
-        heads at 16 are MAE's own decoder default; §2.2 fixes ViT-B's decoder depth and width
-        but is silent on its head count, so the reference value fills the gap.
+        Two deltas from ViT-S and nothing else: the 86M encoder and the 512-wide decoder.
+        Decoder heads at 16 are MAE's own decoder default; §2.2 fixes ViT-B's decoder depth
+        and width but is silent on its head count, so the reference value fills the gap.
+
+        **The physical batch is 1024, not 512** *(corrected 2026-08-05 — [ADR-0010](
+        ../../docs/adr/0010-frozen-phase1-release-recipe.md) §1)*. This preset used to carry
+        §6's "drop to 512 for ViT-B if needed" contingency, halving the batch and doubling
+        accumulation to hold the effective batch at 2048. R0 retired that hedge by measurement:
+        ViT-B at physical batch **1024 × 2 accum** peaks at 17.82 GiB allocated / 19.03 GiB
+        reserved against **31.35 GiB** available, and turned in 3,001.2 samples/s there
+        ([#81](https://github.com/JStoschek/DEMAE/issues/81)). The contingency was never
+        removed from this preset, so the shipping ViT-B config was a configuration R0 measured
+        *nothing* at — same effective batch and therefore the same `lr`, but smaller
+        micro-batches and so strictly less throughput than the number §12's budget is built on.
         """
         base = cls(
             run_id="R5",
@@ -755,7 +775,7 @@ class RunConfig(_Frozen):
                 encoder_dim=768, encoder_depth=12, encoder_heads=12,
                 decoder_depth=4, decoder_dim=512, decoder_heads=16,
             ),
-            optimization=Optimization(batch_size=512, accum_iter=4),
+            optimization=Optimization(batch_size=1024, accum_iter=2),
         )
         return base.replace(**changes) if changes else base
 

@@ -45,11 +45,20 @@ def test_the_peak_is_the_linear_scaling_rules_lr_not_a_typed_number(schedule):
 
 
 def test_the_rule_follows_the_effective_batch_not_the_physical_one():
-    # ViT-B halves the physical batch and doubles accumulation, so the peak must not move.
+    # This used to lean on ViT-B shipping a halved physical batch. R0 retired that hedge
+    # (#81, ADR-0010 §1), so every preset now runs 1024 x 2 and the property would be
+    # asserted by a config that cannot exercise it. Move the physical batch explicitly
+    # instead: the peak LR must not notice, because §6's rule reads the *effective* batch.
     vit_b = RunConfig.vit_base()
-    assert (vit_b.optimization.batch_size, vit_b.optimization.accum_iter) == (512, 4)
-    assert vit_b.lr == pytest.approx(1.2e-3)
-    assert LrSchedule.from_config(vit_b, steps_per_epoch=STEPS).peak_lr == pytest.approx(1.2e-3)
+    assert (vit_b.optimization.batch_size, vit_b.optimization.accum_iter) == (1024, 2)
+
+    halved = vit_b.replace(
+        optimization=vit_b.optimization.replace(batch_size=512, accum_iter=4)
+    )
+    assert halved.effective_batch == vit_b.effective_batch == 2048
+    for cfg in (vit_b, halved):
+        assert cfg.lr == pytest.approx(1.2e-3)
+        assert LrSchedule.from_config(cfg, steps_per_epoch=STEPS).peak_lr == pytest.approx(1.2e-3)
 
 
 # --- Warmup -------------------------------------------------------------------

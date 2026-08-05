@@ -61,7 +61,15 @@ Fixed 2D sin-cos (MAE default). GSD-aware positional encoding (Scale-MAE) is del
 ## 3. Masking
 
 - **Baseline: 75%, uniform random, per-sample.** This is the optimum in the original MAE ablation (Fig. 5) and re-confirmed on RGB satellite imagery by Scale-MAE's ablation (70-80% indistinguishable, 75% chosen). Random beats block/grid sampling decisively (MAE Table 1f).
-- **Planned ablation: 85% and 90%.** The evidence that smooth, low-entropy modalities prefer higher ratios is consistent and recent: SpectralGPT's ablation on Sentinel-2 rose monotonically 25→90% (84.64 mAP at 75% vs 85.61 at 90%), SelectiveMAE settled on 85% on a 4M-image optical corpus, and video MAE (extreme temporal redundancy) uses 90% ([SpectralGPT](https://arxiv.org/html/2311.07113), [SelectiveMAE](https://arxiv.org/html/2406.11933v1)). Per-tile-standardized elevation is plausibly the smoothest modality in this list, so 90% is a live candidate, and it is also *cheaper* per epoch (fewer encoder tokens). Decide on the kNN probe + val-loss evidence, not on reconstruction aesthetics.
+- **Planned ablation: 85% and 90%.** The evidence that smooth, low-entropy modalities prefer higher ratios is consistent and recent: SpectralGPT's ablation on Sentinel-2 rose monotonically 25→90% (84.64 mAP at 75% vs 85.61 at 90%), SelectiveMAE settled on 85% on a 4M-image optical corpus, and video MAE (extreme temporal redundancy) uses 90% ([SpectralGPT](https://arxiv.org/html/2311.07113), [SelectiveMAE](https://arxiv.org/html/2406.11933v1)). Per-tile-standardized elevation is plausibly the smoothest modality in this list, so 90% is a live candidate, and it is also *cheaper* per epoch (fewer encoder tokens). Decide on the kNN probe + val-loss evidence, not on reconstruction aesthetics. *(Settled 2026-08-05 — [ADR-0010](adr/0010-frozen-phase1-release-recipe.md), [#85](https://github.com/JStoschek/DEMAE/issues/85): see the amendment below.)*
+
+**Amendment 2026-08-05 — the ratio is frozen at 75%, and the 85% arm does not run** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §2, evidence in [#83](https://github.com/JStoschek/DEMAE/issues/83)).
+
+R2 ran 90% for 200 epochs against R1's 75% and **lost on all three probes** at the last epoch they share: `stratum_id` 0.3718 vs 0.3914 (~3.3 noise widths), `slope_mean` MAE 2.2466 vs 2.0344 (10.4% worse), `geomorphon_entropy` 0.25918 vs 0.25265 (2.6% worse) — on a byte-identical probe set, with the schedule asymmetry running in R2's favour (at epoch 180 R2's LR was ~3.3e-05 against R1's ~7.5e-04, so R2 had already collected an anneal R1 had not, and was still behind). **§12's gate for the 85% arm — "85% only if 90% ≈ 75%" — therefore does not open.**
+
+The prediction above was wrong in an informative way: SpectralGPT's monotonic rise **does not transfer**, even though per-tile-standardized elevation is the smoother modality. Smoothness is not the axis that sets the optimum here.
+
+**A below-75% arm is ruled out of Phase 1 on scope, not evidence.** It is affordable (~4.5 GPU-h, ~$2 — at 65% masking the encoder sees ~69 patches against 49, so it is *slower* than R1, not faster) and it was declined anyway: MAE's own sweep peaks at 75% and Scale-MAE found 70–80% indistinguishable, so the prior is low; and the banked finding does not get stronger for it. What the release therefore claims is a **bound, not an optimum**: the optimum is at or below 75%, 90% was ruled out by measurement, downward was not searched.
 - Masking is applied after augmentation, inside the model, with a per-step generator so the pattern differs every epoch. Keep the mask count fixed (it is, at a fixed ratio) so `torch.compile` sees static shapes.
 
 ## 4. Loss and reconstruction target
@@ -72,6 +80,14 @@ Fixed 2D sin-cos (MAE default). GSD-aware positional encoding (Scale-MAE) is del
 
 1. norm_pix improved MAE (+0.5 ft on ImageNet, Table 1d) and is ON in SatMAE and most of the lineage. For elevation it doubles as local detrending: each 480 m × 480 m patch is judged on its internal relief, not its offset within the tile, which is exactly the "learn terrain shape" objective. **But** the reference implementation divides by `(var + 1e-6)^0.5` per patch, and a near-flat 16×16 patch (playa, lake surface, residual ocean pixels) has variance near zero in per-tile-standardized units, amplifying quantization noise up to ~1000x into the loss. The corpus's 3 m degenerate screen operates per *tile*, not per patch, so flat patches absolutely survive. Guards: compute target stats in fp32 regardless of autocast, and **raise the variance floor to 1e-4** (in per-tile-standardized units). Log the per-patch loss distribution; if the top tail is dominated by near-flat patches, raise the floor before concluding anything about the model.
 2. **Ablate norm_pix OFF** once (the small-scale MAE reproduction found it unhelpful below ImageNet scale ([ReScience](https://openreview.net/pdf?id=KXfjZPL5pqr)), and no one has measured it on elevation; this is a genuinely open question DEMAE can answer).
+
+**Amendment 2026-08-05 — norm_pix stays ON, and ReScience's finding does not replicate on elevation** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §1, evidence in [#84](https://github.com/JStoschek/DEMAE/issues/84)).
+
+R3 ran norm_pix OFF for 200 epochs and **lost**: `slope_mean` MAE 2.2680 vs 2.0344 (11.5% worse) and `geomorphon_entropy` 0.28843 vs 0.25265 (14.2% worse), with `stratum_id` a 0.67-noise-width tie. §4's own stated mechanism is what the numbers back — per-patch normalization is local detrending, judging each 480 m patch on internal relief rather than tile offset, and **the two probes that measure terrain shape are exactly the ones that degrade without it**, entropy most. So the genuinely-open question is answered in the affirmative for this modality at this scale.
+
+Guard 1's escape hatch was **not needed**, and neither guard fires the way §13 anticipated: `tail_flat_frac` sits at ~0.0014 and *declines* through R1, with p99 settling ~1.49 by epoch 50, so the top tail is real terrain rather than near-flat patches, and §13's norm_pix-blowup row does not fire at 75%. R3 also confirms the guards are inert on its own path (no variance division with norm_pix off) and that its tail is *better*, not worse — `tail_flat_frac` 0.000333, p99 1.127, `collapsed_patch_frac` 6.8e-07. The fp32 stats and the 1e-4 floor stay, unexercised but cheap.
+
+**Note for anyone comparing these two arms on val loss: don't.** R1's 0.4466 and R3's 0.09316 are not the same quantity — norm_pix OFF changes what the loss is computed over. See §10's amended cross-arm rule.
 
 **Ocean / invalid pixels:** the loader ships `land_mask` (`raw != 0`, ADR-0003 §4) and kept windows are <75% ocean by construction. Extend MAE's patch-level loss mask to pixel weights inside patches: invalid pixels contribute zero, the patch loss renormalizes by valid-pixel count, and a masked patch with <25% valid pixels is excluded from the loss entirely. Per-patch target stats (norm_pix) likewise compute over valid pixels only. Precedent is thin here (the published pattern is curation, e.g. MAESSTRO drops any patch containing missing values ([MAESSTRO](https://os.copernicus.org/articles/20/1309/2024/))); this corpus already curated hard, so pixel weighting is a small correctness patch, not a novelty claim.
 
@@ -93,18 +109,30 @@ All MAE defaults unless argued otherwise; the deviations are batch size (hardwar
 | Weight decay | 0.05, excluded on bias/norm params | MAE default across the lineage |
 | Base LR (blr) | 1.5e-4 | MAE default; linear scaling below |
 | LR rule | lr = blr × eff_batch / 256 | MAE PRETRAIN.md |
-| Physical batch | 1024 (bf16, ViT-S; drop to 512 for ViT-B if needed) | fits comfortably in 32 GB at 49 visible tokens |
+| Physical batch | 1024 (bf16, ViT-S; ~~drop to 512 for ViT-B if needed~~ *— hedge dead, Amendment below*) | fits comfortably in 32 GB at 49 visible tokens |
 | Grad accumulation | 2 → **effective batch 2048** → lr 1.2e-3 | `--accum_iter` is the official path; lightly's benchmark shows MAE trains fine even at 256, so eff. batch is not fragile |
-| Warmup | 20 epochs, linear from 0 | 5% of schedule; MAE's 40/800 = 5%; small-scale reproduction used 20 |
+| Warmup | 20 epochs, linear from 0 — **the rule is 5% of the schedule**, 20 is its output at 400 | 5% of schedule; MAE's 40/800 = 5%; small-scale reproduction used 20 |
 | Decay | Cosine to 0 | MAE default |
-| Epochs | **400**, checkpoints kept at 50/100/200/400; extend to 800 only if the kNN probe and val loss are still improving at 400 | 400 ep × 500k = 2×10⁸ samples ≈ the sample budget of ~156 ImageNet epochs; mmpretrain's reproduction shows ft-quality saturates early (83.1 at 300 ep vs 83.5 at 1600 for ViT-B) while linear-probe keeps climbing; MIM data-scaling work shows ~500k images is comfortably enough for S/B models ([arXiv 2206.04664](https://arxiv.org/abs/2206.04664)) |
-| Grad clipping | None by default (MAE doesn't); add clip 1.0 only if bf16 instability appears | MAE repo |
+| Epochs | **400**, checkpoints kept at 50/100/200/400; ~~extend to 800 only if the kNN probe and val loss are still improving at 400~~ *— unfollowable, Amendment below* | 400 ep × 500k = 2×10⁸ samples ≈ the sample budget of ~156 ImageNet epochs; mmpretrain's reproduction shows ft-quality saturates early (83.1 at 300 ep vs 83.5 at 1600 for ViT-B) while linear-probe keeps climbing; MIM data-scaling work shows ~500k images is comfortably enough for S/B models ([arXiv 2206.04664](https://arxiv.org/abs/2206.04664)) |
+| Grad clipping | None by default (MAE doesn't); ~~add clip 1.0 only if bf16 instability appears~~ *— never fired, Amendment below* | MAE repo |
 | Dropout / droppath | 0 in pretraining | MAE default |
 | EMA | None | MAE uses no weight EMA; do not add one |
 
 **Augmentation:** horizontal + vertical flips and 90° rotations (the full dihedral group). Overhead terrain has no canonical orientation, and the lineage keeps augmentation geometric-only; intensity jitter is both harmful (MAE Table 1e) and physically meaningless on standardized elevation. **No RandomResizedCrop in the baseline:** MAE's gain from RRC over fixed crops is small (84.9 vs 84.7), and rescaling changes the effective GSD of a modality where scale is physically meaningful; scale augmentation belongs with GSDPE in Phase 4. This is a deliberate deviation from the MAE default, recorded as such, and cheap to ablate if reconstructions look over-fit to a single texture scale.
 
-**Seeds and determinism:** fixed seed for model init and the DataLoader generator (ADR-0003 reproducibility note), `dataset_version` + selection-list md5 + git SHA + full config logged into every checkpoint and into W&B. Two runs from the same config should differ only by nondeterministic kernels.
+**Seeds and determinism:** fixed seed for model init and the DataLoader generator (ADR-0003 reproducibility note), `dataset_version` + selection-list md5 + git SHA + full config logged into every checkpoint and into W&B. Two runs from the same config should differ only by nondeterministic kernels. *(Qualified by #95: that holds **within** a compile setting, not across one — inductor generates its own randomness, so a compiled and an eager run from one seed mask different tokens.)*
+
+**Amendment 2026-08-05 — two hedges are dead, and the extension rule is replaced** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §1 and §5).
+
+**Physical batch stays 1024 for ViT-B.** R0 ([#81](https://github.com/JStoschek/DEMAE/issues/81)) measured ViT-B at batch 1024 peaking at **17.82 GiB allocated / 19.03 GiB reserved against 31.35 GiB available** — barely half the card. The drop-to-512 contingency does not fire, so effective batch stays 2048, accumulation stays 2, and `lr` stays 1.20e-3 across both backbones.
+
+**Grad clipping stays off.** The permission to add clip 1.0 was conditional on bf16 instability appearing. Four runs — R0, R1, R2, R3 — across two backbones, two mask ratios and two loss targets produced no loss spike and no §10.1 alarm. bf16 without a scaler is stable on this objective, as §7.1 predicted.
+
+**Warmup is the 5% rule, not the number 20.** R2 ran 10 at a 200-epoch schedule and the `vit_base_continual` preset derives its own; inheriting 20 into a shorter schedule would make warmup a much larger fraction than the rule allows. §7's worked R2/R3 examples carried the mask-ratio flag but *not* the schedule length, and as written would have run 400 epochs — corrected below.
+
+**"Extend to 800 on evidence at 400" is replaced by a pre-launch call, because the schedule cannot honour it.** [`schedule.py`](../src/pretrain/schedule.py)'s cosine reaches exactly 0.0 at the final epoch and is clamped to 0 beyond it. So at epoch 400 the probe and val curves have flattened **by construction** — the rule asks a question its own schedule guarantees the answer to — and training past 400 applies zero-sized updates. A genuine 800-epoch run is a *different run*, launched from step 1 with an 800-epoch cosine; an epoch-400 checkpoint drawn from an 800-epoch run is **not** the same artifact as a finished 400-epoch run, because it has not annealed, and R1 measured its own 200→400 gain as concentrated in exactly that tail.
+
+R5's budget is therefore **400 by default, with the 400-vs-800 choice made before R5 launches**, on R4's ViT-B trajectory (R4 now runs the same 400-epoch schedule — §12). R1's measured doubling is the prior and argues 400: 200→400 bought val 0.0077 (1.7% of the epoch-50 value), `stratum_id` +0.014 (~2 noise widths), `slope_mean` −7.3%. The counter-argument is recorded rather than dismissed: 400 epochs × 473k tiles is ~148 ImageNet-epochs of samples against MAE's 800–1600, and this table's own citation has linear-probe quality climbing long after fine-tune quality saturates — which is the axis §10 adjudicates on. If 800 is chosen, §14's milestone list gains an 800 entry, which is an artifact-contract change rather than a config tweak.
 
 ## 7. Efficiency levers
 
@@ -168,7 +196,20 @@ MAE gives few in-flight signals; build the ones that exist:
 4. **Throughput dashboard:** samples/s, step time, dataloader wait fraction. If loader wait exceeds ~10%, stop and fix IO before burning GPU hours (the DailyMAE lesson, and the plan's #1 named risk).
 5. **What is deliberately absent:** EMA (not part of MAE), online linear probe with labels (no labels), FID-style metrics (meaningless here).
 
-**Decision rule for the 400→800 epoch extension and for ablation winners:** kNN-probe trend on `stratum_id` + val recon loss, jointly. Reconstruction prettiness is explicitly not a criterion (loss down does not equal representations good).
+**Decision rule for the 400→800 epoch extension and for ablation winners:** kNN-probe trend on `stratum_id` + val recon loss, jointly. Reconstruction prettiness is explicitly not a criterion (loss down does not equal representations good). *(Amended 2026-08-05 — [ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §3, [#85](https://github.com/JStoschek/DEMAE/issues/85): this one sentence was doing two different jobs and gets R3 wrong. Replaced below; the last clause survives unchanged.)*
+
+**Amendment 2026-08-05 — the rule splits in two** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §3, evidence in [#82](https://github.com/JStoschek/DEMAE/issues/82) / [#83](https://github.com/JStoschek/DEMAE/issues/83) / [#84](https://github.com/JStoschek/DEMAE/issues/84)).
+
+Read literally, the rule above gets R3 wrong. `stratum_id` came in at 0.3874 against R1's 0.3914 — **0.67 noise widths, a tie** — and val loss at 0.09316 against 0.4466, which is **not a comparison at all**, because norm_pix OFF changes what the loss is computed over. Both named instruments report "no difference" on an arm that lost by 11.5% and 14.2% on the metrics this sentence lists *second*.
+
+It is not a quirk of one arm. **`stratum_id` takes ~92% of its total gain by epoch 40 in all three runs** (92.0 / 92.3 / 90.9%), so the saturation is a property of the probe rather than of any run, while both regression probes improve to the end of every run. R2 bounds the correction: there the categorical probe *did* separate the arms, at 3.3 noise widths — just least, 5.0% relative against `slope_mean`'s 10.4%. So `stratum_id` is not demoted; it stops being the lead.
+
+- **Across arms** (ablation winners, R4-vs-R5): **all three probes read jointly at a matched epoch on a byte-identical probe set** (`probe/set_md5`), with no lead metric. **Val loss is admissible only when the loss target and mask ratio are identical** across the arms compared — which excludes it from R2-vs-R1 (0.5878 vs 0.4466 is task difficulty: reconstructing 90% from 10% visible is strictly harder) and from R3-vs-R1 (different loss target), and admits it for R4-vs-R5.
+- **Within one arm** (the epoch-budget call): **val loss stays valid**, exactly as §10.1 always claimed — the fixed masking seed makes it comparable across epochs of one run — read alongside the probe trends.
+
+Two corollaries are now load-bearing rather than incidental: arms being compared must **share probe epochs** (the probe fires only on multiples of `probe_every_epochs`), and must be scored on the **same probe set**. R1–R3 satisfied both by luck; §12's R4 schedule change makes the first structural.
+
+Reconstruction prettiness remains not a criterion, unchanged.
 
 ## 11. Ops on vast.ai (interruptible reality)
 
@@ -193,6 +234,29 @@ Throughput is measured in R0; the table plans on the conservative 3,000 img/s (V
 | | **Total** | | | **~$50-70** | Well inside the $100-300 envelope; leaves Phase 2+ funded |
 
 Sequencing: R0 → R1 → (R2, R3 in either order, can share the box) → decide recipe → R4 and R5. R2/R3 read out at 200 epochs deliberately: ablation *ordering* is stable early even when absolute numbers keep improving.
+
+**Amendment 2026-08-05 — the table is measured, R4 goes to 400 epochs, and R5 is sequenced behind it** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §4, [#85](https://github.com/JStoschek/DEMAE/issues/85)).
+
+Everything above the R4 row is now measurement rather than plan, on the rented 5090 at its real **$0.4016/hr** (not the ~$0.31 assumed). The planning rates were conservative by roughly 2.5×:
+
+| Run | Epochs | Measured samples/s | Loader wait | GPU-h | Cost | vs planned |
+|---|---|---|---|---|---|---|
+| R0 | smoke | 7,445.6 (S) / 3,001.2 (B) | 0.4% / 0.1% | ~2 | ~$1 | as planned |
+| R1 | 400 | 7,291.5 | 2.3% | 7.2 | **$2.90** | ~$6 |
+| R2 | 200 | 9,609.2 | 2.0% | 2.74 | **~$1.10** | ~$2 |
+| R3 | 200 | 7,353.0 | 1.6% | 3.57 | **~$1.44** | ~$3 |
+| **R4** | **400** *(was 150)* | 3,001.2 (B, measured in R0) | — | ~17.5 | ~$7.00 | ~$6 at 150 |
+| **R5** | 400 *(800 = ~35 GPU-h, ~$14.05)* | 3,001.2 (B, measured in R0) | — | ~17.5 | ~$7.00 | $13–27 |
+
+**§7.5's named #1 risk — the dataloader — did not fire on any run**, clearing the ~10% alarm by an order of magnitude at every scale and duration tried, so ADR-0003's headroom argument holds on this host rather than merely in argument.
+
+**R4 moves from 150 to 400 epochs, adopting R5's schedule exactly** (warmup 20 under §6's 5% rule). Reason, in full in [ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §4: under §10's amended cross-arm rule, R4 at 150 against R5 at 400 has no shared final probe epoch (the probe fires on multiples of 20, so R4's endpoint is unmeasured and the last shared epoch is 140), and at epoch 140 R4 would be 93% through its cosine against R5's 35% — **carrying an anneal advantage that has nothing to do with the warm start, in the direction §8's hypothesis predicts**. R2-vs-R1 had the same asymmetry running the *other* way, which is what made it dismissible there; a confound that flatters the hypothesis is not. The fix costs ~11 GPU-h and ~$4.35, makes every 20-epoch probe a valid paired reading rather than one confounded point, and makes the arm's stated premise — hold the recipe fixed, move only the initialization — literally true. GFM's "8× less compute" efficiency claim still reads off the same pair: R4's epoch-150 point against R5's epoch-400 point.
+
+**"Compare to R5 at equal probe cost" in the R4 row above is superseded by that** — equal *schedule*, with the equal-compute reading available as a second cut.
+
+**Sequencing becomes R0 → R1 → (R2, R3) → decide recipe → R4 → R5**, as a tracker blocking edge rather than a convention. R4 is the same recipe at the same scale for a quarter of R5's cost, so it is a near-free canary for a recipe never yet trained to length at ViT-B, and it is the evidence R5's 400-vs-800 call needs (§6).
+
+**R4's only early kill is a §10.1 alarm** — loss collapse, val loss rising while train falls, or a first-20-epoch plateau. A flat probe curve mid-cosine is *not* a kill signal: at epoch 200 of a 400-epoch schedule the LR is still 54% of peak (6.5e-4 of 1.20e-3), R1's 200→400 gains lived in the tail, and a run stopped mid-cosine yields an unannealed checkpoint that is neither comparable to R5 nor releasable. The second half costs 8.75 GPU-h and ~$3.50.
 
 ## 13. Risks
 
