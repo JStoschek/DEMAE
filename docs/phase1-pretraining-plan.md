@@ -24,7 +24,7 @@
 | Precision / kernels | bf16 autocast (no GradScaler), SDPA/Flash attention, `torch.compile(dynamic=False)` | §7 |
 | Init | Main run from scratch; one continual-pretraining arm from ImageNet MAE ViT-B (patch-embed summed to 1 channel) | §8 |
 | Split | Fill the manifest `split` column: ~95% train / ~2% val / ~3% test, blocked geographically (never random) | §9 |
-| Monitoring | Train + fixed-mask val recon loss, stratified reconstruction grids, kNN probe on `stratum_id`, no EMA | §10 |
+| Monitoring | Train + fixed-mask val recon loss, stratified reconstruction grids, kNN probe on `stratum_id` + `slope_mean` + `geomorphon_entropy` (**all three adjudicate**, and val loss only within one arm — §10, [ADR-0010](adr/0010-frozen-phase1-release-recipe.md)), no EMA | §10 |
 | Ops | Checkpoint every 30-60 min, sync off-instance, resumable from step 1; on-demand verified host | §11 |
 
 ---
@@ -206,6 +206,8 @@ It is not a quirk of one arm. **`stratum_id` takes ~92% of its total gain by epo
 
 - **Across arms** (ablation winners, R4-vs-R5): **all three probes read jointly at a matched epoch on a byte-identical probe set** (`probe/set_md5`), with no lead metric. **Val loss is admissible only when the loss target and mask ratio are identical** across the arms compared — which excludes it from R2-vs-R1 (0.5878 vs 0.4466 is task difficulty: reconstructing 90% from 10% visible is strictly harder) and from R3-vs-R1 (different loss target), and admits it for R4-vs-R5.
 - **Within one arm** (the epoch-budget call): **val loss stays valid**, exactly as §10.1 always claimed — the fixed masking seed makes it comparable across epochs of one run — read alongside the probe trends.
+
+**When the categorical and regression probes disagree, the disagreement goes in the readout** rather than being resolved silently. That is the whole operational content of dropping the lead metric: R3 is what a silent resolution looks like, and it would have shipped as "no difference".
 
 Two corollaries are now load-bearing rather than incidental: arms being compared must **share probe epochs** (the probe fires only on multiples of `probe_every_epochs`), and must be scored on the **same probe set**. R1–R3 satisfied both by luck; §12's R4 schedule change makes the first structural.
 
