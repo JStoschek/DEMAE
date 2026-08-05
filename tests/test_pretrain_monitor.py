@@ -30,6 +30,7 @@ import torch
 from pretrain import monitor as monitor_mod
 from pretrain.config import RunConfig
 from pretrain.monitor import EpochMonitor, LossHistogram, evaluate, train_epochs
+from pretrain.runtime import CompileWatch
 from pretrain.sink import Histogram, Image, MemoryLogger
 from pretrain.throughput import ThroughputSummary
 from pretrain.train import Trainer, build_loader, seed_run, steps_per_epoch_for
@@ -506,6 +507,46 @@ def test_a_real_run_reports_its_throughput_from_the_loop_that_ran_it(cfg):
         # Two train COGs of four tiles each, every one seen once per epoch.
         assert record.throughput.samples == 2 * TILES_PER_COG
         assert record.throughput.seconds > 0
+
+
+def test_the_boundarys_own_compiles_are_not_charged_to_the_training_step(cfg):
+    """#109's regression, and the blind spot it lived in.
+
+    `test_the_compiled_loop_does_not_recompile_across_steps_or_an_epoch_boundary` asserts
+    exactly this and passes — but it calls `train.train`, the bare loop, so it has no val pass
+    and no grids and is structurally incapable of seeing the frames §10's boundary compiles.
+    This runs the composed loop, which is where R1, R2 and R3 each reported 18 frames and were
+    each told to turn off a lever worth ~2.4x.
+
+    Compiled on CPU, so it is slow by the standards of this module and cheap by the standards
+    of finding this on a rented box a fourth time.
+    """
+    watch = CompileWatch()
+    compiled = cfg.replace(runtime=cfg.runtime.replace(compile=True))
+    records = train_epochs(compiled, epochs=2, device="cpu", watch=watch)
+
+    assert len(records) == 2  # two boundaries, so val ran twice and the second is the test
+    assert watch.compiled == 0, "§7.3's claim, in §7.3's units, after a boundary scored val"
+    assert watch.monitored == watch.total  # every frame after warmup was the boundary's
+
+
+def test_the_boundary_reports_both_frame_counts_to_the_sink_every_epoch(cfg):
+    # So §7.3's precondition is chartable from a laptop rather than legible only in an ssh
+    # scrollback on a box that is going to be destroyed.
+    logger = MemoryLogger()
+    train_epochs(cfg, epochs=2, device="cpu", logger=logger, watch=CompileWatch())
+    for epoch in (0, 1):
+        logged = logger.at(epoch)
+        assert logged["compile/train_frames"] == 0
+        assert logged["compile/monitor_frames"] >= 0
+
+
+def test_a_run_with_no_watch_logs_no_compile_counters(cfg):
+    # The watch is optional, and a caller that is not measuring compiles should not have two
+    # meaningless zeros appear in its run's history.
+    logger = MemoryLogger()
+    train_epochs(cfg, epochs=1, device="cpu", logger=logger)
+    assert not any(key.startswith("compile/") for key in logger.at(0))
 
 
 def test_the_whole_epoch_loop_runs_through_a_real_offline_wandb_run(cfg, tmp_path):

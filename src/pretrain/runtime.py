@@ -27,6 +27,22 @@ for this reason:
 into an observation. It reads Dynamo's own frame counter, so it sees a recompile whatever
 caused it — a moving shape, a changed Python attribute, a guard nobody predicted.
 
+## Two paths compile, and only one of them is §7.3's claim
+
+Dynamo's counter is *process-wide*, while the sentence above is about the **training step**:
+§7.3 says the fixed mask count keeps *shapes* static, and that is a claim about the shapes a
+step runs on. The monitoring path compiles too, and legitimately — §10.1's val pass and
+§10.2's grids forward through the same compiled module in ``eval()`` under
+:func:`torch.no_grad`, which Dynamo guards on, so they earn their own graphs the first time
+they run. That is necessarily the first epoch boundary.
+
+Reading one counter against §7.3's sentence conflates the two, and #109 is what that cost: a
+warning that fired on every healthy run, at 18 frames, identically across R1, R2 and R3, and
+recommended turning off a lever R0 measured at ~2.4x. So the watch keeps **two** tallies. The
+partition is exact rather than estimated, because a boundary and a step never overlap: frames
+counted inside :meth:`CompileWatch.monitoring` are the monitoring path's, and everything else
+is the training step's. §7.3 is then checkable in the units it is written in.
+
 ## What is deliberately not here
 
 §7.6's two non-levers — gradient checkpointing (unneeded at S/B scale, ~30%) and
@@ -38,6 +54,7 @@ memory IO (§7.2), and torch's own implementation is the thing timm blocks alrea
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import torch
 from torch import nn
@@ -151,25 +168,62 @@ def compiled_frames() -> int:
 
 
 class CompileWatch:
-    """How many frames were compiled since it was made (or last :meth:`reset`).
+    """Frames compiled since it was made (or last :meth:`reset`), split by which path paid.
 
     The instrument for §7.3's precondition. Make one *after* the warmup step — where the first
     compile belongs — and anything it counts afterwards is a recompile: a shape that moved, a
-    guard that failed, a Python attribute the graph had specialized on. #95's entrypoint warns
-    on it at the end of a run and the tests assert it is zero across an epoch boundary.
+    guard that failed, a Python attribute the graph had specialized on.
 
     Process-wide rather than per-model, because Dynamo's cache is: two models of one class
     share compiled code, and a recompile triggered by either is a recompile this run paid for.
+
+    **The split is the whole point** (#109; see this module's header). :attr:`train` is what
+    §7.3 claims is zero. :attr:`monitoring` is the val pass and the grids, which compile once
+    at the first epoch boundary because that is the first time they run — expected, not a
+    fault, and the thing the single-counter version misreported for three consecutive runs.
+    Both are still recompiles someone pays for, so both are counted; they are just not the
+    same claim, and they do not carry the same remedy.
     """
 
     def __init__(self) -> None:
+        self._monitoring = 0
         self.reset()
 
     def reset(self) -> None:
         """Start counting from now — what a caller does once the warmup step has landed."""
         self._baseline = compiled_frames()
+        self._monitoring = 0
+
+    @contextmanager
+    def monitoring(self) -> Iterator[None]:
+        """Attribute frames compiled in this block to the monitoring path, not the step.
+
+        Exact rather than heuristic: §10's boundary work never runs concurrently with a
+        training step, so "compiled while this was open" partitions the process-wide counter
+        cleanly. Re-entrant blocks are fine — the inner one attributes to the same bucket, and
+        double-counting is impossible because each block only ever moves frames it saw itself.
+        """
+        before = compiled_frames()
+        try:
+            yield
+        finally:
+            self._monitoring += compiled_frames() - before
+
+    @property
+    def monitored(self) -> int:
+        """Frames the monitoring path compiled. §10.2's ``due(0)`` puts them all at boundary 0."""
+        return self._monitoring
 
     @property
     def compiled(self) -> int:
-        """Frames compiled since :meth:`reset`. Zero is what a warmed-up static loop reports."""
+        """Frames the *training step* compiled since :meth:`reset` — §7.3's claim, in its units.
+
+        Zero is what a warmed-up static loop reports, and now it stays zero through an epoch
+        boundary that scores val and renders a grid.
+        """
+        return compiled_frames() - self._baseline - self._monitoring
+
+    @property
+    def total(self) -> int:
+        """Both paths — the number the pre-#109 watch reported, kept for the footer's arithmetic."""
         return compiled_frames() - self._baseline

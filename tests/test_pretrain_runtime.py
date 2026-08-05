@@ -163,3 +163,34 @@ def test_the_watch_sees_a_recompile_when_the_shape_moves():
     assert watch.compiled >= 1
     watch.reset()
     assert watch.compiled == 0
+
+
+def test_frames_compiled_inside_a_monitoring_block_are_not_charged_to_the_training_step():
+    # #109 in one assertion. The pre-split watch reported one number, and §7.3's sentence is
+    # about the training step, so §10's boundary compiles read as a training-step recompile —
+    # on every healthy run, at 18 frames, identically across R1, R2 and R3.
+    cfg = tiny_config(runtime=Runtime())
+    compiled = runtime_mod.compile_model(MaskedAutoencoder.from_config(cfg), cfg)
+    compiled(tiles(4, seed=1))  # warmup: the training step's own compile
+    watch = runtime_mod.CompileWatch()
+    with watch.monitoring():
+        # A batch size no other test in this module uses: Dynamo's cache is process-wide, so a
+        # shape a neighbour already compiled would hit the cache and compile nothing here.
+        compiled(tiles(7, seed=2))  # stands in for §10's boundary: a shape the step never sees
+    assert watch.monitored >= 1
+    assert watch.compiled == 0  # §7.3's claim, in §7.3's units, holds
+    assert watch.total == watch.monitored  # and nothing was lost in the split
+
+
+def test_a_recompile_outside_a_monitoring_block_still_lands_on_the_training_step():
+    # The guard on the test above: attribution that swallowed everything would pass it, and
+    # would have hidden the one failure the watch exists to catch.
+    cfg = tiny_config(runtime=Runtime())
+    compiled = runtime_mod.compile_model(MaskedAutoencoder.from_config(cfg), cfg)
+    compiled(tiles(4, seed=1))
+    watch = runtime_mod.CompileWatch()
+    with watch.monitoring():
+        compiled(tiles(9, seed=2))  # again, a shape unique to this test
+    compiled(tiles(11, seed=3))  # the step itself moving a shape — this is the real fault
+    assert watch.compiled >= 1
+    assert watch.monitored >= 1

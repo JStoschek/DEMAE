@@ -165,18 +165,80 @@ def describe_sink(cfg: RunConfig) -> str:
 
 
 def format_recompile_warning(frames: int, step: int) -> str:
-    """What to say when §7.3's precondition breaks, mid-run and again in the footer.
+    """The **first** train-path recompile: said, located, and left alone (#109).
 
     A recompile loop is the one §7 failure that keeps costing money for as long as the run
     lasts, so it is said as soon as :class:`~pretrain.runtime.CompileWatch` sees it — a footer
     on a 400-epoch run arrives days after the point at which someone would have killed it.
+
+    **It does not recommend turning compile off**, and that is the correction #109 bought. One
+    frame is a one-time compilation, ~60 s; ``runtime.compile=false`` would trade that minute
+    for R0's measured ~2.4x across every remaining epoch. The flag belongs to the *loop* case,
+    which is :func:`format_recompile_escalation`, and the only honest discriminator between the
+    two is whether the count grows again. So this one states the fact and waits.
     """
     return (
-        f"WARNING: {frames} frame(s) recompiled after warmup (first seen by step {step + 1}). "
-        "§7.3 expects none — the mask count is fixed (#90) and short batches are dropped "
-        "(#93), so a shape or a guard is moving, and compiling is costing this run rather "
-        "than paying for it. `--set runtime.compile=false` is the cheaper fallback until it "
-        "is understood"
+        f"NOTE: the training step compiled {frames} frame(s) after warmup (first seen at step "
+        f"{step + 1}). §7.3 expects none — the mask count is fixed (#90) and short batches are "
+        "dropped (#93), so a shape or a guard is moving. A single compile is a one-time cost "
+        "and compile is worth ~2.4x, so this is worth understanding, not worth switching off. "
+        "If the count grows again this line will say so"
+    )
+
+
+def format_recompile_escalation(frames: int, previous: int, step: int) -> str:
+    """The second one — the count is still climbing, which is the case the flag is for.
+
+    Printed once and then never again: a genuine per-step loop would otherwise put a warning
+    beside every one of R1's 92,400 step lines, and the pre-#109 code avoided that only by
+    never speaking a second time at all, which is also why it could not tell the two cases
+    apart.
+    """
+    return (
+        f"WARNING: the training step's compile count grew again, {previous} -> {frames}, by "
+        f"step {step + 1}. It is still climbing, so this is a recompile loop rather than a "
+        "one-time cost, and compiling is now costing this run rather than paying for it. "
+        "`--set runtime.compile=false` is the cheaper fallback until it is understood. No "
+        "further recompile lines will be printed"
+    )
+
+
+def format_compile_summary(
+    train: int, monitoring: int, first_step: int | None, *, enabled: bool = True
+) -> str:
+    """What a finished run leaves on screen about §7.3 — an outcome, not a replayed warning.
+
+    The footer knows the one thing the inline message could not: whether it recurred. #109's
+    footer instead reprinted the mid-run text with the *current* step substituted for the
+    first-seen one, so a run whose only compile happened at step 232 signed off saying step
+    92,400 — the opposite end of the run from where it happened. ``first_step`` is therefore
+    recorded when it is seen and carried here, never recomputed.
+
+    The healthy line is printed too, rather than only the unhappy one. A run that says
+    ``0 after warmup`` is a run nobody has to reopen this ticket to interpret, and the
+    monitoring count is the number R1, R2 and R3 all reported as 18.
+
+    ``enabled=False`` is §7.3's lever switched off, where the counts are zero because nothing
+    was compiled. Reporting "§7.3 holds" there would be true and useless — the claim is about
+    a compiled graph — and it is exactly the reading that would let an eager run pass for a
+    fast one, which is the failure mode this whole module exists to close.
+    """
+    if not enabled:
+        return "compile          off (runtime.compile=false) — §7.3's lever is not in play"
+    monitored = (
+        f"{monitoring} frame(s) at the first epoch boundary (§10's val pass and grids, expected)"
+        if monitoring
+        else "none"
+    )
+    if not train:
+        return (
+            f"compile          training step: 0 frames after warmup (§7.3 holds)\n"
+            f"                 monitoring:    {monitored}"
+        )
+    where = "" if first_step is None else f", first at step {first_step + 1}"
+    return (
+        f"compile          training step: {train} frame(s) after warmup{where} — §7.3 does NOT "
+        f"hold\n                 monitoring:    {monitored}"
     )
 
 
@@ -275,21 +337,28 @@ def main(argv: list[str] | None = None) -> int:
     # per-step history off-instance; this prints and forgets.
     run = steady = summarize([])
     first_loss = last_loss = None
-    started = warned = False
+    started = False
+    # #109: the count at which the last recompile line was printed, the absolute step the first
+    # train-path frame was seen at, and whether the escalation has been spent. `warned_at` is
+    # what the footer reads — recorded where it happens, so the footer cannot substitute the
+    # current step for it the way the pre-#109 one did.
+    warned_at: int | None = None
+    warned_frames = 0
+    escalated = False
 
     def announce(trainer: Trainer) -> None:
         print(runtime_line(trainer.model, cfg, device=trainer.device))
         print()
 
     def report(record: StepRecord) -> None:
-        nonlocal run, steady, first_loss, last_loss, started, warned
+        nonlocal run, steady, first_loss, last_loss, started
+        nonlocal warned_at, warned_frames, escalated
         counters = record.throughput  # always set: the loop times every step it takes
         if not started:
-            # The first step *this process* takes is the compile (§7.3) — which is the first
-            # step of a resumed run too, so this keys on the process rather than on step 0.
-            # Anything counted after it is a recompile, the one way the compile lever loses.
+            # The watch's own baseline is taken by `EpochMonitor.on_step`, which runs before
+            # this callback: the warmup convention lives with the watch rather than being
+            # re-implemented by every caller that holds one.
             started = True
-            watch.reset()
             first_loss = record.loss
         else:
             steady = steady.plus(counters)
@@ -300,12 +369,25 @@ def main(argv: list[str] | None = None) -> int:
         # killed one's were on rather than restarting the count.
         if run.steps == 1 or record.step % args.log_every == 0 or record.step + 1 == steps:
             print(format_step_line(record, steps), flush=True)
-        if watch.compiled and not warned:
-            # Said the moment it happens rather than in the footer. A recompile loop is the one
-            # §7 failure that costs money continuously, and a 400-epoch run's footer arrives
-            # days after the point at which someone would have killed it.
-            warned = True
-            print(format_recompile_warning(watch.compiled, record.step), flush=True)
+        # Said the moment it happens rather than in the footer. A recompile loop is the one §7
+        # failure that costs money continuously, and a 400-epoch run's footer arrives days after
+        # the point at which someone would have killed it. `watch.compiled` is the *training
+        # step's* frames alone (#109) — §10's boundary compiles land in the other tally and are
+        # reported by the footer without alarm, which is what R1, R2 and R3 all tripped.
+        if watch.compiled > warned_frames and not escalated:
+            frames = watch.compiled
+            if warned_at is None:
+                warned_at = record.step
+                print(format_recompile_warning(frames, record.step), flush=True)
+            else:
+                # Second and last. The count is still climbing, so the flag is now the cheaper
+                # trade — and printing it once more, not once per step, is what keeps a broken
+                # run readable.
+                escalated = True
+                print(
+                    format_recompile_escalation(frames, warned_frames, record.step), flush=True
+                )
+            warned_frames = frames
 
     def close_epoch(record: EpochRecord) -> None:
         """§10's row: the losses, the LR, the counters — and §10.3's probe on its cadence."""
@@ -332,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             on_step=report,
             on_epoch=close_epoch,
             on_alarm=announce_alarm,
+            watch=watch,
         )
 
     print()
@@ -347,8 +430,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     if policy is not None:
         print(f"checkpoints      {describe_checkpoints(policy)}")
-    if watch.compiled:
-        print(f"\n{format_recompile_warning(watch.compiled, run.steps - 1)}")
+    print(
+        format_compile_summary(
+            watch.compiled, watch.monitored, warned_at, enabled=cfg.runtime.compile
+        )
+    )
     return 0
 
 

@@ -16,7 +16,7 @@ import math
 
 import pytest
 
-from pretrain.alarms import STOP, WATCH, Alarm, check_alarms
+from pretrain.alarms import STOP, WATCH, Alarm, FrameCounts, check_alarms
 from pretrain.config import Monitoring
 
 M = Monitoring()
@@ -229,6 +229,57 @@ def test_the_threshold_is_a_config_knob_and_moving_it_moves_the_alarm():
     strict = M.replace(loader_wait_alarm=0.05)
     assert check_alarms(strict, train=series(healthy(5)), val=[], loader_wait_fraction=0.06)
     assert not check_alarms(M, train=series(healthy(5)), val=[], loader_wait_fraction=0.06)
+
+
+# --- §7.3 / #109: recompiles, and which path paid for them --------------------
+
+
+def frames(train: int = 0, monitoring: int = 0) -> FrameCounts:
+    return FrameCounts(train=train, monitoring=monitoring)
+
+
+def check(now: FrameCounts, before: FrameCounts = FrameCounts()) -> list[Alarm]:
+    return check_alarms(M, train=series(healthy(5)), val=[], frames=now, frames_before=before)
+
+
+def test_the_monitoring_path_compiling_at_the_first_boundary_is_silent():
+    # #109's whole cost. §10's val pass and grids compile their own graphs the first time they
+    # run, which is necessarily the first boundary — 18 frames on R1, R2 and R3 alike. Reading
+    # that as a training-step recompile is what produced an urgent warning on three clean runs.
+    assert check(frames(monitoring=18)) == []
+    assert check(frames(monitoring=18), before=frames(monitoring=18)) == []
+
+
+def test_the_monitoring_path_compiling_again_later_is_a_watch_not_a_stop():
+    # A real per-epoch cost — val runs at all 400 boundaries — but it is not §7.3's claim, and
+    # the remedy for it is never "turn off a lever worth ~2.4x".
+    (alarm,) = check(frames(monitoring=24), before=frames(monitoring=18))
+    assert alarm.name == "recompile_monitoring" and alarm.action == WATCH
+    assert "compile off" in alarm.message or "compile" in alarm.message
+    assert "runtime.compile=false" not in alarm.message
+
+
+def test_a_first_training_step_recompile_says_so_without_recommending_the_slow_flag():
+    (alarm,) = check(frames(train=1))
+    assert alarm.name == "recompile" and alarm.action == WATCH
+    assert "2.4x" in alarm.message
+    assert "runtime.compile=false" not in alarm.message  # a ~60 s cost is not worth a 2.4x tax
+
+
+def test_a_training_step_count_that_keeps_growing_escalates_to_stop_and_the_flag():
+    (alarm,) = check(frames(train=4), before=frames(train=1))
+    assert alarm.name == "recompile" and alarm.action == STOP
+    assert "runtime.compile=false" in alarm.message  # now it is the cheaper trade
+
+
+def test_a_standing_recompile_count_does_not_fire_every_epoch_for_four_hundred_epochs():
+    # Fires on growth, never on a standing count: the alternative is `alarms/fired` reading 400
+    # for one compile that happened once, which is the same noise #109 was about.
+    assert check(frames(train=1), before=frames(train=1)) == []
+
+
+def test_a_run_with_no_watch_runs_no_seven_three_check_at_all():
+    assert check_alarms(M, train=series(healthy(5)), val=[], frames=None) == []
 
 
 # --- What an alarm is ---------------------------------------------------------

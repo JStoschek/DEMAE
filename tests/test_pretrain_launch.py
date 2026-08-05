@@ -198,6 +198,60 @@ def test_the_summary_separates_the_first_step_from_the_steady_state(run, capsys)
     assert "steady" in out
 
 
+# --- §7.3 / #109: what a run says about its compiles ---------------------------
+
+
+def test_a_healthy_run_signs_off_saying_seven_three_held():
+    # The line #109 wanted and did not have. R1 finished 400 clean epochs and its last word on
+    # the subject was a warning recommending a ~2.4x slowdown, printed with the step number of
+    # the end of the run — the opposite end from where the compile actually happened.
+    summary = launch.format_compile_summary(train=0, monitoring=18, first_step=None)
+    assert "training step: 0 frames after warmup (§7.3 holds)" in summary
+    assert "WARNING" not in summary
+    assert "runtime.compile=false" not in summary
+
+
+def test_an_eager_run_says_the_lever_is_off_rather_than_that_seven_three_held(run, capsys):
+    # The fixture runs eager, which is every launch test here. "0 frames, §7.3 holds" would be
+    # true and useless of a run that compiled nothing — and it is the reading that lets an
+    # eager run pass for a fast one, which is the failure §7's whole verification exists for.
+    run("--steps", "4")
+    out = capsys.readouterr().out
+    assert "compile          off (runtime.compile=false)" in out
+    assert "§7.3 holds" not in out
+    assert "WARNING" not in out
+
+
+def test_the_footer_reports_where_the_recompile_was_first_seen_not_where_the_run_ended(run, capsys):
+    # #109's third problem: the footer called the formatter with the *current* step where it
+    # meant the *recorded first-seen* one, so the inline line said step 232 and the footer said
+    # step 92,400 — for one event. Anyone reading only the footer, which is what a finished run
+    # leaves you, was told it happened at the far end of the run.
+    summary = launch.format_compile_summary(train=2, monitoring=18, first_step=231)
+    assert "first at step 232" in summary
+    assert "92400" not in summary and "step 4" not in summary
+    assert "§7.3 does NOT hold" in summary
+
+
+def test_the_footer_calls_the_monitoring_frames_expected_rather_than_a_fault():
+    summary = launch.format_compile_summary(train=0, monitoring=18, first_step=None)
+    assert "18 frame(s) at the first epoch boundary" in summary
+    assert "expected" in summary
+    assert "WARNING" not in summary
+
+
+def test_the_first_training_step_recompile_does_not_recommend_turning_compile_off():
+    # The remedy costs ~2.4x for all 400 epochs; the fault it is being offered for costs ~60 s
+    # once. The flag belongs to the loop case, and only a second frame proves that case.
+    first = launch.format_recompile_warning(1, 231)
+    assert "step 232" in first and "2.4x" in first
+    assert "runtime.compile=false" not in first
+
+    second = launch.format_recompile_escalation(4, 1, 900)
+    assert "runtime.compile=false" in second and "1 -> 4" in second
+    assert "step 901" in second
+
+
 # --- The release backbone -----------------------------------------------------
 
 

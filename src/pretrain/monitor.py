@@ -60,6 +60,7 @@ did, not because the sample did.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -67,12 +68,13 @@ from typing import Any, Final, NamedTuple
 import numpy as np
 import torch
 
-from .alarms import Alarm, check_alarms
+from .alarms import Alarm, FrameCounts, check_alarms
 from .checkpoint import CheckpointPolicy
 from .config import RunConfig
 from .loss import patch_statistics
 from .probe import KnnProbe, ProbeReport, probe_for
 from .recon import ReconGrids
+from .runtime import CompileWatch
 from .sink import Histogram, RunLogger, open_run_logger
 from .throughput import ThroughputSummary, format_throughput
 from .train import StepRecord, Trainer, build_loader, train_resumable
@@ -436,12 +438,21 @@ class EpochMonitor:
         on_alarm: Callable[[Alarm], None] | None = None,
         probe: KnnProbe | None = None,
         recon: ReconGrids | None = None,
+        watch: CompileWatch | None = None,
     ) -> None:
         self.cfg = cfg
         self.trainer = trainer
         self.logger = logger
         self.val_loader = val_loader
         self.on_alarm = on_alarm
+        #: #109's split counter, or ``None`` for a caller that is not measuring compiles. Held
+        #: so the boundary can *declare itself* — everything §10 does here forwards through the
+        #: same compiled module in ``eval()`` under `no_grad`, which Dynamo guards on, so it
+        #: earns its own graphs the first time it runs. Attributing them to the training step
+        #: is what made §7.3's check fire on three consecutive healthy runs.
+        self.watch = watch
+        self._frames = FrameCounts()
+        self._stepped = False
         #: §10.2's reconstruction grids (#98), or ``None`` when no panel is committed at the
         #: configured path or the cadence is 0. Held for the life of the run rather than rebuilt
         #: per render: it carries the panel's pixels, read once, so epoch 400's grid is drawn
@@ -461,6 +472,16 @@ class EpochMonitor:
         self._losses: list[float] = []
         self._lr = 0.0
 
+    def _attributed(self):
+        """The boundary declaring itself to #109's watch — or nothing, when there is no watch."""
+        return nullcontext() if self.watch is None else self.watch.monitoring()
+
+    def _read_frames(self) -> FrameCounts:
+        """Both tallies as one value. ``FrameCounts()`` when nobody is watching."""
+        if self.watch is None:
+            return FrameCounts()
+        return FrameCounts(train=self.watch.compiled, monitoring=self.watch.monitored)
+
     def on_step(self, record: StepRecord) -> None:
         """Fold one optimizer step into the epoch being accumulated.
 
@@ -468,7 +489,17 @@ class EpochMonitor:
         (:class:`~pretrain.throughput.ThroughputMeter`) and arrive whole at
         :meth:`end_of_epoch`, so this does not count samples or read a clock. A second
         stopwatch here would give a second answer to a question that already has one.
+
+        It is also where #109's watch is baselined. The first step *this process* takes is
+        §7.3's compile — which is the first step of a resumed run too, so this keys on the
+        process rather than on step 0 — and everything counted after it is a recompile. Owned
+        here rather than by each caller, because a caller that forgot would charge the warmup
+        compile to §7.3's claim and report a recompile on every healthy run.
         """
+        if not self._stepped:
+            self._stepped = True
+            if self.watch is not None:
+                self.watch.reset()
         self._losses.append(record.loss)
         self._lr = record.lr
 
@@ -478,16 +509,23 @@ class EpochMonitor:
         """Close the epoch: score val, check §10's alarms, log the panel, return the row."""
         monitoring = self.cfg.monitoring
         train_loss = float(np.mean(self._losses)) if self._losses else float("nan")
+        # Read *before* this boundary runs, so what the §7 check sees is complete: every frame
+        # the previous boundary compiled, plus every frame this epoch's steps did. Reading it
+        # afterwards would put half of this boundary's own compiles inside the number and the
+        # other half outside it, depending on where in the sequence the check happened to sit.
+        frames_before, frames = self._frames, self._read_frames()
+        self._frames = frames
         # Every epoch, unconditionally — §10.1 sets no cadence, and a knob to skip it would take
         # the per-patch distribution and the val-side collapse alarm off the skipped epochs too.
         val = None
         if self.val_loader is not None and self.trainer is not None:
-            val = evaluate(
-                self.trainer,
-                self.val_loader,
-                mask_seed=monitoring.val_mask_seed,
-                var_floor=self.cfg.loss.norm_pix_var_floor,
-            )
+            with self._attributed():
+                val = evaluate(
+                    self.trainer,
+                    self.val_loader,
+                    mask_seed=monitoring.val_mask_seed,
+                    var_floor=self.cfg.loss.norm_pix_var_floor,
+                )
 
         self.train_trajectory.append((epoch, train_loss))
         if val is not None:
@@ -499,15 +537,18 @@ class EpochMonitor:
             loader_wait_fraction=(
                 None if throughput is None else throughput.loader_wait_fraction
             ),
+            frames=None if self.watch is None else frames,
+            frames_before=frames_before,
         )
 
         # §10.3's probe, on its own cadence — after val, so an epoch's cheap numbers are all
         # taken before the expensive one. It logs itself; what comes back is for the console.
-        probe = (
-            None
-            if self.probe is None or self.trainer is None
-            else self.probe.maybe_run(self.trainer.model, epoch)
-        )
+        with self._attributed():
+            probe = (
+                None
+                if self.probe is None or self.trainer is None
+                else self.probe.maybe_run(self.trainer.model, epoch)
+            )
 
         record = EpochRecord(
             epoch=epoch,
@@ -525,7 +566,15 @@ class EpochMonitor:
         # losses sit beside it. Rendered last, after every number is taken, because it is the
         # one part of a boundary that runs a forward pass purely to be looked at.
         if self.recon is not None and self.trainer is not None and self.recon.due(epoch):
-            values.update(self.recon.render(self.trainer))
+            with self._attributed():
+                values.update(self.recon.render(self.trainer))
+        if self.watch is not None:
+            # Logged every epoch so §7.3's precondition is chartable from a laptop rather than
+            # legible only in an ssh scrollback on a box that will be destroyed. Two flat lines
+            # at 0 and 18 is what a healthy run looks like; #109 is what it cost to have to
+            # infer that from throughput.
+            values["compile/train_frames"] = frames.train
+            values["compile/monitor_frames"] = frames.monitoring
         self.logger.log(values, step=epoch)
         for alarm in alarms:
             self._fired.append(alarm)
@@ -579,6 +628,7 @@ def train_epochs(
     on_alarm: Callable[[Alarm], None] | None = None,
     on_step: Callable[[StepRecord], None] | None = None,
     on_start: Callable[[Trainer], None] | None = None,
+    watch: CompileWatch | None = None,
 ) -> list[EpochRecord]:
     """**The run.** #94's resumable loop with §10's panel on its epoch boundary (#106).
 
@@ -604,6 +654,10 @@ def train_epochs(
     caller that does not supply one gets :func:`~pretrain.sink.open_run_logger`'s and this closes
     it.
 
+    ``watch`` is #109's split frame counter. Passing one is what lets the boundary attribute its
+    own compiles to the monitoring path instead of to §7.3's training-step claim; without it the
+    §7 checks simply do not run, which is what a test or a laptop wants.
+
     The :class:`EpochMonitor` is built inside ``on_start`` rather than before the call, because
     the :class:`~pretrain.train.Trainer` it scores with is the resumed one — built from the
     config and then loaded over from the checkpoint. A monitor holding a trainer built out here
@@ -625,6 +679,7 @@ def train_epochs(
             on_alarm=on_alarm,
             probe=probe_for(cfg, logger),
             recon=ReconGrids.from_config(cfg),
+            watch=watch,
         )
         if on_start is not None:
             on_start(trainer)

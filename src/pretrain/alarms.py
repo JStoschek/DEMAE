@@ -268,12 +268,83 @@ def loader_wait(fraction: float, epoch: int, *, monitoring: Monitoring) -> Alarm
     )
 
 
+@dataclass(frozen=True)
+class FrameCounts:
+    """Dynamo frames a run has compiled, split by which path paid for them (#109).
+
+    Mirrors :class:`~pretrain.runtime.CompileWatch`'s two tallies without importing it, so this
+    module keeps reading nothing but plain numbers.
+    """
+
+    #: Frames the **training step** compiled after warmup. §7.3's claim is that this is 0.
+    train: int = 0
+    #: Frames §10's boundary work compiled. Expected to be nonzero exactly once, at boundary 0.
+    monitoring: int = 0
+
+
+def recompiled(frames: FrameCounts, before: FrameCounts, epoch: int) -> Alarm | None:
+    """§7's other silent failure: a graph recompiling after the warmup step paid for it.
+
+    Fires on **growth**, never on a standing count, so a run that compiled once and settled
+    says so once instead of 400 times — while a genuine per-step loop, which grows every epoch,
+    fires every epoch exactly as :func:`loader_wait` does.
+
+    The two paths do not carry the same remedy, which is the whole of #109. A **first**
+    train-path frame is a ~60 s one-time cost and :data:`WATCH`: recommending
+    ``runtime.compile=false`` for it would trade one minute for a ~2.4x tax on every remaining
+    epoch (R0's measurement). A **second** one means the count is still climbing — the recompile
+    loop the lever actually loses to — and only then is turning compile off the cheaper trade.
+
+    The monitoring path is silent on its first appearance, because that appearance is the val
+    pass and the grids compiling their own graphs the first time they run, which
+    :meth:`ReconGrids.due <pretrain.recon.ReconGrids.due>` pins to boundary 0 by design. Growth
+    *after* that is a real per-epoch cost — val runs at every one of 400 boundaries — so it is
+    a :data:`WATCH` rather than nothing.
+    """
+    if frames.train > before.train:
+        first = before.train == 0
+        return Alarm(
+            "recompile",
+            epoch,
+            WATCH if first else STOP,
+            (
+                f"the training step compiled {frames.train} frame(s) after warmup, first seen "
+                f"at epoch {epoch}. §7.3 expects none — the mask count is fixed (#90) and short "
+                f"batches are dropped (#93) — so a shape or a guard is moving. One frame is a "
+                f"one-time cost; compile is still worth ~2.4x, so this is worth understanding "
+                f"and not worth disabling the lever for"
+            )
+            if first
+            else (
+                f"the training step's compile count grew again, {before.train} -> "
+                f"{frames.train} by epoch {epoch}. It is still climbing, which is the recompile "
+                f"loop §7.3's win is lost to: compiling is now costing this run rather than "
+                f"paying for it. `--set runtime.compile=false` is the cheaper fallback until it "
+                f"is understood"
+            ),
+        )
+    if before.monitoring > 0 and frames.monitoring > before.monitoring:
+        return Alarm(
+            "recompile_monitoring",
+            epoch,
+            WATCH,
+            f"§10's boundary work compiled {frames.monitoring - before.monitoring} more "
+            f"frame(s) by epoch {epoch}, {before.monitoring} -> {frames.monitoring}. The val "
+            f"pass and the grids compile once, at the first boundary; anything later repeats at "
+            f"every boundary for the rest of the run. This does not affect §7.3's training-step "
+            f"claim and does not warrant turning compile off",
+        )
+    return None
+
+
 def check_alarms(
     monitoring: Monitoring,
     *,
     train: Trajectory,
     val: Trajectory,
     loader_wait_fraction: float | None = None,
+    frames: FrameCounts | None = None,
+    frames_before: FrameCounts | None = None,
 ) -> list[Alarm]:
     """Every §10 condition against one run's history so far, in a stable order.
 
@@ -285,7 +356,9 @@ def check_alarms(
     :func:`diverged` **replaces** the three loss conditions rather than joining them: against a
     NaN every threshold below compares false, so reporting one real alarm beside three silent
     passes would read as three conditions checked and cleared. The loader-wait check is not a
-    loss condition and still runs — a diverged run on a starved loader has two problems.
+    loss condition and still runs — a diverged run on a starved loader has two problems. The
+    same goes for :func:`recompiled`: a diverged run that is also recompiling has two, and the
+    §7 checks are about what the kernels are doing rather than about the loss.
     """
     divergence = diverged(train, what="train") or diverged(val, what="val")
     fired: list[Alarm | None] = (
@@ -298,7 +371,9 @@ def check_alarms(
             plateau(train, monitoring=monitoring),
         ]
     )
+    epoch = train[-1][0] if train else 0
     if loader_wait_fraction is not None:
-        epoch = train[-1][0] if train else 0
         fired.append(loader_wait(loader_wait_fraction, epoch, monitoring=monitoring))
+    if frames is not None:
+        fired.append(recompiled(frames, frames_before or FrameCounts(), epoch))
     return [alarm for alarm in fired if alarm is not None]
