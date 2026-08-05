@@ -63,20 +63,30 @@ Why this check is not redundant with rclone: `rclone copy --checksum` proves the
 
 ## 3. Rent the instance
 
-In the vast console. Requirements come from provision's preflight, which is deliberately fatal and deliberately first — a wrong host should cost 30 seconds, not the 20 minutes it takes to discover the corpus does not fit after it has half-downloaded.
+In the vast console. Requirements come from provision's preflight, which is deliberately fatal and deliberately first — a wrong host should cost well under a minute, not the 20 minutes it takes to discover the corpus does not fit after it has half-downloaded. Everything in it is free except the bandwidth probe, which spends ~25 seconds.
 
 | Setting | Value | Enforced at |
 |---|---|---|
 | Image | `vastai/pytorch` (any recent py311–py313 tag) | — |
-| GPU | 1 (multi-GPU warns, does not block) | [`:203`](../scripts/provision_box.sh:203) |
-| RAM | ≥ 60 GB | [`:206`](../scripts/provision_box.sh:206) |
-| Free disk at `/workspace` | ≥ what still has to land — 70 GB on a fresh box | [`:226`](../scripts/provision_box.sh:226) |
+| GPU | 1 (multi-GPU warns, does not block) | [`:257`](../scripts/provision_box.sh:257) |
+| RAM | ≥ 60 GB | [`:260`](../scripts/provision_box.sh:260) |
+| Free disk at `/workspace` | ≥ what still has to land — 70 GB on a fresh box | [`:281`](../scripts/provision_box.sh:281) |
+| Download bandwidth | corpus must land in ≤ 20 min — ~41 MiB/s (≈340 Mbit/s) sustained on a fresh box | [`:379`](../scripts/provision_box.sh:379) |
 | Onstart | `env >> /etc/environment` | — |
 | Env vars | see §11 | — |
 
 The image's bundled torch is unused — `uv.lock` pins torch and its whole CUDA userspace as wheels, and that lock is the reproducibility anchor. The image supplies drivers, sshd, and a Python to bootstrap `uv` from. Its own pytorch is dead weight but cached on vast hosts, so it mostly costs nothing to pull.
 
 **The onstart line is not optional.** SSH sessions load a fresh environment from `/etc/environment`, so anything passed via `--env` is invisible to your shell without it ([Cloudflare-independent; see vast's Docker environment docs](https://docs.vast.ai/guides/instances/docker-environment)). Skip it and provisioning dies at step 3/8 with `no corpus remote`.
+
+**Filter on bandwidth in the console, but do not trust it.** `inet_down` is the host's own claim about itself, and it is the one listing field that is regularly fiction — a box advertising 2 Gbit/s that pulls at 25 MiB/s costs half an hour of rent before anything trains. Preflight measures the real thing: ranged reads out of real shards from the actual corpus bucket, `--jobs` streams in parallel, ~25 seconds and ~384 MB, discarded rather than written. What it compares is not a speed but a *time* — how long the corpus **this box is still missing** would take — so a re-provision needing 5 GB is not held to the same rate as a fresh box needing 47. Over budget and it dies before the copy starts, having spent nothing:
+
+```
+FAILED: corpus download would take ~53 min, over the 20 min limit.
+        measured 15.3 MiB/s across 6 streams (384 MiB in 25s), with 47 GB still to land.
+```
+
+Destroy the instance and rent another — that is the whole point of the check being first. To take the box anyway, re-run with `--max-corpus-min N` (the message quotes the N that would pass); `--max-corpus-min 0` skips the measurement entirely. The probe is also skipped, not failed, when it cannot run at all — no `rclone` on the box yet, no remote configured, or `--skip-corpus` — because step 3 is where each of those is already fatal with a better message. The one thing it *does* turn into a hard failure is zero bytes from the bucket: a box that cannot read the corpus at all is either off the network or never got the `RCLONE_CONFIG_DEMAE_*` env vars.
 
 ---
 
@@ -129,7 +139,7 @@ literal `unknown` — writing it would leave a *non-empty* file on the box, sile
 step-6 warning while recording nothing. Provisioning step 6 prints the value it found and warns if
 the file is missing.
 
-A failed rsync never reaches provisioning. Three separate `die` paths exist for missing code — [`:241`](../scripts/provision_box.sh:241) (no `uv.lock`), [`:368`](../scripts/provision_box.sh:368) (no `check_corpus.py`), [`:385`](../scripts/provision_box.sh:385) (no `artifacts/`).
+A failed rsync never reaches provisioning. Three separate `die` paths exist for missing code — [`:393`](../scripts/provision_box.sh:393) (no `uv.lock`), [`:520`](../scripts/provision_box.sh:520) (no `check_corpus.py`), [`:537`](../scripts/provision_box.sh:537) (no `artifacts/`).
 
 **`--delete` reaches only the directories being pushed.** rsync scopes deletion to each
 transferred source, so `data/`, `runs/`, `.venv/` and `.box_identity` at the destination root

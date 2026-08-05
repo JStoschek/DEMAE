@@ -112,6 +112,80 @@ def test_r0s_box_would_now_provision_and_a_genuinely_small_one_still_would_not()
     assert provisioned <= 50 < fresh  # R0's box had 50 GB free with the corpus already down
 
 
+# --- Preflight's download gate ------------------------------------------------
+#
+# vast's advertised inet_down is the host's claim about itself and it is regularly fiction. The
+# probe that checks it has to move real bytes off the real bucket, so none of it can be tested
+# here — but the conversion from "this many bytes in this many milliseconds" to "reject this
+# box" is arithmetic, and it is the part that decides whether money gets spent.
+
+MIB = 1048576
+
+
+@pytest.mark.parametrize(
+    "mib, ms, gib, expected, why",
+    [
+        # 384 MiB (6 streams x 64) in 3s is ~128 MiB/s — an ordinary good host.
+        (384, 3_000, 47, 7, "a fast host lands the corpus inside the coffee break"),
+        # The same probe taking 25s is ~15 MiB/s, which is the case this gate exists for: it
+        # provisions fine, it just costs half an hour of rent before anything trains.
+        (384, 25_000, 47, 53, "a slow host is rejected on time, not on speed"),
+        # A resumed box with 5 GB left is on exactly that slow host and is *fine*, which is why
+        # the budget is minutes and not MiB/s.
+        (384, 25_000, 5, 6, "the same speed passes when there is less left to land"),
+        # Rounding is upward, at the boundary that matters: 47 GiB at 40 MiB/s is 20.05 minutes,
+        # and a gate that reads that as 20 is not a 20-minute gate.
+        (1000, 25_000, 47, 21, "20.05 minutes is over the 20-minute budget"),
+        # Nothing left to download cannot take any time, however slow the box.
+        (384, 25_000, 0, 0, "a complete corpus needs no bandwidth"),
+    ],
+)
+def test_the_download_eta_is_what_the_gate_compares(mib, ms, gib, expected, why):
+    got = call(PROVISION, f"corpus_eta_minutes {mib * MIB} {ms} {gib}")
+    assert int(got) == expected, why
+
+
+def test_no_bytes_at_all_is_not_a_measurement_of_zero_speed():
+    """A dead network and a slow one must not land in the same branch.
+
+    Zero bytes means the probe learned nothing — dead link, or credentials that never reached
+    the shell. It comes back as an ETA nothing can pass, so the caller's own check for it runs
+    before any comparison, and a divide-by-zero never gets the chance to read as "fast".
+    """
+    unpassable = int(call(PROVISION, "corpus_eta_minutes 0 25000 47"))
+    assert unpassable > 24 * 60
+
+
+def test_the_gate_implies_a_bandwidth_floor_a_human_can_check_against_a_listing():
+    """What the 20-minute budget is, expressed as the number vast actually advertises.
+
+    Not a second threshold — it is derived from the same function the box runs. It is here so
+    that the machine filter in the vast console can be set to something, and so that a change to
+    MAX_CORPUS_MIN or CORPUS_GB shows up as a change to this number rather than silently.
+    """
+    budget = int(call(PROVISION, "printf %s $MAX_CORPUS_MIN"))
+    corpus = int(call(PROVISION, "printf %s $CORPUS_GB"))
+    passing = [
+        mibps
+        for mibps in range(1, 400)
+        if int(call(PROVISION, f"corpus_eta_minutes {mibps * MIB} 1000 {corpus}")) <= budget
+    ]
+    assert min(passing) == 41  # MiB/s sustained, i.e. ~340 Mbit/s on a 47 GB corpus
+
+
+@pytest.mark.parametrize(
+    "mib, ms, expected",
+    [
+        (384, 3_000, "128.0"),
+        (384, 25_000, "15.3"),
+        (10, 25_000, "0.4"),  # a genuinely terrible host still gets a legible number
+        (0, 25_000, "0.0"),
+    ],
+)
+def test_the_measured_rate_is_printed_for_the_human_not_the_gate(mib, ms, expected):
+    assert call(PROVISION, f"probe_mib_per_s {mib * MIB} {ms}") == expected
+
+
 # --- The rclone floor (#107 item 4) -------------------------------------------
 
 

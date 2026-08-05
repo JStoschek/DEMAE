@@ -61,6 +61,19 @@ CKPT_GB=15         # §11 retention keeps last 3 + the 4 milestones = 7 files, ~
 RCLONE_MIN="1.65.0"
 RCLONE_PIN="1.69.1"
 
+# The download gate. vast's advertised inet_down is a host-reported number and it is regularly
+# fiction — a box billed at 2 Gbit/s that pulls the corpus at 25 MiB/s costs 30 minutes of rent
+# before anything trains, and the only way to know is to move bytes off the real bucket. So
+# preflight does exactly that, and converts what it measures into the only number that decides
+# anything: how long *this* box would take to land the corpus it is still missing.
+#
+# 20 minutes is the budget, not a speed. Speeds do not compare across boxes with different
+# amounts already on disk, and a re-provision that only needs 5 GB should not be held to the
+# same MiB/s as a fresh one.
+MAX_CORPUS_MIN=20   # 0 disables the gate
+NET_PROBE_MIB=64    # per stream, ranged out of a real shard
+NET_PROBE_SECONDS=25 # ceiling on the probe itself; a host too slow to finish it has failed
+
 RECHECK=0
 SKIP_ENV=0
 SKIP_CORPUS=0
@@ -78,7 +91,9 @@ provision_box.sh — bring a rented box to plan §15's pre-flight line.
   --recheck          re-run `rclone check` after the copy (hash compare, no re-download)
   --skip-corpus      leave the corpus alone; verify whatever is already on disk
   --skip-env         skip the uv sync step
-  --probe-steps N    steps for the throughput probe, 0 to skip (default: 200)
+  --probe-steps N    steps for the loader throughput probe, 0 to skip (default: 200)
+  --max-corpus-min N reject the box if preflight measures the corpus taking longer than this
+                     many minutes to download, 0 to skip the measurement (default: 20)
   --rclone-version V rclone to install when this box's is older than the floor (default: 1.69.1)
   -h, --help         this
 
@@ -133,6 +148,44 @@ required_free_gb() {
     printf '%s\n' $(( need + CKPT_GB ))
 }
 
+# corpus_eta_minutes <bytes_measured> <elapsed_ms> <gib_still_to_land>
+#
+# The probe's whole output, reduced to the question preflight is asking. Rounds *up*, because a
+# gate that reads 20.9 minutes as 20 is not a 20-minute gate.
+#
+# Two things it deliberately does not do. It does not extrapolate a per-stream speed — the
+# measurement is already the aggregate of the same number of parallel transfers step 3 will use,
+# so the rate goes in as one number. And it does not pad for slow start or TLS setup: those make
+# a short probe read *slower* than the sustained copy, which is the safe direction for a gate
+# that spends money when it is wrong in the other one.
+#
+# Zero bytes is not zero speed, it is no measurement, and the caller has to be able to tell those
+# apart — so it comes back as an ETA nothing can pass rather than a division by zero.
+corpus_eta_minutes() {
+    local bytes="$1" ms="$2" gib="$3" num denom
+    if (( bytes <= 0 )); then printf '999999\n'; return 0; fi
+    if (( ms <= 0 )); then ms=1; fi
+    if (( gib <= 0 )); then printf '0\n'; return 0; fi
+    # gib * 2^30 bytes, at (bytes / ms) bytes per millisecond, in minutes. Grouped so the
+    # multiplications happen before the divisions — integer division early would quantise a
+    # 47 GB estimate to the nearest minute-per-GB and throw away the point of measuring.
+    num=$(( gib * 1073741824 * ms ))
+    denom=$(( bytes * 60000 ))
+    printf '%s\n' $(( (num + denom - 1) / denom ))
+}
+
+# probe_mib_per_s <bytes_measured> <elapsed_ms> -> "112.4"
+#
+# For the human reading the log, not for the decision — the decision is corpus_eta_minutes. One
+# decimal because the interesting range spans two orders of magnitude and "0 MiB/s" is a worse
+# thing to print than "0.4 MiB/s" when a host is genuinely that bad.
+probe_mib_per_s() {
+    local bytes="$1" ms="$2" tenths
+    if (( bytes <= 0 || ms <= 0 )); then printf '0.0\n'; return 0; fi
+    tenths=$(( bytes * 10000 / ms / 1048576 ))
+    printf '%s.%s\n' $(( tenths / 10 )) $(( tenths % 10 ))
+}
+
 # rclone_semver "<rclone version's first line>" -> "1.60.1"
 #
 # Deliberately incurious about everything but the three numbers. The image's build calls itself
@@ -182,6 +235,7 @@ while [[ $# -gt 0 ]]; do
         --skip-corpus) SKIP_CORPUS=1; shift ;;
         --skip-env) SKIP_ENV=1; shift ;;
         --probe-steps) PROBE_STEPS="$2"; shift 2 ;;
+        --max-corpus-min) MAX_CORPUS_MIN="$2"; shift 2 ;;
         --rclone-version) RCLONE_PIN="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -193,7 +247,9 @@ CORPUS_DIR="$ROOT/data/corpus_500k"
 # ---------------------------------------------------------------------------------------------
 step "1/8  Preflight — is this box worth provisioning?"
 # Deliberately first and deliberately fatal. A wrong host should cost 30 seconds, not the 20
-# minutes it takes to discover the corpus does not fit after it has half-downloaded.
+# minutes it takes to discover the corpus does not fit after it has half-downloaded. Every check
+# here is free except the last, which spends ~25s and ~384 MB measuring what this host's link
+# actually does — and buys back the half hour a host that lies about its bandwidth would cost.
 
 command -v nvidia-smi >/dev/null || die "no nvidia-smi — this is not a GPU box"
 GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
@@ -231,6 +287,104 @@ NEED_GB="$(required_free_gb "$CORPUS_ON_DISK_GB" "$HAVE_VENV" "$SKIP_CORPUS" "$S
 ok "Disk    ${FREE_GB} GB free at $ROOT, ${NEED_GB} GB still to land"
 if [[ "$CORPUS_ON_DISK_GB" -gt 0 ]]; then
     ok "        ${CORPUS_ON_DISK_GB} GB of corpus already here — step 4 is what says it is whole"
+fi
+
+# --- How long the corpus would take to land ---------------------------------------------------
+# Last in preflight because it is the only part that moves bytes, and everything above it is free.
+#
+# Measured against the actual corpus bucket, with the actual rclone that is on this box right
+# now, over the same number of parallel streams step 3 will use. Nothing else answers the
+# question: a generic speed test measures the path to a speed-test server, and vast's own
+# inet_down is the host's claim about itself, which is the thing being checked.
+#
+# Ranged reads out of real shards, discarded to `wc -c`. It writes nothing to disk, and the
+# bytes are not wasted twice: they are the same bytes step 3 fetches, from the same objects, so
+# the worst case is that a box that passes has re-downloaded 384 MB of a 47 GB copy.
+#
+# Whatever rclone is here is good enough for this, including the image's 2022 build — step 3's
+# floor is about a 501 on *upload*, not about how fast a GET arrives. So the probe runs before
+# the install, where a bad host is still 30 seconds old.
+CORPUS_TO_LAND_GB=$(( CORPUS_GB - CORPUS_ON_DISK_GB ))
+(( CORPUS_TO_LAND_GB > 0 )) || CORPUS_TO_LAND_GB=0
+
+now_ms() {
+    local t
+    t="$(date +%s%3N 2>/dev/null || true)"
+    # GNU date gives milliseconds; anything else leaves the %3N in place and gets whole seconds.
+    if [[ "$t" =~ ^[0-9]+$ ]]; then printf '%s\n' "$t"; else printf '%s000\n' "$(date +%s)"; fi
+}
+
+if [[ "$MAX_CORPUS_MIN" -eq 0 ]]; then
+    ok "Network probe skipped (--max-corpus-min 0)"
+elif [[ "$SKIP_CORPUS" -eq 1 || "$CORPUS_TO_LAND_GB" -eq 0 ]]; then
+    ok "Network probe skipped — no corpus left to download"
+elif [[ -z "$CORPUS_REMOTE" ]]; then
+    # Not fatal here only because step 3 already dies on this, with the better message.
+    warn "no corpus remote set, so the download cannot be timed — step 3 will refuse anyway"
+elif ! command -v rclone >/dev/null; then
+    warn "no rclone on this box yet, so the download cannot be timed here. Step 3 installs one,"
+    warn "and a slow host will then be discovered the expensive way, mid-copy."
+else
+    NET_CHUNK=$(( NET_PROBE_MIB * 1024 * 1024 ))
+    NET_TMP="$(mktemp -d)"
+    trap 'rm -rf "$NET_TMP"' EXIT
+    # Objects at least one chunk long, so every stream pulls the same amount and a manifest
+    # sidecar cannot end a stream after 4 KB and drag the aggregate down with it. Listing is
+    # outside the timed section: it is one round trip and it is not what is being measured.
+    NET_OBJECTS=()
+    while IFS= read -r line; do NET_OBJECTS+=("$line"); done < <(
+        rclone lsf --files-only --format "sp" --separator "|" "$CORPUS_REMOTE" 2>"$NET_TMP/lserr" \
+            | awk -F'|' -v min="$NET_CHUNK" '$1 >= min {print $2}' \
+            | head -n "$JOBS" || true
+    )
+    if [[ "${#NET_OBJECTS[@]}" -eq 0 ]]; then
+        warn "could not list $CORPUS_REMOTE, so the download cannot be timed:"
+        sed 's/^/        /' "$NET_TMP/lserr" >&2 || true
+        warn "step 3 is where this becomes fatal."
+        rm -rf "$NET_TMP"; trap - EXIT
+    else
+        NET_TIMEOUT=()
+        if command -v timeout >/dev/null; then NET_TIMEOUT=(timeout "$NET_PROBE_SECONDS"); fi
+        echo "   probing ${#NET_OBJECTS[@]} parallel streams x ${NET_PROBE_MIB} MiB from $CORPUS_REMOTE…"
+        NET_N=0
+        NET_START="$(now_ms)"
+        for NET_OBJ in "${NET_OBJECTS[@]}"; do
+            NET_N=$(( NET_N + 1 ))
+            {
+                ${NET_TIMEOUT[@]+"${NET_TIMEOUT[@]}"} \
+                    rclone cat --head "$NET_CHUNK" "$CORPUS_REMOTE/$NET_OBJ" \
+                    2>>"$NET_TMP/err" | wc -c > "$NET_TMP/n$NET_N"
+            } &
+        done
+        # A stream cut off by `timeout` is a data point, not an error: what it transferred in
+        # NET_PROBE_SECONDS is exactly the throughput being asked about. So nothing here reads
+        # an exit status — only the byte counts, and the clock they arrived against.
+        wait
+        NET_MS=$(( $(now_ms) - NET_START ))
+        (( NET_MS > 0 )) || NET_MS=1
+        NET_BYTES="$(cat "$NET_TMP"/n* 2>/dev/null | awk '{s+=$1} END {printf "%d", s+0}')"
+
+        if [[ "${NET_BYTES:-0}" -eq 0 ]]; then
+            warn "not one byte arrived from $CORPUS_REMOTE in ${NET_PROBE_SECONDS}s:"
+            tail -3 "$NET_TMP/err" 2>/dev/null | sed 's/^/        /' >&2 || true
+            rm -rf "$NET_TMP"; trap - EXIT
+            die "this box cannot read the corpus bucket — either the network is dead or the
+        RCLONE_CONFIG_DEMAE_* keys did not reach this shell (see --help's onstart note).
+        Nothing has been downloaded, so destroy it and rent another, or fix the env."
+        fi
+        rm -rf "$NET_TMP"; trap - EXIT
+
+        NET_MIBPS="$(probe_mib_per_s "$NET_BYTES" "$NET_MS")"
+        CORPUS_ETA_MIN="$(corpus_eta_minutes "$NET_BYTES" "$NET_MS" "$CORPUS_TO_LAND_GB")"
+        [[ "$CORPUS_ETA_MIN" -le "$MAX_CORPUS_MIN" ]] \
+            || die "corpus download would take ~${CORPUS_ETA_MIN} min, over the ${MAX_CORPUS_MIN} min limit.
+        measured ${NET_MIBPS} MiB/s across ${#NET_OBJECTS[@]} streams ($(( NET_BYTES / 1048576 )) MiB in $(( NET_MS / 1000 ))s),
+        with ${CORPUS_TO_LAND_GB} GB still to land. vast's advertised bandwidth is the host's own
+        claim; this is what the bucket actually delivers here. Nothing has been downloaded
+        and no GPU time is committed — destroy this instance and rent another. To take it
+        anyway: re-run with --max-corpus-min ${CORPUS_ETA_MIN}."
+        ok "Network ${NET_MIBPS} MiB/s over ${#NET_OBJECTS[@]} streams — ${CORPUS_TO_LAND_GB} GB in ~${CORPUS_ETA_MIN} min (limit ${MAX_CORPUS_MIN})"
+    fi
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -453,6 +607,8 @@ vast_instance=${INSTANCE_ID}
 image=${VAST_IMAGE:-vastai/pytorch}
 dataset_version=${EXPECT_VERSION}
 rclone=${RCLONE_HAVE}
+net_mib_s=${NET_MIBPS:-unmeasured}
+corpus_eta_min=${CORPUS_ETA_MIN:-unmeasured}
 EOF
 chmod 644 "$ROOT/.box_identity"
 ok "wrote $ROOT/.box_identity — paste these into the W&B run tags"
