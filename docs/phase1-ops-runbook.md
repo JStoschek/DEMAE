@@ -31,7 +31,7 @@ Done once, then never again.
 
 | Item | State |
 |---|---|
-| `vastai` CLI on PATH | done — `uv tool install vastai`, 1.5.1 |
+| `vastai` CLI on PATH | done — `uv tool install vastai`, 1.5.1. **It lands in `~/.local/bin`, which a non-interactive shell does not have on `PATH`** — teardown looks there explicitly since #111, but anything else you run by hand may not |
 | `vastai set api-key` | done |
 | SSH public key at [cloud.vast.ai/manage-keys](https://cloud.vast.ai/manage-keys/) | done |
 | `boto3` for the laptop-side bucket checks | already a core dependency, present in `.venv` |
@@ -385,11 +385,34 @@ uv run ./scripts/teardown_box.sh --host demae-box \
   --endpoint-url https://79083f36be71e95fad1b0b06d2bb62a1.r2.cloudflarestorage.com
 ```
 
-Seven steps: alive check → inventory (sha256 on the box) → catch-up sync → haul small unique things → bucket presence (`head_object` from here) → deep verify (re-download and re-hash) → verdict.
+Seven steps: alive check → inventory (sha256 on the box) → catch-up sync → haul small unique things → bucket presence (`head_object` from here) → deep verify (re-download and re-hash) → verdict. Under `--destroy` an eighth follows the verdict: destroy, then prove the instance is gone.
 
 **Report-only by default.** Read the verdict, then re-run with `--destroy`, which still makes you type the instance id back. A failed verification refuses to destroy no matter what flags are passed. Destroying is permanent — vast container storage is deleted with the instance, not archived.
 
 There is no pause anywhere in this workflow. Teardown is the destroy path.
+
+### The destroy is verified, because it once was not (#111)
+
+**After R2/R3, `teardown_box.sh --destroy --yes` printed `instance 46808051 destroyed.` while the instance was still running and still billing.** Both lines appeared together, which is the only reason it was caught:
+
+```
+Aborted.
+instance 46808051 destroyed. ./teardown-46808051 holds everything that was unique to it.
+```
+
+**There are two confirmations and `--yes` only ever skipped one.** `--yes` bypasses *this script's* "type the instance id" question; the vastai CLI has a prompt of its own, and with no tty on stdin it read EOF, printed `Aborted.`, and **exited 0**. Nothing checked the status, so the success line printed unconditionally.
+
+That is the dangerous shape rather than a cosmetic bug: every other failure in the script refuses to proceed and says nothing was destroyed, while this one **claimed the irreversible action had succeeded when it had not** — so the natural next move, closing the terminal and no longer watching the spend, was exactly wrong.
+
+What changed:
+
+- **`--yes` now covers both confirmations** — the script passes `vastai destroy instance -y`.
+- **The exit status is not the verdict.** After destroying, the script re-reads the account's instance list and asserts the id is gone. Same principle as step 5's independent bucket check: the actor's own report of its work is not evidence of the work.
+- **The list is proved able to see the instance *before* the destroy**, so that "absent afterwards" means something. A listing that came back empty for any other reason — wrong API key, changed output format — would otherwise read as "gone".
+- **`destroyed.` is printed on one path only.** If the id is still listed the script fails loudly and prints the command to run by hand; if the list cannot be read at all it says so and claims nothing either way.
+- **The `vastai` CLI is now checked at startup**, not after the deep verify has re-downloaded ~900 MB — and it is looked for in `~/.local/bin` as well as on `PATH`, because that is where the `uv tool install vastai` in §1 puts it and a non-interactive shell does not have that directory. This fired on a correctly provisioned laptop.
+
+**Still true, and worth keeping in mind:** the verdict line is a report, not proof. Confirm with `vastai show instances` — or the [console](https://console.vast.ai/instances/) — before you stop watching the spend.
 
 ---
 
@@ -485,4 +508,6 @@ Set a **time-based** rule, prefix `r1/`, retention outliving the run plus the an
 | §7's start command landed in the wrong directory, and its sync half failed silently | **closed 2026-08-04 (#108).** The image's rc `cd`s every new pane to `/workspace`, overriding `tmux new-session -c /workspace/DEMAE`, so §7's two commands worked only when typed by hand into an attached pane: `uv run` died loudly with `ModuleNotFoundError`, and `scripts/sync_checkpoints.sh` — a relative path — printed one "No such file or directory" and never started, with no retry and no rising failure count. [`run.sh`](../scripts/run.sh) replaces both: absolute throughout, sync started *first* and required to prove itself alive before any GPU time, one `--run-id` threaded through the config, the directory, the bucket prefix, the log and the session. The loop now writes `.sync_heartbeat` so "never started" and "started and found nothing" are different observations, and `--once` deliberately writes none. Pinned in `tests/test_ops_scripts.py`, including that §7's own fenced commands hold no relative script path — and **verified on a live box**, both the working path and the refusal |
 | §7 documented `--vit-base` in the R1/R2/R3 position | **closed 2026-08-04 (#108).** `RunConfig.vit_base()` sets `run_id="R5"`, so following §7 literally for R1 would have trained a ViT-B into `runs/R5` while the sync window shipped `runs/R1`. R1 used the bare default and escaped it. `run.sh --run-id` now sets the config's run id explicitly on every run, refuses a second `run_id=` in the passthrough args, and warns when `--vit-base` is attached to another arm; a test refuses any `--vit-base` example in this document that does not name R5 |
 | `watch_run.sh` could never arm: its self-test read every zero count as two lines | **closed 2026-08-04**, found on a live box while verifying #108. `pgrep -fc` and `grep -c` both print their count *and* exit non-zero when it is zero, so the `\|\| echo 0` guard — there for the different failure of the command being absent — fired on the ordinary empty case too and the answer arrived as `0\n0`. Every comparison against `"0"` then read false, in both directions: the self-test decided its impossible sentinel was running and refused to arm as if #82 were back, and `completed_marker` decided the completion line was present, which reports a **crashed** run as `finished`. One parse function now, with anything non-numeric still meaning "unknown" rather than zero. Pinned in `tests/test_ops_scripts.py`; the armed watcher then reported a real run's finish from the laptop |
+| `teardown_box.sh --destroy --yes` reported an instance destroyed while it was still running and billing | **closed 2026-08-05 (#111).** Two confirmations, and `--yes` only ever skipped one: the vastai CLI has a prompt of its own, which with no tty read EOF, printed `Aborted.`, and **exited 0**. Unchecked, so `instance 46808051 destroyed.` printed one line below `Aborted.` — the only reason it was caught. The dangerous shape, not a cosmetic one: every other failure in the script refuses to proceed and says nothing was destroyed, while this one claimed the irreversible action had succeeded, making "stop watching the spend" the natural next move. `--yes` now passes `-y` to the CLI, **and the exit status is no longer the verdict** — the account's instance list is re-read and the id asserted gone, having first been proved visible *before* the destroy so that absence afterwards means something. `destroyed.` is reachable on that one path; a still-listed id fails loudly with the by-hand command, and an unreadable list claims nothing either way. Pinned in `tests/test_ops_scripts.py`, including the original bug: a CLI that exits 0 having destroyed nothing must not produce `destroyed.` |
+| `--destroy` checked for the `vastai` CLI after the deep verify, and missed `~/.local/bin` | **closed 2026-08-05 (#111).** A one-line precondition ran after all seven steps including a ~900 MB re-download, and fired on a *correctly provisioned* laptop, because `uv tool install vastai` lands the binary in `~/.local/bin` — a directory a non-interactive shell does not have on `PATH`. The check moved to startup and now looks there explicitly |
 | `sync_checkpoints.sh` tested only against a local rclone remote | its logic is verified, including the prune-does-not-propagate property; behavior against R2 is not. The `--once` probe on the box closes this in seconds |

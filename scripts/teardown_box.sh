@@ -60,12 +60,100 @@ teardown_box.sh — verify the box holds nothing unique, then optionally destroy
   --deep-all            re-download and re-hash EVERY checkpoint, not just newest + milestones
   --no-sync             skip the catch-up sync; verify only
   --sync-cmd 'CMD'      the sync command to run on the box (default: rclone copy …)
-  --destroy             destroy the instance if every check passes
-  --yes                 skip the interactive confirmation (still requires every check to pass)
+  --destroy             destroy the instance if every check passes, then prove it is gone
+  --yes                 skip *both* confirmations — this script's and the vastai CLI's
+                        (still requires every check to pass)
   --force               proceed even if training still looks alive (dangerous)
   -h, --help            this
 EOF
 }
+
+step()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+ok()    { printf '   ok    %s\n' "$*"; }
+warn()  { printf '   \033[33mwarn\033[0m  %s\n' "$*"; }
+die()   { printf '\n\033[31mSTOPPED: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# --- Destroying, and proving it (#111) --------------------------------------------------------
+# These are here, above argv, so tests/test_ops_scripts.py can source this file and drive them
+# against a stubbed `vastai` — see the DEMAE_LIB guard below. The bug they exist for could not
+# be caught any other way: it produced a *success message* on a path that destroyed nothing.
+
+# vastai_bin — print the path to the vastai CLI, or return 1.
+#
+# Not just `command -v`: the runbook installs it with `uv tool install vastai`, which lands it in
+# ~/.local/bin — a directory an interactive login shell has on PATH and a non-interactive one
+# does not. R2/R3's teardown hit exactly that on a correctly provisioned laptop.
+vastai_bin() {
+    local candidate
+    if candidate="$(command -v vastai 2>/dev/null)"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    for candidate in "$HOME/.local/bin/vastai" "/usr/local/bin/vastai" "/opt/homebrew/bin/vastai"; do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# instance_is_gone <vastai_bin> <instance_id>
+#   0  the id is absent from the account's instance list
+#   1  the id is still listed
+#   2  could not tell — the query itself failed
+#
+# `show instances --quiet` prints one numeric id per line. The match is whole-line (`grep -qx`)
+# so that instance 4680 is never read as 46808051.
+instance_is_gone() {
+    local bin="$1" id="$2" listing
+    listing="$("$bin" show instances --quiet 2>/dev/null)" || return 2
+    grep -qx -- "$id" <<< "$listing" && return 1
+    return 0
+}
+
+# destroy_instance <vastai_bin> <instance_id>
+#   0  destroyed, and verified gone by an independent query
+#   1  NOT destroyed — the id is still listed
+#   3  destroy was attempted but could not be verified either way
+#
+# The exit status of `vastai destroy` is deliberately **not** the verdict. That is the whole
+# lesson of #111: with no tty the CLI's own confirmation reads EOF, prints `Aborted.`, and exits
+# **0**. `-y` fixes that particular path, but a flag is a promise about one version of one tool,
+# and the thing at stake is an instance billing by the hour. So the account's instance list is
+# what decides, on the same principle as step 5's independent bucket check — the actor's own
+# report of its work is not evidence of the work.
+#
+# The list is proved able to see this instance *before* the destroy, so that "absent afterwards"
+# means something. Without that, a listing that returned empty for any reason — wrong API key,
+# a changed output format, an account with the instance under a different key — would read as
+# "gone" and print the very success line this function exists to withhold.
+destroy_instance() {
+    local bin="$1" id="$2" rc=0 out before=0 after=0
+
+    instance_is_gone "$bin" "$id" || before=$?
+    case "$before" in
+        0) ok "instance $id is already gone"; return 0 ;;
+        2) warn "could not list instances before destroying — 'destroyed' cannot be proven" ;;
+    esac
+
+    out="$("$bin" destroy instance -y "$id" 2>&1)" || rc=$?
+    [[ -z "$out" ]] || sed 's/^/        /' <<< "$out"
+    [[ "$rc" -eq 0 ]] || warn "vastai destroy exited $rc"
+
+    instance_is_gone "$bin" "$id" || after=$?
+    case "$after" in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) return 3 ;;
+    esac
+}
+
+# Sourcing this file with DEMAE_LIB set defines the above and stops here, before argv is read or
+# any box is contacted. It is the only concession in this script to being tested off-box.
+if [[ -n "${DEMAE_LIB:-}" ]]; then
+    return 0
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -96,13 +184,18 @@ done
 [[ -n "$PREFIX" ]]    || { echo "--prefix is required" >&2; exit 2; }
 [[ "$PREFIX" == */ ]] || PREFIX="$PREFIX/"
 
-step()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-ok()    { printf '   ok    %s\n' "$*"; }
-warn()  { printf '   \033[33mwarn\033[0m  %s\n' "$*"; }
-die()   { printf '\n\033[31mSTOPPED: %s\033[0m\n' "$*" >&2; exit 1; }
-
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# --- Preconditions for --destroy, checked before any work (#111) ------------------------------
+# These used to be checked at the *end*, after all seven steps — including the deep verify, which
+# re-downloads and re-hashes ~900 MB. A missing CLI is knowable in one line, and finding out
+# about it after the bandwidth has been spent is a pure waste of the operator's evening.
+VASTAI=""
+if [[ "$DO_DESTROY" -eq 1 ]]; then
+    VASTAI="$(vastai_bin)" \
+        || die "--destroy needs the vastai CLI (uv tool install vastai; it lands in ~/.local/bin)"
+fi
 
 # ---------------------------------------------------------------------------------------------
 step "1/7  Is anything still running?"
@@ -320,7 +413,6 @@ EOF
 fi
 
 [[ "$INSTANCE" != "unknown" ]] || die "--destroy needs an instance id; pass --instance"
-command -v vastai >/dev/null || die "--destroy needs the vastai CLI on PATH (pip install vastai)"
 
 if [[ "$ASSUME_YES" -eq 0 ]]; then
     printf '\nDestroy vast.ai instance %s permanently? Type the instance id to confirm: ' "$INSTANCE"
@@ -328,5 +420,32 @@ if [[ "$ASSUME_YES" -eq 0 ]]; then
     [[ "$reply" == "$INSTANCE" ]] || die "confirmation did not match — nothing was destroyed"
 fi
 
-vastai destroy instance "$INSTANCE"
-echo "instance $INSTANCE destroyed. $HAUL_DIR holds everything that was unique to it."
+step "Destroy, and prove it"
+VERDICT=0
+destroy_instance "$VASTAI" "$INSTANCE" || VERDICT=$?
+
+case "$VERDICT" in
+    0)
+        ok "instance $INSTANCE is gone — confirmed absent from the account's instance list"
+        echo "instance $INSTANCE destroyed. $HAUL_DIR holds everything that was unique to it."
+        ;;
+    1)
+        die "instance $INSTANCE is STILL LISTED after the destroy — it is very likely still
+         billing. Nothing about this run's verification is in doubt; $HAUL_DIR holds
+         everything unique to the box. Destroy it yourself and confirm:
+
+             $VASTAI destroy instance -y $INSTANCE
+             $VASTAI show instances
+
+         This is the failure #111 was opened for: the CLI can abort and still exit 0."
+        ;;
+    *)
+        die "could not confirm whether instance $INSTANCE was destroyed — the instance list
+         could not be read, so this run will NOT claim it is gone. Check by hand:
+
+             $VASTAI show instances
+
+         $HAUL_DIR holds everything unique to the box, so destroying is safe once you can
+         see the instance list."
+        ;;
+esac

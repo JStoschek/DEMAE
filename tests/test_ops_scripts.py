@@ -806,3 +806,175 @@ def test_the_runbook_only_shows_the_release_preset_under_its_own_run_id():
     for line in fenced_commands(RUNBOOK.read_text()):
         if "--vit-base" in line:
             assert "R5" in line, f"--vit-base outside its arm: {line!r}"
+
+
+# --- Destroying the box, and proving it (#111) --------------------------------
+#
+# The bug this section exists for did not fail loudly. `teardown_box.sh --destroy --yes` printed
+#
+#     Aborted.
+#     instance 46808051 destroyed. ./teardown-46808051 holds everything that was unique to it.
+#
+# on a box that was still running and still billing. `--yes` skips *this script's* confirmation;
+# the vastai CLI has a second one of its own, which with no tty reads EOF, aborts, and exits
+# **0**. Nothing checked the status, so the success line printed unconditionally.
+#
+# Every other failure in that script refuses to proceed and says nothing was destroyed. This one
+# claimed the irreversible action had succeeded when it had not — so the natural next move, close
+# the terminal and stop watching the spend, was exactly wrong.
+
+TEARDOWN = SCRIPTS / "teardown_box.sh"
+
+VASTAI_STUB = """#!/usr/bin/env bash
+# Stands in for vastai 1.5.1. STUB_MODE picks the behaviour; STUB_STATE is the instance list.
+sub="$1 $2"; shift 2
+case "$sub" in
+  "destroy instance")
+    id=""; for a in "$@"; do [[ "$a" == -* ]] || id="$a"; done
+    case "${STUB_MODE:-abort}" in
+      abort) echo "Are you sure you want to destroy instance $id? [y/N]"; echo "Aborted."; exit 0 ;;
+      real)  echo "destroying instance $id"; rm -f "$STUB_STATE"; exit 0 ;;
+      rc1)   echo "boom" >&2; exit 1 ;;
+    esac ;;
+  "show instances")
+    [[ "${STUB_LIST_BROKEN:-0}" == 1 ]] && exit 1
+    [[ -f "$STUB_STATE" ]] && cat "$STUB_STATE"; exit 0 ;;
+esac
+exit 9
+"""
+
+
+@pytest.fixture
+def vastai(tmp_path):
+    """A stubbed `vastai` on PATH, plus the instance list it answers from.
+
+    Returns a callable: ``vastai(mode, listed=[...], list_broken=False)`` sources
+    ``teardown_box.sh`` in library mode, runs ``destroy_instance``, and hands back
+    ``(return_code, output)``.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "vastai"
+    stub.write_text(VASTAI_STUB)
+    stub.chmod(0o755)
+    state = tmp_path / "instances.txt"
+
+    def drive(mode: str, listed=("46808051",), list_broken: bool = False, instance="46808051"):
+        state.write_text("".join(f"{i}\n" for i in listed))
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "STUB_MODE": mode,
+            "STUB_STATE": str(state),
+            "STUB_LIST_BROKEN": "1" if list_broken else "0",
+            "DEMAE_LIB": "1",
+        }
+        done = subprocess.run(
+            ["bash", "-c", f'. "{TEARDOWN}"; rc=0; destroy_instance "$(vastai_bin)" {instance} || rc=$?; exit $rc'],
+            capture_output=True, text=True, env=env,
+        )
+        return done.returncode, done.stdout + done.stderr
+
+    return drive
+
+
+def test_a_destroy_that_aborts_and_still_exits_zero_is_not_reported_as_destroyed(vastai):
+    """The exact R2/R3 failure, reproduced: the CLI aborts, exits 0, the instance survives.
+
+    This is the regression. `-y` now covers the CLI's own prompt so this path should not arise
+    again — but a flag is a promise about one version of one tool, and what is at stake is an
+    instance billing by the hour. So the verdict does not come from the exit status at all.
+    """
+    rc, out = vastai("abort")
+    assert rc == 1, f"an aborted destroy reported success:\n{out}"
+    assert "Aborted." in out  # the stub really did take the failing path
+
+
+def test_a_verified_destroy_is_the_only_thing_that_returns_clean(vastai):
+    rc, out = vastai("real")
+    assert rc == 0, out
+
+
+def test_a_nonzero_destroy_is_not_reported_as_destroyed(vastai):
+    rc, out = vastai("rc1")
+    assert rc == 1
+    assert "exited 1" in out
+
+
+def test_an_unreadable_instance_list_refuses_to_claim_either_way(vastai):
+    """Return 3 — attempted, unverifiable — which is neither success nor a claim of failure.
+
+    The instance list is the evidence, so when it cannot be read there is no evidence. Reporting
+    "destroyed" here would be the original bug with a different cause, and reporting "still
+    running" would send the operator hunting for an instance that may well be gone.
+    """
+    rc, out = vastai("real", list_broken=True)
+    assert rc == 3, out
+    assert "cannot be proven" in out
+
+
+def test_absence_from_the_list_only_counts_if_the_list_could_see_it_first(vastai):
+    """A listing that cannot see the instance *before* the destroy proves nothing after it.
+
+    Without this, any reason the id is missing — wrong API key, a changed output format, an
+    account holding the instance under another key — reads as "gone" and prints the success line
+    this whole section exists to withhold.
+    """
+    rc, out = vastai("abort", listed=("99999999",))
+    assert rc == 0, out
+    assert "already gone" in out
+
+
+def test_the_instance_id_is_matched_whole_line_not_as_a_substring(vastai):
+    """Instance 4680 must never be read as 46808051 — that would report a live box as destroyed."""
+    rc, _ = vastai("abort", listed=("4680",), instance="46808051")
+    assert rc == 0  # 46808051 genuinely is not in that list
+
+    rc, out = vastai("abort", listed=("46808051",), instance="4680")
+    assert rc == 0, out  # ...and 4680 is not in *that* one
+
+
+def test_the_success_line_is_unreachable_unless_the_destroy_verified(vastai):
+    """The property that actually failed, asserted on the script's text.
+
+    The behavioural tests above drive `destroy_instance`; this one pins the *caller*, because the
+    bug was never inside the destroy — it was that the success line sat outside it, on a path
+    reached whatever happened. It must now live under the branch for return code 0 alone.
+    """
+    text = TEARDOWN.read_text()
+    body = text[text.index("destroy_instance \"$VASTAI\""):]
+    said_destroyed = body.index("destroyed. $HAUL_DIR")
+    zero_branch = body.index("    0)")
+    next_branch = body.index("    1)")
+    assert zero_branch < said_destroyed < next_branch, (
+        "the 'destroyed.' line is not inside the verified-success branch"
+    )
+
+
+def test_the_cli_is_found_where_the_runbook_installs_it(tmp_path):
+    """`uv tool install vastai` lands it in ~/.local/bin, which a non-interactive shell lacks.
+
+    R2/R3's teardown died with "--destroy needs the vastai CLI on PATH" on a laptop that had it
+    installed — after the deep verify had already re-downloaded ~900 MB.
+    """
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    hidden = home / ".local" / "bin" / "vastai"
+    hidden.write_text("#!/usr/bin/env bash\nexit 0\n")
+    hidden.chmod(0o755)
+
+    done = subprocess.run(
+        ["bash", "-c", f'. "{TEARDOWN}"; vastai_bin'],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(home), "PATH": "/usr/bin:/bin", "DEMAE_LIB": "1"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(hidden)
+
+
+def test_the_cli_precondition_is_checked_before_the_expensive_verification(tmp_path):
+    """One line, knowable at startup, used to be checked after a ~900 MB re-download."""
+    text = TEARDOWN.read_text()
+    precondition = text.index("--destroy needs the vastai CLI")
+    deep_verify = text.index("Deep verify — re-read the bytes")
+    assert precondition < deep_verify, "the CLI check still runs after the deep verify"
