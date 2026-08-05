@@ -204,6 +204,14 @@ for arg in ${EXTRA+"${EXTRA[@]}"}; do
         warn "--vit-base is the R5 release preset and sets run_id=R5 on its own; this run is
         $RUN_ID, so its config will carry $RUN_ID with R5's shape. Intended?"
     fi
+    # Same shape, one arm along: `--vit-base-continual` sets `run_id="R4"` (config.py:709). It
+    # also carries §8's warm start and `pos_encoding=sincos2d_rowfirst`, so wearing another run's
+    # label is worse here than for --vit-base: this is the only arm whose weights do not start
+    # from scratch, and the label is what the readout compares by.
+    if [[ "$arg" == "--vit-base-continual" && "$RUN_ID" != "R4" ]]; then
+        warn "--vit-base-continual is R4's preset and sets run_id=R4 on its own; this run is
+        $RUN_ID, so its config will carry $RUN_ID with a warm-started ViT-B. Intended?"
+    fi
 done
 
 CKPT_DIR="$(checkpoint_dir_for "$REPO" "$RUN_ID")"

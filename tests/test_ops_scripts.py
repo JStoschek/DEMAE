@@ -570,6 +570,22 @@ def test_the_release_preset_cannot_be_silently_attached_to_another_arm():
     assert "R5" not in matched.stderr
 
 
+def test_the_continual_preset_cannot_be_silently_attached_to_another_arm():
+    """R4's preset carries a warm start as well as a run id, so the same warning is louder.
+
+    Also pins the exactness the bash guard needs: `--vit-base-continual` must not trip the
+    `--vit-base` branch, or R4's own launch line would warn about R5 every time.
+    """
+    mismatched = plan("--run-id", "R1", "--", "--vit-base-continual", "/w/ckpt.pth")
+    assert mismatched.returncode == 0, mismatched.stderr
+    assert "R4" in mismatched.stderr, "the preset's own run id is not mentioned"
+
+    matched = plan("--run-id", "R4", "--", "--vit-base-continual", "/w/ckpt.pth")
+    assert matched.returncode == 0, matched.stderr
+    assert "R4" not in matched.stderr
+    assert "R5" not in matched.stderr, "--vit-base-continual tripped the --vit-base guard"
+
+
 @pytest.mark.parametrize(
     "passthrough, why",
     [
@@ -875,11 +891,19 @@ def test_section_seven_never_invokes_a_script_by_a_relative_path():
     assert not offenders, "relative script path(s) in §7:\n" + "\n".join(offenders)
 
 
-def test_the_runbook_only_shows_the_release_preset_under_its_own_run_id():
-    """`--vit-base` sets `run_id="R5"`, so any example carrying it has to say R5."""
+# Each preset flag sets its own `run_id`, so a documented example carrying one has to name that
+# arm. Matched as a whole token rather than a substring: `--vit-base-continual` *contains*
+# `--vit-base`, so the substring version of this test read R4's line as an R5 example and
+# demanded the wrong id — a check that fires on the correct command is worse than no check.
+PRESET_ARMS = {"--vit-base": "R5", "--vit-base-continual": "R4"}
+
+
+def test_the_runbook_only_shows_a_preset_under_its_own_run_id():
     for line in fenced_commands(RUNBOOK.read_text()):
-        if "--vit-base" in line:
-            assert "R5" in line, f"--vit-base outside its arm: {line!r}"
+        tokens = line.split()
+        for flag, arm in PRESET_ARMS.items():
+            if flag in tokens:
+                assert arm in tokens, f"{flag} outside its arm ({arm}): {line!r}"
 
 
 # --- Destroying the box, and proving it (#111) --------------------------------

@@ -132,6 +132,7 @@ def build_config(
     *,
     config_path: Path | str | None = None,
     vit_base: bool = False,
+    vit_base_continual: str | None = None,
     corpus: str | None = None,
     assignment: str | None = None,
     blocks: str | None = None,
@@ -142,15 +143,37 @@ def build_config(
     Order is the point, and it is documented because a run's recipe is the thing this whole
     package exists to keep unambiguous:
 
-    1. **The preset** — the plan's defaults, or ``--vit-base``'s B/16 shape.
+    1. **The preset** — the plan's defaults, ``--vit-base``'s B/16 shape, or
+       ``--vit-base-continual CKPT``'s R4 arm.
     2. **The config file**, naming only the knobs its run moves — merged onto the preset, so
        ``--vit-base --config r5.json`` keeps the B/16 shape.
     3. **The path flags**, which are environment rather than recipe and never touch the hash.
     4. **``--set`` overrides**, last, so the command line can always pin a knob whatever the
        file said. It is the general escape hatch, so it wins over the special-case flags: a
        ``--set data.corpus_dir=…`` beats a ``--corpus``.
+
+    **Why R4 gets a preset flag rather than a ``--config`` file** (#86). The other route was to
+    hand-write the arm's four knobs into JSON and merge them onto ``--vit-base``. That makes the
+    recipe a thing somebody types, and one of the four is ``pos_encoding='sincos2d_rowfirst'`` —
+    mmselfsup's sin-cos ordering is the *transpose* of MAE's, every name and every shape matches
+    under either convention, and the tensors differ by 2.0 (`P102 §4`). The preset is tested; a
+    JSON file on a rented box is not, and it would be a second copy of a recipe that already has
+    one. So the flag reaches the preset, and R4's recipe stays in exactly one place.
+
+    ``--vit-base`` and ``--vit-base-continual`` are refused together rather than silently
+    ordered: the continual preset *is* :meth:`RunConfig.vit_base` plus four deltas, so a caller
+    passing both has a belief about precedence that this function should not quietly pick a side
+    on.
     """
-    base = RunConfig.vit_base() if vit_base else RunConfig()
+    if vit_base and vit_base_continual is not None:
+        raise ValueError(
+            "--vit-base and --vit-base-continual are the same shape: the continual preset is "
+            "vit_base with §8's four knobs moved. Pass only --vit-base-continual for R4."
+        )
+    if vit_base_continual is not None:
+        base = RunConfig.vit_base_continual(vit_base_continual)
+    else:
+        base = RunConfig.vit_base() if vit_base else RunConfig()
     if config_path is not None:
         overlay = json.loads(Path(config_path).read_text())
         base = RunConfig.from_dict(_overlay(base.to_dict(), overlay))
@@ -171,7 +194,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     """:func:`build_config` off the namespace :func:`add_config_arguments` filled. Use this.
 
     The two halves of one flag set, written next to each other so they cannot come apart. Every
-    entrypoint used to spell the consumer half out — six keyword arguments, retyped per module —
+    entrypoint used to spell the consumer half out — seven keyword arguments, retyped per module —
     and ``pretrain.monitor`` shipped one that named five of them: ``--set`` was *defined*, parsed
     into ``args.overrides``, and then never passed to :func:`build_config`. The flag was accepted
     and discarded, so ``monitor --set masking.ratio=0.9`` masked 75% and reported R1's config
@@ -189,6 +212,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     return build_config(
         config_path=args.config,
         vit_base=args.vit_base,
+        vit_base_continual=args.vit_base_continual,
         corpus=args.corpus,
         assignment=args.assignment,
         blocks=args.blocks,
@@ -197,20 +221,27 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
 
 
 def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    """The six flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
+    """The seven flags that assemble a :class:`RunConfig` — :func:`build_config`'s arguments.
 
     Shared rather than retyped, because every entrypoint that runs anything takes exactly these
     (``python -m pretrain`` here, ``python -m pretrain.train`` in #93, ``python -m
     pretrain.launch`` in #95), and two copies of one option list drift into two slightly
     different ways to name the corpus.
 
-    :func:`config_from_args` is the other half. Call the pair; do not hand-write the six
+    :func:`config_from_args` is the other half. Call the pair; do not hand-write the seven
     keyword arguments at an entrypoint, for the reason that function's docstring gives.
     """
     parser.add_argument("--corpus", default=None, help="corpus directory (default: the 500k tier)")
     parser.add_argument("--config", default=None, help="JSON file of the knobs this run moves")
     parser.add_argument(
         "--vit-base", action="store_true", help="the ViT-B/16 release preset (§2.1)"
+    )
+    parser.add_argument(
+        "--vit-base-continual",
+        default=None,
+        metavar="CHECKPOINT",
+        help="R4: the ViT-B/16 continual preset, warm-started from the ImageNet MAE at "
+        "CHECKPOINT (§8). Carries sincos2d_rowfirst — do not rebuild this by hand",
     )
     parser.add_argument("--assignment", default=None, help="committed split assignment CSV (#77)")
     parser.add_argument("--blocks", default=None, help="committed split block lists JSON (#77)")

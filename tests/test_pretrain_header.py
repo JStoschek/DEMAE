@@ -177,6 +177,64 @@ def test_an_override_on_the_vit_base_preset_keeps_the_preset(tmp_path):
     assert cfg.optimization.accum_iter == 8
 
 
+# --- R4's preset flag (#86) ---------------------------------------------------
+#
+# `RunConfig.vit_base_continual` existed and was tested from the moment #102 landed, and was
+# reachable from nothing: `build_config` offered the default preset or `--vit-base`. R4's only
+# route to the CLI was a hand-written `--config` JSON restating the arm's four knobs — including
+# `pos_encoding='sincos2d_rowfirst'`, which P102 §4 showed differs from MAE's ordering by a
+# transpose that no name and no shape reveals. These tests hold the flag to the preset, so the
+# two cannot drift into two slightly different R4s.
+
+
+def test_the_continual_flag_reaches_the_preset_exactly():
+    """The flag is the preset, not a re-derivation of it — every knob, compared."""
+    from pretrain.config import RunConfig
+
+    assert (
+        header.build_config(vit_base_continual="ckpt.pth").to_dict()
+        == RunConfig.vit_base_continual("ckpt.pth").to_dict()
+    )
+
+
+def test_the_continual_flag_carries_the_four_knobs_that_make_it_the_arm():
+    cfg = header.build_config(vit_base_continual="/w/mae_vit_b.pth")
+    assert cfg.init.mode == "imagenet_mae"
+    assert cfg.init.checkpoint == "/w/mae_vit_b.pth"
+    assert (cfg.schedule.epochs, cfg.schedule.warmup_epochs) == (400, 20)
+    assert cfg.architecture.pos_encoding == "sincos2d_rowfirst"
+    assert cfg.architecture.encoder_dim == 768  # and R5's shape underneath
+    assert cfg.run_id == "R4"
+
+
+def test_the_two_presets_are_refused_together_rather_than_ordered():
+    """Both flags is a belief about precedence; the caller is told to hold exactly one."""
+    with pytest.raises(ValueError, match="only --vit-base-continual"):
+        header.build_config(vit_base=True, vit_base_continual="ckpt.pth")
+
+
+def test_the_continual_preset_is_reachable_from_the_command_line(cfg, capsys):
+    """The whole point of the ticket: this is what a rented box types."""
+    header.main(["--corpus", cfg.data.corpus_dir, "--blocks", cfg.data.split_blocks_path,
+                 "--assignment", cfg.data.split_assignment_path,
+                 "--vit-base-continual", "/workspace/DEMAE/artifacts/mae_vit_b16_1600e.pth",
+                 "--json"])
+    loaded = RunConfig.from_dict(json.loads(capsys.readouterr().out)["config"])
+    assert loaded.run_id == "R4"
+    assert loaded.architecture.pos_encoding == "sincos2d_rowfirst"
+    assert loaded.init.checkpoint.endswith("mae_vit_b16_1600e.pth")
+    assert loaded.schedule.epochs == 400
+
+
+def test_a_set_override_still_wins_over_the_continual_preset(cfg):
+    """§11 resume and any late pin: the escape hatch is not closed by a preset flag."""
+    moved = header.build_config(
+        vit_base_continual="ckpt.pth", overrides=["schedule.epochs=200"]
+    )
+    assert moved.schedule.epochs == 200
+    assert moved.architecture.pos_encoding == "sincos2d_rowfirst"  # the arm survives it
+
+
 def test_overrides_are_reachable_from_the_command_line(cfg, capsys):
     header.main(["--corpus", cfg.data.corpus_dir, "--blocks", cfg.data.split_blocks_path,
                  "--assignment", cfg.data.split_assignment_path,

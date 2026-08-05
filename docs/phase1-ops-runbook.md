@@ -225,7 +225,17 @@ Each arm passes its own recipe after `--`, and nothing else changes:
 
 **R2 and R3 are done** ([#83](https://github.com/JStoschek/DEMAE/issues/83), [#84](https://github.com/JStoschek/DEMAE/issues/84)) and their examples are retired. Keep the trap they exposed, because the next `--set` arm will hit it: they read `--set masking.ratio=0.9` and `--set loss.norm_pix_loss=false` and **carried the knob but not the schedule**, so followed literally they would each have run 400 epochs against §12's planned 200. R2 caught it at launch and set `schedule.epochs=200` with `warmup_epochs=10` (§6's warmup rule is *5% of the schedule*, never the literal 20). **An arm changes a knob and a schedule, or it is not the arm the plan costed.**
 
-**R4 has no one-liner yet, and that is [#86](https://github.com/JStoschek/DEMAE/issues/86)'s to settle.** `RunConfig.vit_base_continual()` carries the arm's four knobs — including `pos_encoding='sincos2d_rowfirst'`, which [P102](research/p102-mmselfsup-mae-layout.md) showed is silently catastrophic to get wrong — but it is **not reachable from the CLI**: [`header.py:153`](../src/pretrain/header.py#L153) offers only the default preset and `--vit-base`. R4 must therefore go through `--config`, or the preset needs a flag. The loader refuses a model whose positional buffer disagrees with the checkpoint's own `pos_embed`, so a wrong path raises rather than trains — but a documented command should exist before the box is rented, not after.
+**R4 is the same shape, with the checkpoint named** ([#86](https://github.com/JStoschek/DEMAE/issues/86)):
+
+```bash
+/workspace/DEMAE/scripts/run.sh --run-id R4 -- --vit-base-continual /workspace/checkpoints/mae_vit-base-p16_1600e_in1k.pth
+```
+
+`--vit-base-continual` is a preset flag, not a path flag: it reaches `RunConfig.vit_base_continual()`, which carries §8's warm start, **400 epochs with 20 warmup**, and `pos_encoding='sincos2d_rowfirst'` — mmselfsup's sin-cos ordering, which [P102](research/p102-mmselfsup-mae-layout.md) §4 showed is the *transpose* of MAE's. Every parameter name and every shape matches under either convention; the tensors differ by 2.0. #86 chose the flag over the `--config` route it was also offered precisely there: a JSON file restating four knobs is a second copy of a recipe that already has a tested one, and it is typed on a rented box under a meter.
+
+**The checkpoint lives outside the repo, and that is deliberate.** `artifacts/` is in [`push_code.sh`](../scripts/push_code.sh)'s payload and rsync runs with `--delete`, so a 485 MB file parked there — present on the box, absent from the laptop — is **deleted by the next push**. `/workspace/checkpoints/` is reached by nothing in the payload. This matters most in exactly the situation §11 exists for: a resume on a fresh instance pushes code first.
+
+The loader refuses a model whose positional buffer disagrees with the checkpoint's own `pos_embed`, so a wrong path raises rather than trains — but the command is written down here so that is not what discovers it.
 
 `--dry-run` prints the whole plan — every command, in order — and touches nothing.
 
