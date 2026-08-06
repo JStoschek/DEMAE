@@ -109,8 +109,8 @@ All MAE defaults unless argued otherwise; the deviations are batch size (hardwar
 | Weight decay | 0.05, excluded on bias/norm params | MAE default across the lineage |
 | Base LR (blr) | 1.5e-4 | MAE default; linear scaling below |
 | LR rule | lr = blr × eff_batch / 256 | MAE PRETRAIN.md |
-| Physical batch | 1024 (bf16, ViT-S; ~~drop to 512 for ViT-B if needed~~ *— hedge dead, Amendment below*) | fits comfortably in 32 GB at 49 visible tokens |
-| Grad accumulation | 2 → **effective batch 2048** → lr 1.2e-3 | `--accum_iter` is the official path; lightly's benchmark shows MAE trains fine even at 256, so eff. batch is not fragile |
+| Physical batch | **1024 (ViT-S); 512 (ViT-B)** — measured, not hedged; see Amendment below | ViT-S fits comfortably in 32 GB at 49 visible tokens; ViT-B at 1024 does not fit at all |
+| Grad accumulation | **2 (ViT-S); 4 (ViT-B)** → **effective batch 2048** either way → lr 1.2e-3 | `--accum_iter` is the official path; lightly's benchmark shows MAE trains fine even at 256, so eff. batch is not fragile |
 | Warmup | 20 epochs, linear from 0 — **the rule is 5% of the schedule**, 20 is its output at 400 | 5% of schedule; MAE's 40/800 = 5%; small-scale reproduction used 20 |
 | Decay | Cosine to 0 | MAE default |
 | Epochs | **400**, checkpoints kept at 50/100/200/400; ~~extend to 800 only if the kNN probe and val loss are still improving at 400~~ *— unfollowable, Amendment below* | 400 ep × 500k = 2×10⁸ samples ≈ the sample budget of ~156 ImageNet epochs; mmpretrain's reproduction shows ft-quality saturates early (83.1 at 300 ep vs 83.5 at 1600 for ViT-B) while linear-probe keeps climbing; MIM data-scaling work shows ~500k images is comfortably enough for S/B models ([arXiv 2206.04664](https://arxiv.org/abs/2206.04664)) |
@@ -124,7 +124,15 @@ All MAE defaults unless argued otherwise; the deviations are batch size (hardwar
 
 **Amendment 2026-08-05 — two hedges are dead, and the extension rule is replaced** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §1 and §5).
 
-**Physical batch stays 1024 for ViT-B.** R0 ([#81](https://github.com/JStoschek/DEMAE/issues/81)) measured ViT-B at batch 1024 peaking at **17.82 GiB allocated / 19.03 GiB reserved against 31.35 GiB available** — barely half the card. The drop-to-512 contingency does not fire, so effective batch stays 2048, accumulation stays 2, and `lr` stays 1.20e-3 across both backbones.
+~~**Physical batch stays 1024 for ViT-B.** R0 ([#81](https://github.com/JStoschek/DEMAE/issues/81)) measured ViT-B at batch 1024 peaking at **17.82 GiB allocated / 19.03 GiB reserved against 31.35 GiB available** — barely half the card. The drop-to-512 contingency does not fire, so effective batch stays 2048, accumulation stays 2, and `lr` stays 1.20e-3 across both backbones.~~
+
+**Amendment 2026-08-06 — ViT-B's physical batch is 512, and the paragraph above is retracted** ([ADR-0010](adr/0010-frozen-phase1-release-recipe.md) §1 Amendment 1, [#113](https://github.com/JStoschek/DEMAE/issues/113); found by R4 OOM'ing on its first step, [#86](https://github.com/JStoschek/DEMAE/issues/86)).
+
+**ViT-B at batch 1024 does not fit the card.** Measured on the rented RTX 5090's 31.36 GiB, `RunConfig.vit_base()` at 1024 peaks at **30.53 GiB in forward and backward alone** and OOMs — with `torch.compile` on or off to two decimal places — and adding AdamW's two fp32 moments over 98.4M parameters (~0.79 GiB) puts its real requirement at ~31.3 GiB, so it had no path to fitting. **17.82 GiB is what batch 512 costs**: a full step at 512 × 4 measures 18.16 GiB, reproducing R0's cited figure to within 2%, while 1024 misses it by 12 GiB.
+
+The number was real and attached to the wrong batch. R0's readout says both backbones ran *"at physical batch 1024 × 2 accum,"* but `RunConfig.vit_base()` still carried the 512 × 4 contingency when R0 ran, so R0's ViT-B memory *and* throughput figures are both 512 × 4 measurements under a 1024 × 2 label. The paragraph above read that mislabel as a stale hedge — correctly observing that the shipping config was one R0 had measured nothing at — and then moved the preset to match the label, which made its own objection true of 1024 instead. R0's checklist ([#81](https://github.com/JStoschek/DEMAE/issues/81)) had asked for exactly this: *"physical batch drops to 512 if 32 GB demands it — record which."*
+
+**So the table above states values rather than a contingency.** 512 is not the "drop to 512 if needed" hedge revived — it is the only split that runs. Effective batch is 2048 on both backbones, so §6's linear rule derives `lr` 1.20e-3 for both and nothing downstream moves. **§12's budget stays on 3,001.2 samples/s**: that measurement was always of this split, and the 512 × 4 re-measurement at 3,130.2 is 4% higher, so re-basing it would only move the budget in the cheap direction. R4 ran 400 epochs at 512 × 4 by override ahead of this amendment, so the arms already agree and nothing is re-run.
 
 **Grad clipping stays off.** The permission to add clip 1.0 was conditional on bf16 instability appearing. Four runs — R0, R1, R2, R3 — across two backbones, two mask ratios and two loss targets produced no loss spike and no §10.1 alarm. bf16 without a scaler is stable on this objective, as §7.1 predicted.
 

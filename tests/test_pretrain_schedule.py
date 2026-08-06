@@ -45,18 +45,21 @@ def test_the_peak_is_the_linear_scaling_rules_lr_not_a_typed_number(schedule):
 
 
 def test_the_rule_follows_the_effective_batch_not_the_physical_one():
-    # This used to lean on ViT-B shipping a halved physical batch. R0 retired that hedge
-    # (#81, ADR-0010 §1), so every preset now runs 1024 x 2 and the property would be
-    # asserted by a config that cannot exercise it. Move the physical batch explicitly
-    # instead: the peak LR must not notice, because §6's rule reads the *effective* batch.
+    # The property is asserted by moving the physical batch explicitly rather than by leaning
+    # on two presets that happen to differ, so it holds whatever the presets ship. It is the
+    # property ADR-0010 §1 Amendment 1 leans on hardest: ViT-B's split moved 1024 x 2 -> 512 x
+    # 4 after 1024 was measured to OOM (#113), and the whole argument that R4 and R5 stay
+    # comparable is that the peak LR cannot see the split (#86).
     vit_b = RunConfig.vit_base()
-    assert (vit_b.optimization.batch_size, vit_b.optimization.accum_iter) == (1024, 2)
+    assert (vit_b.optimization.batch_size, vit_b.optimization.accum_iter) == (512, 4)
 
-    halved = vit_b.replace(
-        optimization=vit_b.optimization.replace(batch_size=512, accum_iter=4)
+    # 256 x 8 rather than the retired 1024 x 2: a split nothing runs, so this is unmistakably
+    # an arithmetic probe and not a second opinion about what fits on the card.
+    resplit = vit_b.replace(
+        optimization=vit_b.optimization.replace(batch_size=256, accum_iter=8)
     )
-    assert halved.effective_batch == vit_b.effective_batch == 2048
-    for cfg in (vit_b, halved):
+    assert resplit.effective_batch == vit_b.effective_batch == 2048
+    for cfg in (vit_b, resplit):
         assert cfg.lr == pytest.approx(1.2e-3)
         assert LrSchedule.from_config(cfg, steps_per_epoch=STEPS).peak_lr == pytest.approx(1.2e-3)
 
