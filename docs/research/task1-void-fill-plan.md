@@ -17,9 +17,14 @@ defined before any number is seen:
   identical trained head*, on the same tiles, same masks, same seeds. This is
   the representation claim, and the fairest instrument for it.
 - **C2 (the model is useful):** fine-tuned DEMAE beats classical interpolation
-  (the operational status quo) on medium and large voids in metres, slope, and
-  drainage metrics, and stays at least even on small voids where splines are
-  strong.
+  (the operational status quo) in metres, slope, and drainage metrics on rugged
+  terrain at every void size, and stays at least even on **flat terrain**, where
+  classical fill is already at the corpus's resolution floor. The parity
+  carve-out is by ruggedness, not by void size: p119 measured classical fill at
+  0.87 m MAE on small voids and 1.83 m on large ones in the flattest quartile —
+  against 12.7 m and 38.6 m in the roughest — so "small voids where splines are
+  strong" was the wrong exemption to grant
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)).
 - **C3 (label efficiency):** DEMAE-frozen reaches a given RMSE with far fewer
   head-training tiles than the UNet-from-scratch baseline (the 1k / 5k / 20k
   sweep). This is the foundation-model value proposition.
@@ -349,7 +354,13 @@ size histogram so the reader can see what distribution the number is over.
   headline (its ImageNet features are off-domain for hillshades).
 - **Stratification:** every metric also reported by the corpus's ruggedness
   strata (collapsed to 4 groups for table size). A method that wins on plains
-  and loses in mountains must be visible as such.
+  and loses in mountains must be visible as such. This is **load-bearing, not
+  cosmetic**: p119 measured the classical baseline's error varying ~40× across
+  these four bands but only ~3× across the size buckets
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)), so a pooled per-arm number
+  is dominated by the rugged tail and hides the fact that the flattest quartile
+  is already at the resolution floor. Where table space forces a choice, drop a
+  size bucket before dropping a ruggedness band.
 - **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
   pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
@@ -398,9 +409,31 @@ size histogram so the reader can see what distribution the number is over.
 - **Norm-inversion bugs** silently flatter or sabotage an arm: the identity
   test plus a golden-tile fixture (known void, hand-checked fill) gate every
   arm's eval.
-- **A1 pre-fill quality ceiling:** if bilinear fill is too good on small voids,
-  learned residuals look like noise; the small-void bucket exists to show this
-  honestly (C2 only requires parity there).
+- **A1 pre-fill quality ceiling: measured, and the saturating axis is ruggedness,
+  not void size** ([`p119-fill-headroom.md`](p119-fill-headroom.md)). This row
+  used to read "if bilinear fill is too good on small voids, learned residuals
+  look like noise; the small-void bucket exists to show this honestly." The
+  measurement — 1,600 real corpus tiles, 48,000 scored instances — says the
+  bucket axis is the wrong one:
+  - **Small voids are not saturated.** Pooled, the best classical variant leaves
+    **MAE 5.2 m** on the small bucket, against GLO-30's own σ ≈ 2.43 m
+    (LE90 4 m / 1.645). Only 42% of small-void instances beat σ. There is ample
+    residual signal there.
+  - **Flat terrain is saturated, at every size.** On the flattest ruggedness
+    quartile (R1, median slope 1.0°, relief 40 m) a *small* void fills to
+    **0.87 m MAE** with 96% of instances under σ, and even a *large* void fills
+    to **1.83 m**. At that point the fill is within a factor of two of the
+    int16-metre storage quantisation and there is nothing left to learn.
+  - **Rugged terrain has the headroom.** On R4 (12.9°, 583 m relief) a small void
+    already costs **12.7 m** and a large one **38.6 m**, with 0% beating σ. The
+    spread across ruggedness bands is ~40×; across size buckets, ~3×.
+
+  Consequences, applied elsewhere in this plan: §5's ruggedness stratification is
+  promoted from a table-completeness nicety to the axis the headline result lives
+  on, and C2's parity carve-out (§0) is retargeted from the small-void bucket to
+  flat terrain. Which classical fill is chosen is *not* a risk —
+  TPS beats bilinear `fillnodata` by a median of 0.2 m and wins only 55% of
+  paired instances, so A1's identity barely moves the ceiling.
 - **TerraMind feature extraction: run, not hypothetical**
   ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)). The
   path works end to end in 36 s on the laptop, on terratorch 1.2.10 /
