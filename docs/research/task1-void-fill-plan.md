@@ -92,9 +92,11 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
   bicubically interpolates it to 14x14 on every 224 px pass
   ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §6). The
   premise holds patch-for-patch; what it costs is that TerraMind runs 12.5% off
-  its native grid while DEMAE runs at its own. That is a one-sided handicap and
-  the writeup names it rather than leaving it to a reviewer. Distinct from the
-  secondary regime below, which is about GSD, not grid.
+  its native grid while DEMAE runs at its own. That is a one-sided handicap, and
+  **whether this regime keeps 224 px and names it, quantifies it, or moves to
+  256 px is [#133](https://github.com/JStoschek/DEMAE/issues/133)** — open at the
+  time of writing, so this bullet is not yet final. Distinct from the secondary
+  regime below, which is about GSD, not grid.
 - **Secondary regime (A5 only): TerraMind-native check.** The same geographic
   windows bilinearly resampled to 10 m, center-cropped to 224 px (covering
   2.24 km instead of 6.72 km), TerraMind + head retrained. If TerraMind-at-10m

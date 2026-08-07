@@ -208,6 +208,10 @@ this ticket: run TerraMind at 256 px on a 256 px crop and accept that the grids 
 or state the handicap and keep 224. The plan's out-of-scope "secondary 10 m TerraMind-native
 regime" is a *different* question (GSD, not grid) and does not cover this.
 
+**Routed to [#133](https://github.com/JStoschek/DEMAE/issues/133)**, which owns the call and adds
+a third option — keep 224 but *measure* how far the encoder's features move between the two input
+sizes, turning the caveat into a number for the cost of one extra extraction pass.
+
 ## 7. The normalization trap, now enforced rather than annotated
 
 The selection memo's §3.4 snippet already carries the warning, as a code comment: *"global
