@@ -86,7 +86,15 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
 - **Primary regime (all arms): 224x224 at native 30 m.** The task is defined
   operationally on GLO-30, DEMAE's home turf and honestly labeled as such;
   TerraMind runs out-of-distribution here and the writeup says so. Both ViTs
-  produce a 14x14 token grid, so the head is byte-identical.
+  produce a 14x14 token grid, so the head is byte-identical. **Measured, and it
+  co-registers by resampling:** TerraMind's DEM tokenizer was trained at 256 px,
+  its `pos_emb` is natively `[1, 768, 16, 16]`, and `ViTEncoder.forward`
+  bicubically interpolates it to 14x14 on every 224 px pass
+  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §6). The
+  premise holds patch-for-patch; what it costs is that TerraMind runs 12.5% off
+  its native grid while DEMAE runs at its own. That is a one-sided handicap and
+  the writeup names it rather than leaving it to a reviewer. Distinct from the
+  secondary regime below, which is about GSD, not grid.
 - **Secondary regime (A5 only): TerraMind-native check.** The same geographic
   windows bilinearly resampled to 10 m, center-cropped to 224 px (covering
   2.24 km instead of 6.72 km), TerraMind + head retrained. If TerraMind-at-10m
@@ -391,9 +399,25 @@ size histogram so the reader can see what distribution the number is over.
 - **A1 pre-fill quality ceiling:** if bilinear fill is too good on small voids,
   learned residuals look like noise; the small-void bucket exists to show this
   honestly (C2 only requires parity there).
-- **TerraMind feature extraction pitfalls:** `diffusers==0.30.0` pin, NaN
-  filling before the global z-score, and confirming the 14x14 grid on 224 px
-  input; §3.4 of the selection memo has the verified code path.
+- **TerraMind feature extraction: run, not hypothetical**
+  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)). The
+  path works end to end in 36 s on the laptop, on terratorch 1.2.10 /
+  diffusers 0.39.0, and the weights are public Apache-2.0 with **no login**.
+  Three of this row's original four pitfalls did not survive the run:
+  - **The `diffusers==0.30.0` pin does not exist.** terratorch declares a bare
+    `diffusers`; `0.30.0` appears only in the text of an import-failure warning.
+    The real hazard is the opposite one — nothing is pinned, so a future
+    `diffusers` can break the tokenizer import with no lockfile signal. Pin
+    `diffusers` in the benchmark's own environment, at the version it is
+    verified on.
+  - **The 14x14 grid is confirmed** on 224 px input, with the resampling caveat
+    now recorded in §2.2.
+  - **Global-vs-per-tile normalization is the live one, and it fails silently.**
+    DEMAE's loader emits per-tile-standardized tiles; TerraMind wants one global
+    affine over metres. The encoder accepts both and returns a plausible
+    `[1, 768, 14, 14]` either way, with no error. The TerraMind arms therefore
+    cannot consume the pretraining loader's output — see §9.4.
+  - NaN filling before the z-score is untested here and stands as written.
 - **Contiguous-mask shift sinks A2:** expected and framed as the zero-shot vs
   fine-tuned delta, not buried.
 - **Spot-instance reclaim:** heads checkpoint every epoch to the synced
@@ -410,7 +434,14 @@ size histogram so the reader can see what distribution the number is over.
 3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers,
    plus the fairness checklist and the TerraMind caveats.
 4. If C1 holds, the same frozen-feature cache feeds Task 2's probes unchanged,
-   which is why this ordering is efficient.
+   which is why this ordering is efficient. **Two constraints on that contract
+   are now measured** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
+   the TerraMind arms take **raw metres under TerraMind's global affine**, never
+   the pretraining loader's per-tile-standardized output (§7 there), so the
+   cache is keyed by normalization as well as by tile; and the extractor needs
+   only `encoder` + `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the
+   1.15 GB checkpoint** — since the remaining 196M is the diffusion decoder that
+   no in-scope arm calls.
 
 ## 10. Key sources
 
