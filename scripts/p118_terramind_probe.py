@@ -95,6 +95,7 @@ def find_corpus(start: Path | None = None) -> Path:
 
 
 def read_selection_frame(corpus: Path) -> dict[str, list]:
+    """Just the columns `select_tile_id` needs, so the rule can be re-run without the full frame."""
     import pyarrow.parquet as pq
 
     table = pq.read_table(corpus / "manifest.parquet", columns=list(SELECTION_COLUMNS))
@@ -127,6 +128,12 @@ def select_tile_id(frame: Mapping[str, Sequence], quantile: float = 0.90) -> str
 
 
 def manifest_row(corpus: Path, tile_id: str) -> dict[str, Any]:
+    """Every column of one tile's row — the geography and stats the record carries.
+
+    Reads the whole frame rather than a column subset, unlike `read_selection_frame`: the record
+    wants most of the columns anyway, and this runs once per probe against a checkpoint download
+    three orders of magnitude more expensive.
+    """
     import pyarrow.parquet as pq
 
     table = pq.read_table(corpus / "manifest.parquet")
@@ -139,7 +146,12 @@ def manifest_row(corpus: Path, tile_id: str) -> dict[str, Any]:
 
 
 def load_tile_metres(corpus: Path, shard_id: int, row_index: int) -> np.ndarray:
-    """One tile back out of the shards, as float32 metres above the ellipsoid."""
+    """One tile back out of the shards, as float32 metres above the ellipsoid.
+
+    The shard filename is re-derived here rather than imported: `dataset.shards.shard_path` owns
+    this layout, but importing `dataset` would drag DEMAE's package into the throwaway venv this
+    script is meant to run in. If the layout ever moves, `shards.py` is the file that moved it.
+    """
     shard = np.load(corpus / "shards" / f"shard_{shard_id:05d}.npy", mmap_mode="r")
     return np.asarray(shard[row_index], dtype=np.float32)
 
@@ -169,16 +181,46 @@ def probe_constants() -> dict[str, Any]:
     }
 
 
+def probe_weights_provenance() -> dict[str, Any]:
+    """Where `pretrained=True` actually goes, recorded rather than described.
+
+    #118 asks "where the weights come from" as a first-class question, because the answer decides
+    whether a human has to be in the loop. Reading it out of the registry and off the resolved
+    file on disk keeps that answer in the artifact instead of only in the prose around it.
+    """
+    from huggingface_hub import hf_hub_download
+    from terratorch.models.backbones.terramind.tokenizer.tokenizer_register import (
+        pretrained_weights,
+    )
+
+    entry = pretrained_weights[TERRAMIND_MODEL]
+    path = Path(hf_hub_download(repo_id=entry["hf_hub_id"], filename=entry["hf_hub_filename"]))
+    return {
+        "hf_hub_id": entry["hf_hub_id"],
+        "hf_hub_filename": entry["hf_hub_filename"],
+        "bytes": path.stat().st_size,
+        "licence": "apache-2.0",
+        "gated": False,
+        "needs_account": False,
+    }
+
+
 def build_tokenizer():
+    """The registry call #118 asks about, verbatim from the model card, plus `.eval()`."""
     from terratorch.registry import FULL_MODEL_REGISTRY
 
     model = FULL_MODEL_REGISTRY.build(TERRAMIND_MODEL, pretrained=True)
     return model.eval()
 
 
-def probe_encoder(model, x) -> dict[str, Any]:
-    """The four shape claims #118 asks about, measured on one forward pass each."""
+def probe_encoder(model, tile_tensor) -> dict[str, Any]:
+    """The four shape claims #118 asks about, measured on one forward pass each.
+
+    `tile_tensor` is the [1, 1, 224, 224] output of `to_model_input`, already on the target device.
+    """
     import torch
+
+    x = tile_tensor
 
     with torch.no_grad():
         # `prepare_input` is in the extraction snippet at §3.4 of the selection memo, annotated
@@ -236,8 +278,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None, help="where to write the JSON record")
     args = parser.parse_args(argv)
 
-    import torch
-
     corpus = args.corpus or find_corpus()
     row = manifest_row(corpus, PROBE_TILE_ID)
     tile = load_tile_metres(corpus, row["shard_id"], row["row_index"])
@@ -258,6 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     record |= {
         "issue": 118,
         "model": TERRAMIND_MODEL,
+        "weights": probe_weights_provenance(),
         "constants": constants,
         "device": args.device,
         "versions": {
@@ -274,6 +315,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "local_relief_metres": row["local_relief"],
             "content_hash": str(row["content_hash"]),
         },
+        # §9.4's frozen-feature contract needs only encoder + quant_proj; the rest is the
+        # diffusion decoder no in-scope arm calls, so the split is worth carrying in the record.
+        "params": {
+            name: sum(p.numel() for p in child.parameters())
+            for name, child in model.named_children()
+        }
+        | {"total": sum(p.numel() for p in model.parameters())},
         "encoder_params": sum(p.numel() for p in model.encoder.parameters()),
         "input_stats": {"mean": float(x.mean()), "std": float(x.std())},
     }

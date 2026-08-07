@@ -13,29 +13,37 @@ Ticket [#118](https://github.com/JStoschek/DEMAE/issues/118) · map [#117](https
 
 ## 1. Bottom line
 
-**It works, first attempt, in 36 seconds on a laptop, and nothing in §8's risk row was load-bearing.**
-All five things #118 asked for are confirmed. Four things the plan assumed turned out to be
-wrong or incomplete, none fatally:
+**It works, first attempt, in 36 seconds on a laptop. Nothing broke, so there is no breakage to
+record — and the paper record was already largely right.** All five things #118 asked for are
+confirmed. What the run changes falls into three tiers, and it is worth keeping them apart,
+because most of what is interesting here is *confirmation of an unrun claim*, not correction:
 
-1. **No account, and therefore not a human step.** `ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM`
+**Two things the record got wrong.**
+
+1. **`diffusers==0.30.0` is not a pin and never was.** Plan §8 and the selection memo's §3.4 both
+   present it as required. terratorch declares a bare `diffusers` dependency; `0.30.0` appears
+   only inside the text of a warning message that fires when the import fails. The resolver picks
+   **0.39.0**, nine minor versions later, and the tokenizer builds and runs on it (§4).
+2. **No account, and therefore not a human step.** `ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM`
    is public, Apache-2.0, `gated: false`, and an anonymous HTTP request for the weights returns
    200. This is the opposite of [#127](https://github.com/JStoschek/DEMAE/issues/127)'s Earthdata
-   situation, and it means #118 was agent work end to end (§3).
-2. **`diffusers==0.30.0` is not a pin and never was.** terratorch declares a bare `diffusers`
-   dependency; `0.30.0` appears only inside the text of a warning message that fires when the
-   import fails. The resolver picks **0.39.0**, nine minor versions later, and the tokenizer
-   builds and runs on it (§4).
-3. **`model.encoder(x)` returns `[1, 768, 14, 14]` — and it does so by resampling.** The
-   encoder's position embedding is natively `[1, 768, 16, 16]`, because the tokenizer was
-   trained at 256 px. 224 px inputs get the pos-embed bicubically interpolated to 14×14 on every
-   forward pass. §2.2's co-registration premise holds; it holds off-native (§6).
-4. **The normalization is a trap that fails silently.** TerraMind wants one global affine over
-   metres; DEMAE's corpus is per-tile standardized, which destroys absolute elevation. Feed it
-   DEMAE-normalized tiles and it still returns a perfectly plausible `[1, 768, 14, 14]` with no
-   error and no warning (§7).
+   situation, and #118's own text flags this as the fork that decides who does the work (§3).
 
-And one fact for §9.4's frozen-feature contract: **the 1.15 GB checkpoint is 69% decoder.** The
-encoder that A5 and A9 actually need is 90.2 M parameters, 361 MB in fp32 (§8).
+**One thing the record had, that nobody had drawn the consequence of.** The selection memo already
+says the position embeddings are "interpolated at runtime" and that training was at 256 px crops.
+It does not connect that to §2.2's co-registration premise. Measured: `pos_emb` is natively
+`[1, 768, 16, 16]`, so **at 224 px TerraMind runs 12.5% off its own grid while DEMAE runs at its**
+— a small one-sided handicap in a head-to-head that the writeup now has to name (§6).
+
+**One thing the record states as a comment, which this run shows is not enough.** The memo's
+snippet says "global z-score, NOT per-tile". The run establishes *why* that comment cannot be the
+only guard: the failure is **completely silent**. Feed the encoder DEMAE's per-tile-standardized
+tiles and it returns a perfectly plausible `[1, 768, 14, 14]`, no error, no warning (§7). It is
+now a test.
+
+And one measurement for §9.4's frozen-feature contract: **the 1.15 GB checkpoint is 69% decoder.**
+The encoder A5 and A9 actually need is 90.2 M parameters, 361 MB in fp32 (§8) — matching the
+memo's "~90M encoder / ~196M decoder" estimate, now exact.
 
 ## 2. What was asked
 
@@ -90,6 +98,11 @@ lockfile a standing hazard. The five packages that matter, as resolved:
 | torch | 2.13.0 |
 | timm | 1.0.28 |
 | numpy | 2.5.1 |
+
+The full 113-package resolve is committed as
+[`p118-terramind-requirements.txt`](p118-terramind-requirements.txt), so the environment half of
+this run is reproducible rather than merely reported. It is a **record, not a project
+dependency** — nothing in DEMAE's `pyproject.toml` should ever gain a terratorch line.
 
 **Plan §8's risk row names a `diffusers==0.30.0` pin. There is no such pin.** Both `1.2.5` and
 `1.2.10` declare a bare `diffusers` in `requires-dist`. The string `0.30.0` occurs in exactly one
@@ -167,7 +180,9 @@ arm's input.
 
 ## 6. The 14×14 grid holds — by interpolation
 
-This is the one answer that needs a caveat rather than a yes.
+This is the one answer that needs a caveat rather than a yes. The *fact* is not new — the
+selection memo's §3.4 already records "fixed 2D sin-cos positional embeddings interpolated at
+runtime" and "256 px crops". What is new is the consequence for §2.2, which nobody had drawn.
 
 `model.encoder.pos_emb` is **`[1, 768, 16, 16]`**. The tokenizer was trained at 256 px:
 its recorded training args say `input_size_min=256, input_size_max=256, input_size=256`, and the
@@ -220,6 +235,8 @@ comfortable place in the input range, not an extrapolation.
 
 ## 8. What the 1.15 GB is made of
 
+The selection memo estimated "~90M encoder / ~196M decoder". Counted, from `named_children`:
+
 | module | parameters | share |
 |---|---:|---:|
 | `encoder` | 90,172,416 | 31.5% |
@@ -260,10 +277,13 @@ rests on that, so it is pinned by a test rather than assumed.
 | Warm run, MPS | ~16 s |
 | Peak footprint | one 286 M-parameter model in fp32, ~1.1 GB RAM |
 
-**MPS works**, and agrees with CPU: identical shapes, and feature statistics matching to ~1e-5
-(float32 accumulation order, not a device bug). No `torch.compile`, no autocast, no fallback
-warnings. The only warnings emitted are `torch.jit.script` deprecations from a transitive
-dependency, unrelated to TerraMind.
+**MPS works**, and agrees with CPU. Both runs are committed —
+[`p118-terramind-probe.json`](p118-terramind-probe.json) (`"device": "cpu"`) and
+[`p118-terramind-probe-mps.json`](p118-terramind-probe-mps.json) (`"device": "mps"`) — so the
+claim is checkable rather than reported. Every shape field is identical; feature statistics match
+to ~1e-5 (`min` −40.710289 vs −40.710278), which is float32 accumulation order, not a device bug.
+No `torch.compile`, no autocast, no fallback warnings. The only warnings emitted are
+`torch.jit.script` deprecations from a transitive dependency, unrelated to TerraMind.
 
 The `autocast("cuda", enabled=False)` guard inside `ViTEncoder`'s `post_mlp` — which the DEM
 tokenizer does use, since its args set `post_mlp=True` — is a no-op on a machine with no CUDA and
@@ -295,4 +315,6 @@ cheaper than the download. Nothing here needs a rented box.
   `model/terramind_register.py` (`v1_pretraining_mean/std`), `model/modality_info.py`
   (`tok_dem@224`)
 - TerraMind paper: Jakubik et al., ICCV 2025, <https://arxiv.org/abs/2504.11171>
-- This run: [`p118-terramind-probe.json`](p118-terramind-probe.json)
+- This run: [`p118-terramind-probe.json`](p118-terramind-probe.json) (CPU),
+  [`p118-terramind-probe-mps.json`](p118-terramind-probe-mps.json) (MPS),
+  [`p118-terramind-requirements.txt`](p118-terramind-requirements.txt) (the resolved environment)

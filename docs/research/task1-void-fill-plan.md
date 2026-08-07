@@ -437,8 +437,9 @@ size histogram so the reader can see what distribution the number is over.
    which is why this ordering is efficient. **Two constraints on that contract
    are now measured** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
    the TerraMind arms take **raw metres under TerraMind's global affine**, never
-   the pretraining loader's per-tile-standardized output (§7 there), so the
-   cache is keyed by normalization as well as by tile; and the extractor needs
+   the pretraining loader's per-tile-standardized output (§7 there) — so a cache
+   shared with the DEMAE arms has to distinguish the two normalizations somehow,
+   and how is a design call this ticket does not make; and the extractor needs
    only `encoder` + `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the
    1.15 GB checkpoint** — since the remaining 196M is the diffusion decoder that
    no in-scope arm calls.

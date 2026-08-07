@@ -2,11 +2,17 @@
 
 The probe script is mostly a driver for someone else's model, and there is nothing to unit-test
 about `FULL_MODEL_REGISTRY.build` — that claim is settled by running it, and the run's record is
-`docs/research/p118-terramind-encoder-probe.md`. What *is* ours, and what every arm of the §3.4
-comparison will reuse, is the two lines either side of the forward pass: getting a stored tile
-back out as metres, and normalizing it the way TerraMind expects rather than the way DEMAE does.
+`docs/research/p118-terramind-encoder-probe.md`. This file guards that record: it pins the numbers
+the writeup quotes so they cannot drift out of the prose silently, and it covers the handful of
+pure functions the probe needs to read a tile and normalize it.
 
-That second one is the whole reason this file exists. DEMAE's corpus is **per-tile standardized**
+**This is not `benchmark/` arriving early.** Map #117 puts building that module out of scope, and
+nothing here is importable by an arm — the probe is a script under `scripts/`, loaded by file path.
+When `benchmark/` is built it will want its own extractor; what this file leaves behind for it is
+a written-down constraint and a failing test if that constraint is violated, not an implementation.
+
+That constraint is the whole reason the file is more than shape assertions. DEMAE's corpus is
+**per-tile standardized**
 (`corpus_meta.json: normalization=per_tile_standardize`) — every tile leaves the loader with mean
 0 and std 1, and its absolute elevation is *gone*. TerraMind was trained on a single global affine
 with fixed constants, so a tile at 1789 m and a tile at 200 m must stay 1589 m apart after
@@ -27,6 +33,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 PROBE_PATH = REPO / "scripts" / "p118_terramind_probe.py"
+RECORD_PATH = REPO / "docs" / "research" / "p118-terramind-probe.json"
+MPS_RECORD_PATH = REPO / "docs" / "research" / "p118-terramind-probe-mps.json"
+
 
 def _load_probe():
     spec = importlib.util.spec_from_file_location("p118_probe", PROBE_PATH)
@@ -166,7 +175,7 @@ class TestAgainstTheRealCorpus:
 
 
 @pytest.mark.skipif(
-    not (REPO / "docs" / "research" / "p118-terramind-probe.json").exists(),
+    not RECORD_PATH.exists(),
     reason="probe has not been run yet",
 )
 class TestRecordedRun:
@@ -178,10 +187,7 @@ class TestRecordedRun:
     signal §2.2's co-registration premise needs.
     """
 
-    @property
-    def record(self):
-        path = REPO / "docs" / "research" / "p118-terramind-probe.json"
-        return json.loads(path.read_text())
+    record = json.loads(RECORD_PATH.read_text()) if RECORD_PATH.exists() else {}
 
     def test_encoder_grid_co_registers_with_demae(self):
         assert self.record["encoder_output_shape"] == [1, 768, 14, 14]
@@ -209,3 +215,49 @@ class TestRecordedRun:
         assert self.record["constants"]["source"] == "terratorch.models.backbones.terramind"
         assert self.record["constants"]["mean"] == 670.665
         assert self.record["constants"]["std"] == 951.272
+
+    def test_the_weights_need_no_account(self):
+        """#118's fork: an account would have made this a human ticket. It is not one."""
+        weights = self.record["weights"]
+        assert weights["hf_hub_id"] == "ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM"
+        assert weights["licence"] == "apache-2.0"
+        assert weights["gated"] is False
+        assert weights["needs_account"] is False
+
+    def test_the_frozen_feature_contract_needs_under_a_third_of_the_checkpoint(self):
+        """§9.4: A5 and A9 call `encoder` + `quant_proj`; the decoder is 69% of the download."""
+        params = self.record["params"]
+        needed = params["encoder"] + params["quant_proj"]
+        assert needed / params["total"] < 0.33
+        assert params["decoder"] > 2 * needed
+
+
+@pytest.mark.skipif(
+    not MPS_RECORD_PATH.exists(), reason="no MPS record — the probe was run on CPU only"
+)
+class TestDeviceAgreement:
+    """§10 claims MPS agrees with CPU. Two committed records make that checkable, not reported."""
+
+    cpu = json.loads(RECORD_PATH.read_text()) if RECORD_PATH.exists() else {}
+    mps = json.loads(MPS_RECORD_PATH.read_text()) if MPS_RECORD_PATH.exists() else {}
+
+    def test_the_records_are_from_the_two_devices_they_claim(self):
+        assert self.cpu["device"] == "cpu"
+        assert self.mps["device"] == "mps"
+
+    def test_every_shape_claim_is_device_independent(self):
+        for key in (
+            "encoder_output_shape",
+            "encoder_output_shape_at_256",
+            "quant_proj_output_shape",
+            "intermediate_shape",
+            "pos_emb_shape",
+            "n_intermediates",
+        ):
+            assert self.cpu[key] == self.mps[key], key
+
+    def test_features_agree_to_float32_accumulation_order(self):
+        for key in ("mean", "std", "min", "max"):
+            assert self.cpu["encoder_feature_stats"][key] == pytest.approx(
+                self.mps["encoder_feature_stats"][key], abs=1e-4
+            ), key
