@@ -194,3 +194,44 @@ def test_a_recompile_outside_a_monitoring_block_still_lands_on_the_training_step
     compiled(tiles(11, seed=3))  # the step itself moving a shape — this is the real fault
     assert watch.compiled >= 1
     assert watch.monitored >= 1
+
+
+# --- Peak memory, printed beside the batch that caused it (#115) ---------------
+
+
+def test_peak_memory_says_nothing_rather_than_zero_off_cuda():
+    # A laptop --dry-run and an mps test both have no peak worth reporting. Zeros would be
+    # quotable, and #113 is a whole ticket about a quotable number attached to the wrong run.
+    cfg = tiny_config(runtime=Runtime())
+    assert runtime_mod.format_peak_memory(cfg, "cpu") is None
+    assert runtime_mod.format_peak_memory(cfg, "mps") is None
+
+
+def test_peak_memory_reads_the_batch_split_off_the_config_it_was_given(monkeypatch):
+    # The property #113 turned on: R0 recorded a batch size taken from the plan while the preset
+    # ran another. Reading it off `cfg.optimization` is what makes the two numbers inseparable,
+    # so the line has to move when the split does — and say the same effective batch either way.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a, **k: 18 * 1024**3)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda *a, **k: 19 * 1024**3)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda _: type("P", (), {"total_memory": 32 * 1024**3})(),
+    )
+
+    split = tiny_config(optimization=Optimization(batch_size=512, accum_iter=4))
+    other = tiny_config(optimization=Optimization(batch_size=256, accum_iter=8))
+
+    assert "at batch 512 x 4 accum = 2048 effective" in runtime_mod.format_peak_memory(
+        split, "cuda"
+    )
+    assert "at batch 256 x 8 accum = 2048 effective" in runtime_mod.format_peak_memory(
+        other, "cuda"
+    )
+    # The memory half is reported against the card, so a peak is readable as a margin and not
+    # just as a number — the thing an OOM never tells you.
+    assert "18.00 GiB allocated / 19.00 GiB reserved of 32.00 GiB" in (
+        runtime_mod.format_peak_memory(split, "cuda")
+    )

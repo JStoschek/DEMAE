@@ -758,16 +758,32 @@ class RunConfig(_Frozen):
         Decoder heads at 16 are MAE's own decoder default; §2.2 fixes ViT-B's decoder depth
         and width but is silent on its head count, so the reference value fills the gap.
 
-        **The physical batch is 1024, not 512** *(corrected 2026-08-05 — [ADR-0010](
-        ../../docs/adr/0010-frozen-phase1-release-recipe.md) §1)*. This preset used to carry
-        §6's "drop to 512 for ViT-B if needed" contingency, halving the batch and doubling
-        accumulation to hold the effective batch at 2048. R0 retired that hedge by measurement:
-        ViT-B at physical batch **1024 × 2 accum** peaks at 17.82 GiB allocated / 19.03 GiB
-        reserved against **31.35 GiB** available, and turned in 3,001.2 samples/s there
-        ([#81](https://github.com/JStoschek/DEMAE/issues/81)). The contingency was never
-        removed from this preset, so the shipping ViT-B config was a configuration R0 measured
-        *nothing* at — same effective batch and therefore the same `lr`, but smaller
-        micro-batches and so strictly less throughput than the number §12's budget is built on.
+        **The physical batch is 512 × 4 accum, because 1024 does not fit the card**
+        *(measured 2026-08-06 — [ADR-0010](../../docs/adr/0010-frozen-phase1-release-recipe.md)
+        §1, Amendment 1; [#113](https://github.com/JStoschek/DEMAE/issues/113))*. This is not
+        §6's "drop to 512 for ViT-B if needed" hedge resurrected — a hedge is a contingency, and
+        this is the only split that runs. On this preset, on the rented RTX 5090's 31.36 GiB,
+        batch 1024 peaks at **30.53 GiB in forward + backward alone** and OOMs, with compile on
+        or off to two decimal places; add AdamW's two fp32 moments over 98.4M parameters
+        (~0.79 GiB) and its real requirement is ~31.3 GiB, so it had no path to fitting even
+        without the OOM. 512 × 4 measures **18.16 GiB peak over a full step** and turned in
+        3,130.2 samples/s.
+
+        **The number this preset used to cite was real and attached to the wrong batch.** R0
+        ([#81](https://github.com/JStoschek/DEMAE/issues/81)) reported 17.82 GiB allocated /
+        19.03 GiB reserved and 3,001.2 samples/s *"at physical batch 1024 × 2 accum"* — but
+        this preset still carried 512 × 4 when R0 ran, so both figures are 512 × 4 measurements
+        wearing a 1024 × 2 label, and the fresh 512 numbers reproduce them to within 2%. The
+        2026-08-05 correction read the mislabel as a stale hedge and moved the preset to match
+        the label, which inverted its own argument: it retired 512 for being *"a configuration
+        R0 measured nothing at"*, and left 1024 × 2 as the configuration nothing was measured
+        at. R4 then ran 400 epochs at 512 × 4 by command-line override
+        ([#86](https://github.com/JStoschek/DEMAE/issues/86)).
+
+        Nothing downstream moves: effective batch is 2048 either way, so §6's linear rule still
+        derives `lr` 1.20e-3 and the two arms are compared at one LR. §12's budget stays on
+        3,001.2 samples/s — the measurement was always of this split, and re-basing it on the
+        4%-higher re-measurement would only move it in the cheap direction.
         """
         base = cls(
             run_id="R5",
@@ -775,7 +791,7 @@ class RunConfig(_Frozen):
                 encoder_dim=768, encoder_depth=12, encoder_heads=12,
                 decoder_depth=4, decoder_dim=512, decoder_heads=16,
             ),
-            optimization=Optimization(batch_size=1024, accum_iter=2),
+            optimization=Optimization(batch_size=512, accum_iter=4),
         )
         return base.replace(**changes) if changes else base
 

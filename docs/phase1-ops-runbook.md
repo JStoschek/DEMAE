@@ -120,6 +120,10 @@ flags after `--`:
 scripts/push_code.sh --host demae-box --provision -- --skip-corpus --skip-env
 ```
 
+```bash
+scripts/push_code.sh --host demae-box --provision && scripts/push_code.sh --host demae-box --provision -- --skip-corpus --skip-env
+```
+
 Use `--dry-run` to see the exact `rsync` and `ssh` it would run without touching the box.
 
 **`.git_sha` is what puts a code version on every run.** `.git` is deliberately not in the

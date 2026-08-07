@@ -64,7 +64,7 @@ from .fingerprint import fingerprint_for
 from .header import add_config_arguments, config_from_args, format_header
 from .monitor import EpochRecord, format_epoch, train_epochs
 from .probe import format_probe
-from .runtime import CompileWatch, attention_path, eager_module
+from .runtime import CompileWatch, attention_path, eager_module, format_peak_memory
 from .sink import open_run_logger
 from .throughput import format_throughput, summarize
 from .train import StepRecord, Trainer, build_loader, format_step, steps_per_epoch_for
@@ -430,6 +430,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if policy is not None:
         print(f"checkpoints      {describe_checkpoints(policy)}")
+    peak = format_peak_memory(cfg, args.device)
+    if peak is not None:
+        print(f"peak memory      {peak}")
     print(
         format_compile_summary(
             watch.compiled, watch.monitored, warned_at, enabled=cfg.runtime.compile

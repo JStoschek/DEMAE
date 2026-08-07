@@ -1,6 +1,6 @@
 # ADR 0010 — The frozen Phase-1 release recipe, and the decision rule that adjudicates arms
 
-- **Status:** Accepted
+- **Status:** Accepted — §1's physical-batch row **amended** (nothing superseded); see [Amendments](#amendments)
 - **Date:** 2026-08-05
 - **Context ticket:** "Decide the release recipe" ([issue #85](https://github.com/JStoschek/DEMAE/issues/85)), part of the Phase-1 pretraining map ([#76](https://github.com/JStoschek/DEMAE/issues/76))
 - **Evidence:** R1 ([#82](https://github.com/JStoschek/DEMAE/issues/82)), R2 ([#83](https://github.com/JStoschek/DEMAE/issues/83)), R3 ([#84](https://github.com/JStoschek/DEMAE/issues/84)), throughput and memory from R0 ([#81](https://github.com/JStoschek/DEMAE/issues/81))
@@ -51,8 +51,8 @@ R5, the release run:
 | Loss | MSE on masked patches only, **`norm_pix` ON**, fp32 target stats, variance floor 1e-4, ocean/invalid pixel weighting | §4, confirmed by R3 |
 | Input normalization | `per_tile` | §5, untouched |
 | Optimizer | AdamW, betas (0.9, 0.95), weight decay 0.05, fused | §6 |
-| Physical batch | **1024** | R0 measured 17.82 GiB allocated of 31.35 available |
-| Grad accumulation | 2 → effective batch 2048 → `lr` **1.20e-3** | §6's linear scaling rule, `lr` derived not typed |
+| Physical batch | ~~**1024**~~ → **512** *(Amendment 1 — 1024 OOMs; 17.82 GiB was the 512 measurement)* | measured 18.16 GiB peak of 31.36 available |
+| Grad accumulation | ~~2~~ → **4** → effective batch 2048 → `lr` **1.20e-3** *(Amendment 1; effective batch and `lr` unmoved)* | §6's linear scaling rule, `lr` derived not typed |
 | Schedule | **400 epochs**, warmup **20**, cosine to exactly 0 | §6; warmup is the 5% rule, 20 is its output at 400 |
 | Precision / kernels | bf16 autocast, no GradScaler, SDPA, `torch.compile(dynamic=False)` | §7 |
 | Grad clipping | **none** | §6 permitted clip 1.0 only if bf16 instability appeared; four runs, zero alarms |
@@ -67,9 +67,14 @@ transposed ordering — [P102](../research/p102-mmselfsup-mae-layout.md) §4), a
 change in §4 below.
 
 **Two hedges in §6 are now dead, and are recorded as dead rather than left to be re-litigated.**
-"Drop to 512 for ViT-B if needed" is not needed — R0 measured ViT-B at batch 1024 peaking at
-barely half the card. And "add grad-clip 1.0 only if bf16 instability appears" never fired:
-four runs, two backbones, two mask ratios, two loss targets, no loss spike and no alarm.
+~~"Drop to 512 for ViT-B if needed" is not needed — R0 measured ViT-B at batch 1024 peaking at
+barely half the card.~~ *(**Retracted by Amendment 1.** This paragraph is wrong on its face and
+is the kind of sentence a later reader trusts: 1024 OOMs, 17.82 GiB is what 512 costs, and the
+argument this section made for retiring the hedge applied to the batch it was retiring in
+favour of. Left visible rather than deleted, so an old checkout's reader can find the
+retraction.)* And "add grad-clip 1.0 only if bf16 instability appears" never fired: four runs,
+two backbones, two mask ratios, two loss targets, no loss spike and no alarm — **that half
+stands.**
 
 ### 2. The mask ratio is 75%, and the bound is stated rather than closed
 
@@ -229,3 +234,88 @@ rather than merely expensive, so leaving the wording would preserve a rule nobod
 **Kill R4 early if its curve flattens around epoch 200.** Rejected on measurement: the LR is
 still 54% of peak there, R1's gains lived in the tail, and the resulting checkpoint would be
 unannealed — reintroducing, against R4, the very confound §4 spends money to remove.
+
+## Amendments
+
+### Amendment 1 (2026-08-06) — ViT-B's physical batch is 512, because 1024 does not fit
+
+**Context ticket:** "ADR-0010 §1's batch 1024 does not fit: 17.82 GiB is the 512 measurement"
+([issue #113](https://github.com/JStoschek/DEMAE/issues/113)). **Found by:** R4
+([#86](https://github.com/JStoschek/DEMAE/issues/86)), which OOM'd on its first training step.
+
+§1's table froze ViT-B's physical batch at 1024, citing *"R0 measured 17.82 GiB allocated of
+31.35 available"*, and retired §6's drop-to-512 hedge on that basis. **The citation is a real
+measurement of a different batch.**
+
+| `RunConfig.vit_base()`, RTX 5090, 31.36 GiB | peak allocated | result |
+|---|---|---|
+| bs=1024, compile off | **30.53 GiB** | **OOM** |
+| bs=1024, compile on | **30.54 GiB** | **OOM** |
+| bs=512, compile off | 17.20 GiB | ok |
+| bs=512, compile on | 16.71 GiB | ok |
+
+Forward and backward only. Add AdamW's two fp32 moments over 98.4M parameters (~0.79 GiB) and
+512 lands at ~18.0 GiB against §1's cited 17.82 — reproducing it to within 2% — while a full
+step at 512 × 4 measures **18.16 GiB**. 1024 misses the cited figure by 12 GiB, and its own
+real requirement is ~31.3 GiB of 31.36, so it had no path to fitting even had it not OOM'd.
+Compile is not the cause; the OOM is identical to two decimal places with it off. Neither is
+the warm start: this is `vit_base()`, R5's scratch preset.
+
+**The mechanism, because it is the part worth not repeating.** R0's readout states both
+backbones ran *"at physical batch 1024 × 2 accum."* `RunConfig.vit_base()` still carried the
+512 × 4 contingency at that time — as §1 itself observed, when it removed it. So R0 measured
+512 × 4 and labelled it 1024 × 2, and **both** of R0's ViT-B numbers, the 17.82 GiB and the
+3,001.2 samples/s, are 512 × 4 figures wearing a 1024 × 2 label. §1 read the mislabel as a
+stale hedge and moved the preset to match the label. Its reasoning was right and ran the wrong
+way: it retired 512 for being *"a configuration R0 measured nothing at,"* and that sentence
+became true of 1024 the moment it was written.
+
+R0's own checklist ([#81](https://github.com/JStoschek/DEMAE/issues/81)) demanded exactly this
+record — *"physical batch drops to 512 if 32 GB demands it — record which."* It was asked for.
+It moved.
+
+#### What changes
+
+`RunConfig.vit_base()` ships **512 × 4**. Effective batch stays 2048, so §6's linear rule still
+derives `lr` 1.20e-3 and **no knob downstream of it moves**. Throughput at 512 × 4 re-measures
+at 3,130.2 samples/s — 4% *above* the figure §12's GPU-hour budget is built on — so R5 stays
+~17.5 GPU-h and the budget is left on 3,001.2 rather than re-based on the cheaper number.
+
+This is a value, not a resurrected contingency: 512 is the only split that runs, so §6's
+"drop to 512 **if needed**" wording is retired in the other direction rather than reinstated.
+
+#### What does not change, and one thing that was never true
+
+R4 ran 400 epochs at 512 × 4 by command-line override, ahead of this decision and recorded
+rather than hidden (#86). So the arms already agree, and nothing needs re-running.
+
+**R4's readout asks that R5 match `config_hash` `f0b87f27a24e3a65` "or the arms are not
+comparable." No R5 can.** `config_hash` covers the recipe and excludes only the eight
+environment fields; R4 and R5 differ by design on three hashed ones — `init.mode`,
+`init.checkpoint` (hashed deliberately, since which checkpoint the arm warm-starts from *is*
+the arm), and `architecture.pos_encoding`. The two arms could never share a hash, before this
+amendment or after it.
+
+What comparability actually requires is weaker, and is stated here so it is not restated
+wrongly: **the same effective batch and the same derived `lr`**. With no batch normalization
+anywhere and §4's `norm_pix` statistics computed per patch rather than per batch, N
+micro-batches accumulated at 1/N give the gradient of one batch N times the size — which
+CONTEXT.md asserts and a test pins, rather than assuming. The micro-batch split is therefore
+free with respect to the result. R5 runs 512 × 4 regardless, because it is the only split that
+fits; that it also matches R4 is a convenience, not the requirement.
+
+#### The check that was considered and declined
+
+§1's failure suggests a build-time assertion — a config that cannot fit the card refusing
+before the meter starts. **Declined.** On a rented box the OOM already arrives about sixty
+seconds in, before anything meaningful is spent, and `--dry-run` runs on a laptop with no
+5090, so "fails earlier" buys close to nothing here. The OOM *is* the check.
+
+What a pre-check would have bought is the one thing an OOM never reports: a **margin**. A
+config peaking at 30.9 GiB of 31.36 starts cleanly and dies at epoch 137 when fragmentation or
+a monitoring pass adds a few hundred megabytes. That is worth having, but it is worth having
+as **measurement in the record** rather than as a gate — which is also the fix aimed at what
+actually failed here, since nobody's code was wrong in R0: a human copied a batch size from
+the plan into a readout while the preset ran another. Peak memory and the batch split, read
+off the run and logged where a readout writer will copy them, are
+[#115](https://github.com/JStoschek/DEMAE/issues/115), which blocks R5.

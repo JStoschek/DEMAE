@@ -36,11 +36,17 @@ def test_vit_base_preset_widens_the_decoder_and_holds_the_effective_batch():
     b = RunConfig.vit_base()
     assert (b.architecture.encoder_dim, b.architecture.encoder_depth) == (768, 12)
     assert (b.architecture.decoder_depth, b.architecture.decoder_dim) == (4, 512)  # §2.2
-    # §6 hedged "drop to 512 for ViT-B if needed". R0 measured that it is not needed — ViT-B
-    # at 1024 x 2 peaks at 17.82 GiB of 31.35 — so the batch arithmetic is ViT-S's untouched
-    # (#81, ADR-0010 §1). Holding this at 1024 is what makes §12's budget table, which is
-    # built on the 3,001.2 samples/s measured *at this batch*, describe the shipping config.
-    assert (b.optimization.batch_size, b.optimization.accum_iter) == (1024, 2)
+    # ViT-B's physical batch is the one number in this preset that a rented box can refute,
+    # and it has now been wrong in both directions: the preset carried 512 x 4 while R0's
+    # readout called it 1024 x 2, then ADR-0010 moved the preset to match the label and left
+    # a config that OOMs at 30.5 GiB of 31.36 (#113). Both flips were caught by hand — the
+    # first by reading the preset against the ADR being written about it, the second by a
+    # rented 5090 dying on R4's first step. So it is pinned here, against ADR-0010 §1
+    # Amendment 1's table, where pytest is what notices.
+    assert (b.optimization.batch_size, b.optimization.accum_iter) == (512, 4)
+    # And pinned to the thing that must not move *with* it: the split is free to change only
+    # while the effective batch and the derived LR do not, because that is the whole reason
+    # R4-at-512 and R5 are comparable at all (ADR-0010 §1 Amendment 1, R4 at #86).
     assert b.effective_batch == RunConfig().effective_batch == 2048
     assert b.lr == pytest.approx(1.2e-3)
 

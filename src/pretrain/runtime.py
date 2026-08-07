@@ -155,6 +155,36 @@ def compile_model(model: nn.Module, cfg: RunConfig) -> nn.Module:
     return torch.compile(model, dynamic=cfg.runtime.compile_dynamic)
 
 
+def format_peak_memory(cfg: RunConfig, device) -> str | None:
+    """Peak GPU memory the run reached, printed beside the batch split that produced it (#115).
+
+    The reason this exists is #113. R0's readout recorded ViT-B at *"17.82 GiB, physical batch
+    1024 x 2 accum"* while :meth:`~pretrain.config.RunConfig.vit_base` was in fact running
+    512 x 4, so both of its ViT-B figures were 512 measurements wearing a 1024 label. ADR-0010
+    §1 then froze the label, and R4 OOM'd on its first step against a batch needing ~31.3 GiB
+    of 31.36. No code was wrong anywhere in that chain: a human copied a batch size from the
+    plan into a readout while the preset ran a different one.
+
+    So neither number is quotable without the other, and the fix is to stop them being written
+    down separately — both are read off the *run*, at the moment it ends, and printed on one
+    line in the place a readout writer copies from. A batch size taken from the plan can be
+    wrong; one taken from ``cfg.optimization`` at the end of the run it configured cannot.
+
+    ``None`` off CUDA rather than zeros: a laptop ``--dry-run`` or an mps test has no peak worth
+    reporting, and a confident ``0.00 GiB`` is exactly the kind of number that ends up cited.
+    """
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return None
+    o = cfg.optimization
+    gib = 1024**3
+    total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / gib
+    return (
+        f"{torch.cuda.max_memory_allocated() / gib:.2f} GiB allocated / "
+        f"{torch.cuda.max_memory_reserved() / gib:.2f} GiB reserved of {total:.2f} GiB"
+        f"   at batch {o.batch_size} x {o.accum_iter} accum = {cfg.effective_batch} effective"
+    )
+
+
 def compiled_frames() -> int:
     """Frames Dynamo has compiled in this process, ever — the counter behind :class:`CompileWatch`.
 
