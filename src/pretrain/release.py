@@ -434,6 +434,63 @@ PROBE_NOTE: Final = (
 )
 
 
+# --- The Phase-2 evaluation-regions contract ----------------------------------
+
+#: What the ``test`` geocells *are*, as a rule a Phase-2 task builder can act on (plan §9, §14).
+#: Not a description of the split — a constraint on what may be built where.
+REGIONS_CONTRACT: Final = (
+    "These geocells are the downstream evaluation regions. Every tile inside them was held out "
+    "of pretraining, and Phase-2 task datasets (void filling, geomorphon labels, and anything "
+    "else evaluated as transfer) are built here and never from `train` geocells. Holding out "
+    "whole 10-degree cells puts hundreds of kilometres between train and test, past terrain "
+    "autocorrelation ranges, which is what makes a later 'generalizes to unseen regions' claim "
+    "honest rather than an artifact of adjacent windows landing on both sides of the split."
+)
+
+
+def evaluation_regions(blocks: Path | str, fingerprint: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``test`` geocell list, restated as §14's Phase-2 contract and **verified against the
+    run's own fingerprint**.
+
+    The release already carries ``split_blocks_md5``, which is enough to *check* a blocks file
+    and not enough to *read* one — a consumer holding only the release cannot tell which regions
+    were held out. This lifts the list into the release, and refuses to do so unless the
+    presented file is byte-for-byte the one this run recorded.
+
+    That check is the whole point. Shipping a plausible-looking cell list drawn from a *different*
+    split is this map's recurring failure shape one more time: the regions would look entirely
+    reasonable, Phase 2 would build its evaluation sets inside geocells the encoder had actually
+    trained on, and every downstream number would be quietly optimistic with nothing to show it.
+    """
+    blocks = Path(blocks)
+    recorded = fingerprint.get("split_blocks_md5")
+    actual = checkpoint_md5(blocks)
+    if not recorded:
+        raise ValueError(
+            f"this run recorded no split_blocks_md5, so {blocks} cannot be shown to be the split "
+            f"it trained against — and an unverifiable region list is worse than none, because "
+            f"Phase 2 would build evaluation sets from it"
+        )
+    if actual != recorded:
+        raise ValueError(
+            f"{blocks} hashes to {actual} but this run trained against split blocks {recorded} — "
+            f"refusing to ship one split's evaluation regions with another split's weights"
+        )
+    doc = json.loads(blocks.read_text())
+    test = doc["test"]
+    return {
+        "block": test["block"],
+        "n_cells": test["n_cells"],
+        "cells": list(test["cells"]),
+        "n_tiles": doc["totals"]["test"],
+        "share": doc["shares"]["test"],
+        "per_stratum": doc["per_stratum"]["test"],
+        "split_blocks_md5": actual,
+        "assignment_md5": doc["assignment_md5"],
+        "contract": REGIONS_CONTRACT,
+    }
+
+
 # --- The manifest -------------------------------------------------------------
 
 
@@ -470,6 +527,10 @@ class ReleaseManifest:
     curves: dict[str, Any] | None
     #: §14's milestone set, riding along for Phase 2's compute-scaling plot. Possibly empty.
     milestones: list[dict[str, Any]]
+    #: §14's other Phase-2 interface: the ``test`` geocells, restated as the contract that task
+    #: datasets are built there and nowhere else. ``None`` when no verified blocks file was
+    #: presented — never a guess, for the reason :func:`evaluation_regions` gives.
+    evaluation_regions: dict[str, Any] | None
     #: Why every milestone's probe is null. :data:`PROBE_NOTE`, carried in the artifact so the
     #: caveat travels with the files rather than living in an issue nobody reads.
     probe_note: str
@@ -686,6 +747,28 @@ def model_card(manifest: ReleaseManifest) -> str:
         )
     )
 
+    regions = manifest.evaluation_regions
+    if regions is None:
+        regions_line = (
+            "### Evaluation regions (Phase-2 contract)\n\n"
+            "No verified evaluation-region contract shipped with this export. The `test` geocells "
+            "are reserved as the downstream evaluation regions, but this release does not name "
+            "them — a Phase-2 task builder must read the committed split blocks whose md5 is "
+            "above, and check it against that hash before building anything."
+        )
+    else:
+        cells = "\n".join(f"- `{c}`" for c in regions["cells"])
+        regions_line = (
+            f"### Evaluation regions (Phase-2 contract)\n\n"
+            f"**{regions['n_cells']} held-out `{regions['block']}`s — "
+            f"{regions['n_tiles']:,} tiles ({regions['share']:.2%} of the corpus).**\n\n"
+            f"{regions['contract']}\n\n{cells}\n\n"
+            f"Verified against this run's `split_blocks_md5` "
+            f"(`{regions['split_blocks_md5']}`) at export time, so these are the regions this "
+            f"encoder was actually held out of, not a plausible list from another split. Machine-"
+            f"readable in `evaluation_regions.json`."
+        )
+
     kwargs = ", ".join(f"{k}={v!r}" for k, v in manifest.timm_create_kwargs.items())
     fp = manifest.fingerprint
     return f"""# DEMAE — {manifest.timm_model} pretrained on single-channel elevation
@@ -766,8 +849,7 @@ Kept so that downstream performance can be plotted against pretraining compute.
 state `{fp.get('split_state')}`)
 - **Git SHA:** `{fp.get('git_sha')}`
 
-The `test` geocells are reserved as the downstream evaluation regions; downstream task datasets
-are built there and never from `train` geocells.
+{regions_line}
 
 ## Source
 
@@ -784,14 +866,17 @@ def export_encoder(
     init_file: Path | str | None = None,
     history: Path | str | None = None,
     checkpoint_dir: Path | str | None = None,
+    split_blocks: Path | str | None = None,
     verify_timm: bool = True,
     hash_milestones: bool = True,
 ) -> ReleaseManifest:
     """Write one run's §14 release into ``out_dir``, and return the manifest.
 
-    Writes ``encoder.pt`` and ``manifest.json`` always, and ``curves.csv`` when ``history`` is
-    given. ``checkpoint_dir`` defaults to the directory the exported checkpoint sits in, which is
-    where its milestone siblings are; pass it explicitly when they live elsewhere.
+    Writes ``encoder.pt``, ``manifest.json`` and ``MODEL_CARD.md`` always; ``curves.csv`` when
+    ``history`` is given; ``evaluation_regions.json`` when ``split_blocks`` is, and verifies that
+    file against the run's own fingerprint before believing it. ``checkpoint_dir`` defaults to the
+    directory the exported checkpoint sits in, which is where its milestone siblings are; pass it
+    explicitly when they live elsewhere.
 
     ``verify_timm`` exists for tests that have no timm-shaped architecture to check against, and
     defaults to on everywhere else: the strict load is the assertion this whole module is built
@@ -832,6 +917,13 @@ def export_encoder(
         hash_files=hash_milestones,
     )
 
+    regions = None
+    if split_blocks is not None:
+        regions = evaluation_regions(split_blocks, ckpt.fingerprint.to_dict())
+        (out_dir / "evaluation_regions.json").write_text(
+            json.dumps(regions, indent=2, sort_keys=True) + "\n"
+        )
+
     manifest = ReleaseManifest(
         source_checkpoint=str(checkpoint),
         source_checkpoint_md5=checkpoint_md5(checkpoint),
@@ -849,6 +941,7 @@ def export_encoder(
         init_provenance=init_provenance(ckpt.config, init_file=init_file).to_dict(),
         curves=curves,
         milestones=milestones,
+        evaluation_regions=regions,
         probe_note=PROBE_NOTE,
         config=ckpt.config.to_dict(),
     )
@@ -888,6 +981,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="where the milestone siblings live (default: the exported checkpoint's directory)",
     )
+    p.add_argument(
+        "--split-blocks",
+        default=None,
+        help=(
+            "the committed split-blocks JSON, shipped as §14's Phase-2 evaluation-regions "
+            "contract. Verified against this run's split_blocks_md5 and refused on a mismatch"
+        ),
+    )
     return p
 
 
@@ -899,6 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
         init_file=args.init_file,
         history=args.history,
         checkpoint_dir=args.checkpoint_dir,
+        split_blocks=args.split_blocks,
     )
     prov = manifest.init_provenance
     print(f"exported  {manifest.encoder_file}  ({manifest.encoder_md5})")
@@ -918,6 +1020,12 @@ def main(argv: list[str] | None = None) -> int:
         at = ", ".join(str(m[EPOCH_AXIS]) for m in manifest.milestones)
         print(f"  milestone {len(manifest.milestones)} riding along (completed {at}); "
               f"none carries a probe number (#131)")
+    if manifest.evaluation_regions is None:
+        print("  regions   NONE — Phase 2 has no evaluation-region contract; pass --split-blocks")
+    else:
+        r = manifest.evaluation_regions
+        print(f"  regions   {r['n_cells']} {r['block']}s held out, {r['n_tiles']:,} tiles "
+              f"({r['share']:.2%}), verified against this run's split_blocks_md5")
     print(f"  card      MODEL_CARD.md  ({len(RELATED_WORK)} related-work entries, "
           f"{len(RETIRED_CLAIMS)} retired claims named as false)")
     return 0

@@ -196,16 +196,22 @@ def exported(tmp_path_factory):
 
     tmp_path = tmp_path_factory.mktemp("release")
 
+    from pretrain.init import checkpoint_md5
+
     cfg = RunConfig.vit_base()
     model = MaskedAutoencoder(cfg.architecture, mask_ratio=cfg.masking.ratio)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    # The blocks file is written first so the fingerprint can record its *real* md5: the export
+    # refuses a blocks file that is not the one the run trained against, and a fixture that
+    # hard-coded the hash would be testing the refusal rather than the happy path.
+    blocks = a_blocks_file(tmp_path / "split_blocks.json")
     fingerprint = DataFingerprint(
         corpus_dir="data/corpus_500k",
         dataset_version="bcbd6484",
         n_tiles=500_000,
         selection_list_md5="0" * 32,
         split_md5="1" * 32,
-        split_blocks_md5="2" * 32,
+        split_blocks_md5=checkpoint_md5(blocks),
         split_state="committed",
         split_note=None,
         git_sha="deadbee",
@@ -231,7 +237,8 @@ def exported(tmp_path_factory):
     history.write_text(json.dumps(a_history()))
 
     out = tmp_path / "release"
-    assert release.main([str(ckpt), str(out), "--history", str(history)]) == 0
+    argv = [str(ckpt), str(out), "--history", str(history), "--split-blocks", str(blocks)]
+    assert release.main(argv) == 0
     return out
 
 
@@ -405,7 +412,7 @@ def test_a_release_with_no_history_says_so_rather_than_shipping_an_unlabelled_cu
         config_hash="h", timm_model="vit_base_patch16_224", timm_create_kwargs={},
         pos_encoding="sincos2d", encoder_tensors=1, encoder_parameters=1, encoder_file="e.pt",
         encoder_md5="1" * 32, fingerprint={}, init_provenance={}, curves=None, milestones=[],
-        probe_note=release.PROBE_NOTE, config={},
+        evaluation_regions=None, probe_note=release.PROBE_NOTE, config={},
     )
     assert json.loads(json.dumps(manifest.to_dict()))["curves"] is None
 
@@ -423,7 +430,8 @@ def a_manifest(**overrides):
         encoder_file="encoder.pt", encoder_md5="1" * 32,
         fingerprint={"dataset_version": "bcbd6484", "n_tiles": 500_000, "git_sha": "deadbee"},
         init_provenance={"mode": "scratch", "verified": True, "spec": None, "note": "n"},
-        curves=None, milestones=[], probe_note=release.PROBE_NOTE, config={},
+        curves=None, milestones=[], evaluation_regions=None,
+        probe_note=release.PROBE_NOTE, config={},
     )
     fields.update(overrides)
     return release.ReleaseManifest(**fields)
@@ -527,3 +535,73 @@ def test_the_card_ships_beside_the_weights(exported):
     """It is a model card: it has to travel with the artifact, not live in the repo."""
     assert (exported / "MODEL_CARD.md").is_file()
     assert (exported / "MODEL_CARD.md").read_text().startswith("# DEMAE")
+
+
+# --- The Phase-2 evaluation-regions contract ----------------------------------
+
+
+def a_blocks_file(path, cells=("+000_-010", "+020_+060"), test_tiles=14_906):
+    """A committed split-blocks document, shaped like `artifacts/phase1/split_blocks_500k.json`."""
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "assignment_md5": "d" * 32,
+        "n_tiles": 500_000,
+        "totals": {"train": 475_030, "val": 9_998, "test": test_tiles},
+        "shares": {"train": 0.950185, "val": 0.019999, "test": 0.029816},
+        "test": {"block": "geocell_id", "n_cells": len(cells), "cells": list(cells)},
+        "val": {"block": "source_cog", "n_cogs": 2, "cogs": ["a", "b"]},
+        "per_stratum": {"train": [1] * 20, "val": [1] * 20, "test": [2] * 20},
+    }) + "\n")
+    return path
+
+
+def test_the_regions_are_verified_against_the_runs_own_fingerprint(tmp_path):
+    from pretrain.init import checkpoint_md5
+
+    blocks = a_blocks_file(tmp_path / "blocks.json")
+    fp = {"split_blocks_md5": checkpoint_md5(blocks)}
+    regions = release.evaluation_regions(blocks, fp)
+    assert regions["cells"] == ["+000_-010", "+020_+060"]
+    assert regions["n_tiles"] == 14_906
+    assert regions["assignment_md5"] == "d" * 32
+
+
+def test_another_splits_regions_are_refused(tmp_path):
+    """The failure this check exists for. A cell list from a different split looks entirely
+    reasonable, and Phase 2 would build evaluation sets inside geocells this encoder trained on —
+    every downstream number quietly optimistic, with nothing in the artifact to show it."""
+    blocks = a_blocks_file(tmp_path / "blocks.json")
+    with pytest.raises(ValueError, match="refusing to ship one split's evaluation regions"):
+        release.evaluation_regions(blocks, {"split_blocks_md5": "9" * 32})
+
+
+def test_a_run_that_recorded_no_blocks_md5_cannot_have_its_regions_shipped(tmp_path):
+    """Unverifiable is worse than absent here, because absent stops a task builder and
+    plausible-looking does not."""
+    blocks = a_blocks_file(tmp_path / "blocks.json")
+    with pytest.raises(ValueError, match="recorded no split_blocks_md5"):
+        release.evaluation_regions(blocks, {"split_blocks_md5": None})
+
+
+def test_the_release_ships_the_regions_as_their_own_file(exported):
+    m = json.loads((exported / "manifest.json").read_text())
+    assert (exported / "evaluation_regions.json").is_file()
+    on_disk = json.loads((exported / "evaluation_regions.json").read_text())
+    assert on_disk == m["evaluation_regions"]
+    assert on_disk["split_blocks_md5"] == m["fingerprint"]["split_blocks_md5"]
+
+
+def test_the_card_names_every_held_out_geocell(exported):
+    """A consumer holding only the release must be able to tell which regions were held out —
+    the md5 alone lets them check a blocks file, not read one."""
+    m = json.loads((exported / "manifest.json").read_text())
+    card = (exported / "MODEL_CARD.md").read_text()
+    for cell in m["evaluation_regions"]["cells"]:
+        assert f"`{cell}`" in card
+    assert "never from `train` geocells" in card
+
+
+def test_a_release_with_no_blocks_tells_a_task_builder_what_to_do_instead():
+    card = release.model_card(a_manifest(evaluation_regions=None))
+    assert "does not name" in card
+    assert "check it against that hash" in card
