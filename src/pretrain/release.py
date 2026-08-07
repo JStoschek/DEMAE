@@ -4,8 +4,20 @@ Plan §14 releases, per run, *"encoder-only weights (timm-loadable) + full MAE c
 config + ``dataset_version``/split-assignment fingerprints + **init provenance** + the training
 curves"*. The full checkpoint, the config and the fingerprints already exist inside every
 checkpoint payload (:func:`~pretrain.checkpoint.save_checkpoint`); what does not exist until
-here is the **encoder-only file a consumer actually loads**, and the manifest that says what it
-is.
+here is the **encoder-only file a consumer actually loads**, the **curves**, the **milestone
+set**, and the manifest that says what all of it is.
+
+Two of those carry a caveat that is part of the artifact rather than commentary on it:
+
+- **The curves are indexed by** :data:`EPOCH_AXIS`, spelled out in the manifest. W&B's ``_step``
+  is the 0-based index of the epoch that just ended and
+  :attr:`~pretrain.checkpoint.RunState.epoch` is epochs completed, so the two are off by one for
+  a run's entire length (#132). Neither is wrong; an unlabelled curve is.
+- **No milestone carries a probe number**, because none was ever measured at a milestone epoch —
+  milestones fire at completed {50, 100, 200, 400} and §10.3's probe at completed
+  {1, 21, ..., 381}, and the intersection is empty (#131). :data:`PROBE_NOTE` ships that fact
+  next to the files, and :func:`milestone_set` records how far the nearest real probe was so a
+  reader who carries one forward knows they are inferring.
 
 ## Why this is not ``{k: v for k, v in state.items() if not is_decoder_parameter(k)}``
 
@@ -64,15 +76,16 @@ would assert Apache-2.0 about a file nobody checked.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Final, Mapping
+from typing import Any, Final, Iterable, Mapping, Sequence
 
 import torch
 from torch import Tensor
 
-from .checkpoint import load_checkpoint
+from .checkpoint import discover, load_checkpoint
 from .config import Architecture, RunConfig
 from .init import KNOWN_CHECKPOINTS, checkpoint_md5, read_state_dict, recognize
 from .model import AXIS_ORDERS, is_decoder_parameter, sincos2d_pos_embed
@@ -264,6 +277,155 @@ def init_provenance(config: RunConfig, *, init_file: Path | str | None = None) -
     )
 
 
+# --- The training curves ------------------------------------------------------
+
+#: The column every shipped curve is indexed by, and the reason it needs a name rather than a
+#: convention. W&B's ``_step`` is the **0-based index of the epoch that just ended**;
+#: :attr:`~pretrain.checkpoint.RunState.epoch` is **epochs completed**; ``completed = _step + 1``
+#: (P88 §1, found by #132). The two are off by one for a run's whole length and neither is
+#: wrong — so a curve that does not say which one it carries is a curve that will eventually be
+#: read against the other, and every point will look one epoch early.
+EPOCH_AXIS: Final = "epochs_completed"
+
+#: W&B's own bookkeeping. ``_step`` is not dropped so much as *renamed*: it becomes
+#: :data:`EPOCH_AXIS`, plus one. The other two are wall-clock facts about a rented box that no
+#: longer exists, and mean nothing to a consumer reading the curve.
+WANDB_INTERNAL: Final = ("_step", "_runtime", "_timestamp")
+
+
+def _is_scalar(value: Any) -> bool:
+    """Whether ``value`` belongs in a CSV cell.
+
+    ``recon/hillshade`` and ``recon/heatmap`` are W&B image references and ``val/per_patch_loss``
+    is a histogram — dicts, all three. They are part of the run's record and no part of a *curve*,
+    and flattening them into a cell would produce a column of unreadable JSON rather than a
+    series. Strings stay: ``probe/set_md5`` is what makes two runs' probe points comparable at
+    all (#132 leaned on it), and dropping it would cost the reader the ability to check that.
+    """
+    return isinstance(value, (int, float, str, bool))
+
+
+def curve_rows(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """§14's training curves, moved onto the epochs-completed axis and stripped to scalars.
+
+    ``history`` is one run's W&B history, newest last — a list of per-epoch rows. Every row is
+    re-keyed from ``_step`` to :data:`EPOCH_AXIS`, which is the *only* transformation here that
+    changes a number, and the one #132 found the release could not do implicitly.
+
+    Sparse by design: the probe fires every 20 epochs and its columns are simply absent from the
+    other rows. They are left empty rather than forward-filled, because a carried-forward probe
+    value read as a measurement is exactly the confusion #131 is about.
+    """
+    rows = []
+    for row in history:
+        if EPOCH_AXIS in row:
+            raise ValueError(
+                f"history row already carries {EPOCH_AXIS!r} — this function derives it from "
+                f"W&B's `_step`, and two sources for the epoch axis is how they come to disagree"
+            )
+        if "_step" not in row:
+            raise ValueError("history row has no `_step`, so its epoch cannot be established")
+        out: dict[str, Any] = {EPOCH_AXIS: int(row["_step"]) + 1}
+        for key, value in row.items():
+            if key in WANDB_INTERNAL or not _is_scalar(value):
+                continue
+            out[key] = value
+        rows.append(out)
+    return sorted(rows, key=lambda r: r[EPOCH_AXIS])
+
+
+def curve_columns(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """Every column present in ``rows``, with :data:`EPOCH_AXIS` first and the rest sorted."""
+    seen: set[str] = set()
+    for row in rows:
+        seen.update(row)
+    seen.discard(EPOCH_AXIS)
+    return [EPOCH_AXIS, *sorted(seen)]
+
+
+def write_curves(rows: Sequence[Mapping[str, Any]], path: Path | str) -> Path:
+    """Write ``rows`` as CSV. Absent values are empty cells, not zeros and not carried forward."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = curve_columns(rows)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, restval="")
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def read_history(path: Path | str) -> list[dict[str, Any]]:
+    """One run's exported W&B history from JSON — a list of rows, or ``{"history": [...]}``."""
+    payload = json.loads(Path(path).read_text())
+    rows = payload["history"] if isinstance(payload, Mapping) else payload
+    if not isinstance(rows, list):
+        raise ValueError(f"{path} does not hold a list of history rows")
+    return rows
+
+
+def probe_epochs(rows: Sequence[Mapping[str, Any]], key: str = "probe/set_md5") -> list[int]:
+    """The epochs at which a probe actually ran, on :data:`EPOCH_AXIS`.
+
+    Keyed off ``probe/set_md5`` rather than a metric, because the md5's presence is what says
+    *the probe ran against a committed set* — a metric column could in principle be present and
+    null, and §10.3 treats a probe against no committed set as no probe at all.
+    """
+    return [int(r[EPOCH_AXIS]) for r in rows if r.get(key)]
+
+
+# --- The milestone set --------------------------------------------------------
+
+
+def milestone_set(
+    checkpoint_dir: Path | str,
+    *,
+    probed_epochs: Sequence[int] = (),
+    hash_files: bool = True,
+) -> list[dict[str, Any]]:
+    """§14's milestone checkpoints, which ride along for Phase 2's compute-scaling plot.
+
+    Each entry carries **no probe number, ever** — see :data:`PROBE_NOTE`. ``probed_epochs`` is
+    taken only to state, per milestone, how far the nearest real probe was, so that a reader who
+    wants a number knows exactly what they would be inferring from.
+    """
+    entries = []
+    for found in discover(checkpoint_dir):
+        if not found.milestone:
+            continue
+        nearest = min(probed_epochs, key=lambda e: abs(e - found.epoch), default=None)
+        entries.append(
+            {
+                "file": found.path.name,
+                EPOCH_AXIS: found.epoch,
+                "step": found.step,
+                "md5": checkpoint_md5(found.path) if hash_files else None,
+                # #131, structurally rather than by convention: the probe never ran at a
+                # milestone epoch, so there is no measurement to put here and the key exists to
+                # keep anyone from adding one.
+                "probe": None,
+                "nearest_probed_epoch": nearest,
+            }
+        )
+    return entries
+
+
+#: Why every milestone's ``probe`` is null, in a sentence the release note can quote (#131).
+#: Milestones fire at completed {50, 100, 200, 400} and the probe at completed {1, 21, ..., 381};
+#: the intersection is empty, so **no released checkpoint has ever been probed**. Carrying the
+#: 381-completed numbers onto the 400 milestone is defensible — the tail is flat, val moves
+#: −0.00012 over the final 19 epochs and ``lr`` has gone to zero — but it is an *inference*, and
+#: the artifact says so rather than letting a number arrive unlabelled.
+PROBE_NOTE: Final = (
+    "No released checkpoint has ever been probed: milestones are written at completed epochs "
+    "{50, 100, 200, 400} and §10.3's probe fires at completed {1, 21, ..., 381}, and those sets "
+    "do not intersect (#131). Every milestone's `probe` is therefore null. The nearest probed "
+    "epoch is given per milestone so that carrying a number forward is a stated inference rather "
+    "than an unlabelled measurement; the run's own tail is flat enough to make that defensible, "
+    "but the curve in curves.csv is the measurement and the milestone is not."
+)
+
+
 # --- The manifest -------------------------------------------------------------
 
 
@@ -294,6 +456,15 @@ class ReleaseManifest:
     fingerprint: dict[str, Any]
     #: §14's required field, from :func:`init_provenance`.
     init_provenance: dict[str, Any]
+    #: §14's training curves: the shipped file, its hash, and — the part that is not decoration —
+    #: the name of the epoch axis it is indexed by. ``None`` when no history was presented, which
+    #: is a §14-incomplete release and says so rather than shipping an unlabelled curve.
+    curves: dict[str, Any] | None
+    #: §14's milestone set, riding along for Phase 2's compute-scaling plot. Possibly empty.
+    milestones: list[dict[str, Any]]
+    #: Why every milestone's probe is null. :data:`PROBE_NOTE`, carried in the artifact so the
+    #: caveat travels with the files rather than living in an issue nobody reads.
+    probe_note: str
     #: The whole recipe, so an ablation is a diff against a released config rather than prose.
     config: dict[str, Any]
 
@@ -312,9 +483,16 @@ def export_encoder(
     out_dir: Path | str,
     *,
     init_file: Path | str | None = None,
+    history: Path | str | None = None,
+    checkpoint_dir: Path | str | None = None,
     verify_timm: bool = True,
+    hash_milestones: bool = True,
 ) -> ReleaseManifest:
-    """Write ``encoder.pt`` and ``manifest.json`` for one run, and return the manifest.
+    """Write one run's §14 release into ``out_dir``, and return the manifest.
+
+    Writes ``encoder.pt`` and ``manifest.json`` always, and ``curves.csv`` when ``history`` is
+    given. ``checkpoint_dir`` defaults to the directory the exported checkpoint sits in, which is
+    where its milestone siblings are; pass it explicitly when they live elsewhere.
 
     ``verify_timm`` exists for tests that have no timm-shaped architecture to check against, and
     defaults to on everywhere else: the strict load is the assertion this whole module is built
@@ -329,6 +507,31 @@ def export_encoder(
     out_dir.mkdir(parents=True, exist_ok=True)
     encoder_path = out_dir / "encoder.pt"
     torch.save(state, encoder_path)
+
+    curves: dict[str, Any] | None = None
+    probed: list[int] = []
+    if history is not None:
+        rows = curve_rows(read_history(history))
+        probed = probe_epochs(rows)
+        curves_path = write_curves(rows, out_dir / "curves.csv")
+        curves = {
+            "file": curves_path.name,
+            "md5": checkpoint_md5(curves_path),
+            "epoch_axis": EPOCH_AXIS,
+            "epoch_axis_note": (
+                "epochs completed, 1-based. W&B's `_step` is the 0-based index of the epoch that "
+                "just ended; this column is `_step + 1` and matches RunState.epoch (P88 §1)"
+            ),
+            "rows": len(rows),
+            "columns": curve_columns(rows),
+            "probed_epochs": probed,
+        }
+
+    milestones = milestone_set(
+        Path(checkpoint).parent if checkpoint_dir is None else checkpoint_dir,
+        probed_epochs=probed,
+        hash_files=hash_milestones,
+    )
 
     manifest = ReleaseManifest(
         source_checkpoint=str(checkpoint),
@@ -345,6 +548,9 @@ def export_encoder(
         encoder_md5=checkpoint_md5(encoder_path),
         fingerprint=ckpt.fingerprint.to_dict(),
         init_provenance=init_provenance(ckpt.config, init_file=init_file).to_dict(),
+        curves=curves,
+        milestones=milestones,
+        probe_note=PROBE_NOTE,
         config=ckpt.config.to_dict(),
     )
     manifest.write(out_dir / "manifest.json")
@@ -369,12 +575,31 @@ def build_parser() -> argparse.ArgumentParser:
             "Without it a warm-started export makes no licence claim; scratch runs need nothing"
         ),
     )
+    p.add_argument(
+        "--history",
+        default=None,
+        help=(
+            "this run's exported W&B history as JSON, shipped as §14's training curves. Without "
+            "it the release carries no curve, which is a §14-incomplete release"
+        ),
+    )
+    p.add_argument(
+        "--checkpoint-dir",
+        default=None,
+        help="where the milestone siblings live (default: the exported checkpoint's directory)",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    manifest = export_encoder(args.checkpoint, args.out_dir, init_file=args.init_file)
+    manifest = export_encoder(
+        args.checkpoint,
+        args.out_dir,
+        init_file=args.init_file,
+        history=args.history,
+        checkpoint_dir=args.checkpoint_dir,
+    )
     prov = manifest.init_provenance
     print(f"exported  {manifest.encoder_file}  ({manifest.encoder_md5})")
     print(f"  timm      {manifest.timm_model}  {manifest.timm_create_kwargs}")
@@ -383,6 +608,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  position  epoch {manifest.epochs_completed} completed, step {manifest.steps:,}")
     print(f"  init      {prov['mode']}  ({'verified' if prov['verified'] else 'UNVERIFIED'})")
     print(f"            {prov['note']}")
+    if manifest.curves is None:
+        print("  curves    NONE — §14 requires them; re-run with --history")
+    else:
+        c = manifest.curves
+        print(f"  curves    {c['file']}  {c['rows']} rows on {c['epoch_axis']}, "
+              f"{len(c['columns'])} columns, probe at {len(c['probed_epochs'])} epochs")
+    if manifest.milestones:
+        at = ", ".join(str(m[EPOCH_AXIS]) for m in manifest.milestones)
+        print(f"  milestone {len(manifest.milestones)} riding along (completed {at}); "
+              f"none carries a probe number (#131)")
     return 0
 
 

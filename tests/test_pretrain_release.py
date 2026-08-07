@@ -9,6 +9,7 @@ materialized tensor and checking that the strict load is what refuses.
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -28,6 +29,33 @@ def an_encoder(arch):
     """A real model's encoder-only export, at ``arch``."""
     model = MaskedAutoencoder(arch, mask_ratio=0.75)
     return release.encoder_state_dict(model.state_dict(), arch)
+
+
+def a_history(epochs=400, probe_every=20):
+    """One run's W&B history, shaped like R4's and R5's actually are.
+
+    The cadence is the real one and matters to the tests below: ``_step`` runs 0-based, and the
+    probe fires at ``_step`` 0, 20, ... 380 — completed 1, 21, ... 381 — which is precisely the
+    set that never lands on a milestone (#131). The media and histogram columns are here because
+    the real history carries them and the curve must not.
+    """
+    rows = []
+    for step in range(epochs):
+        row = {
+            "_step": step,
+            "_runtime": 61.0 * step,
+            "_timestamp": 1.7e9 + step,
+            "train/loss": 1.0 / (step + 1),
+            "train/lr": 1e-3 * (1 - step / epochs),
+            "val/loss": 1.1 / (step + 1),
+            "recon/hillshade": {"_type": "image-file", "path": f"media/{step}.png"},
+            "val/per_patch_loss": {"_type": "histogram", "bins": [1, 2], "values": [3]},
+        }
+        if step % probe_every == 0:
+            row["probe/set_md5"] = "f" * 32
+            row["probe/stratum_acc"] = 0.5 + step / (4 * epochs)
+        rows.append(row)
+    return rows
 
 
 # --- The tensor that is not in the state dict ---------------------------------
@@ -192,8 +220,18 @@ def exported(tmp_path_factory):
         optimizer=optimizer,
         rng={},
     )
+    # The earlier milestones as name-only stubs. :func:`release.milestone_set` reads the
+    # *directory listing* — `discover` parses epoch and step out of the filename and opens
+    # nothing — so a real 400 MB payload here would test torch.save, not the milestone set.
+    for epoch, step in ((50, 11_550), (100, 23_100), (200, 46_200)):
+        (tmp_path / f"checkpoint_e{epoch:04d}_s{step:09d}_milestone.pt").write_bytes(b"stub")
+    (tmp_path / "checkpoint_e0399_s000092169.pt").write_bytes(b"stub")  # not a milestone
+
+    history = tmp_path / "history.json"
+    history.write_text(json.dumps(a_history()))
+
     out = tmp_path / "release"
-    assert release.main([str(ckpt), str(out)]) == 0
+    assert release.main([str(ckpt), str(out), "--history", str(history)]) == 0
     return out
 
 
@@ -243,3 +281,130 @@ def test_the_manifest_hashes_what_it_shipped(exported):
     m = json.loads((exported / "manifest.json").read_text())
     assert m["encoder_md5"] == checkpoint_md5(exported / "encoder.pt")
     assert m["encoder_tensors"] == 150
+
+
+# --- The curves, and the epoch axis they are indexed by ------------------------
+
+
+def test_the_curve_is_indexed_by_epochs_completed_not_wandb_step():
+    """P88 §1's off-by-one, which is the entire reason this conversion is not a rename.
+
+    ``_step`` 0 is the first epoch *finished*, so it is 1 completed. Getting this backwards
+    shifts every point in every released curve by one epoch, in a way nothing downstream can see.
+    """
+    rows = release.curve_rows(a_history(epochs=3))
+    assert [r[release.EPOCH_AXIS] for r in rows] == [1, 2, 3]
+    assert "_step" not in rows[0]
+
+
+def test_the_curve_drops_media_and_histograms_but_keeps_the_probe_md5():
+    """A CSV cell holds a series, not an image reference — but ``set_md5`` is what makes two
+    runs' probe points comparable, and #132 leaned on it, so it survives."""
+    rows = release.curve_rows(a_history(epochs=1))
+    assert "recon/hillshade" not in rows[0]
+    assert "val/per_patch_loss" not in rows[0]
+    assert rows[0]["probe/set_md5"] == "f" * 32
+    assert rows[0]["train/loss"] == 1.0
+
+
+def test_the_curve_refuses_a_history_that_already_carries_the_axis():
+    with pytest.raises(ValueError, match="two sources for the epoch axis"):
+        release.curve_rows([{"_step": 0, release.EPOCH_AXIS: 7}])
+
+
+def test_a_history_row_with_no_step_has_no_epoch_to_place_it_at():
+    with pytest.raises(ValueError, match="no `_step`"):
+        release.curve_rows([{"train/loss": 0.5}])
+
+
+def test_probe_columns_stay_sparse_rather_than_carried_forward(tmp_path):
+    """The probe fires every 20 epochs. Forward-filling would turn 19 inferences into what looks
+    like 19 measurements — the same confusion #131 is about, one axis over."""
+    rows = release.curve_rows(a_history(epochs=40))
+    assert "probe/stratum_acc" not in rows[1]
+    path = release.write_curves(rows, tmp_path / "curves.csv")
+    body = list(csv.DictReader(path.read_text().splitlines()))
+    assert body[0]["probe/stratum_acc"] != ""
+    assert body[1]["probe/stratum_acc"] == ""  # empty cell, not the previous value
+
+
+def test_the_csv_leads_with_the_epoch_axis(tmp_path):
+    rows = release.curve_rows(a_history(epochs=5))
+    path = release.write_curves(rows, tmp_path / "curves.csv")
+    header = path.read_text().splitlines()[0].split(",")
+    assert header[0] == release.EPOCH_AXIS
+    assert header[1:] == sorted(header[1:])
+
+
+def test_the_probe_epochs_are_the_ones_with_a_committed_set():
+    """§10.3 treats a probe against no committed set as no probe, so presence of the md5 — not
+    of a metric column — is what counts as having run."""
+    rows = release.curve_rows(a_history())
+    assert release.probe_epochs(rows) == list(range(1, 400, 20))
+
+
+# --- The milestone set, and the probe number it must not carry -----------------
+
+
+def test_only_milestones_ride_along(exported):
+    m = json.loads((exported / "manifest.json").read_text())
+    epochs = [x[release.EPOCH_AXIS] for x in m["milestones"]]
+    assert epochs == [50, 100, 200, 400]  # the plain e0399 checkpoint is not in the release
+
+
+def test_no_milestone_carries_a_probe_number(exported):
+    """#131, structurally. The probe never ran at a milestone epoch, so there is no measurement
+    to put here — and the null key exists to stop one being added later."""
+    m = json.loads((exported / "manifest.json").read_text())
+    assert m["milestones"], "nothing to assert against"
+    assert all(x["probe"] is None for x in m["milestones"])
+    assert "has ever been probed" in m["probe_note"]
+
+
+def test_the_milestone_and_probe_epochs_genuinely_do_not_intersect(exported):
+    """The premise under #131's rule. If a future cadence change makes these overlap, this fails
+    and the null probe column becomes the wrong answer rather than a silent one."""
+    m = json.loads((exported / "manifest.json").read_text())
+    milestones = {x[release.EPOCH_AXIS] for x in m["milestones"]}
+    assert milestones.isdisjoint(m["curves"]["probed_epochs"])
+
+
+def test_each_milestone_says_how_far_the_nearest_real_probe_was(exported):
+    """So that carrying a number forward is a stated inference rather than an unlabelled one."""
+    m = json.loads((exported / "manifest.json").read_text())
+    nearest = {x[release.EPOCH_AXIS]: x["nearest_probed_epoch"] for x in m["milestones"]}
+    assert nearest == {50: 41, 100: 101, 200: 201, 400: 381}
+
+
+# --- The curves as a shipped artifact ------------------------------------------
+
+
+def test_the_release_ships_a_curve_file_and_names_its_axis(exported):
+    m = json.loads((exported / "manifest.json").read_text())
+    assert (exported / "curves.csv").is_file()
+    assert m["curves"]["file"] == "curves.csv"
+    assert m["curves"]["epoch_axis"] == "epochs_completed"
+    assert m["curves"]["rows"] == 400
+    assert "_step + 1" in m["curves"]["epoch_axis_note"]
+
+
+def test_the_curve_file_is_hashed_like_every_other_artifact(exported):
+    from pretrain.init import checkpoint_md5
+
+    m = json.loads((exported / "manifest.json").read_text())
+    assert m["curves"]["md5"] == checkpoint_md5(exported / "curves.csv")
+
+
+def test_a_release_with_no_history_says_so_rather_than_shipping_an_unlabelled_curve(tmp_path):
+    """§14 requires curves. An export without them is incomplete, and the manifest is where that
+    has to be visible — a missing key would read as an oversight, ``None`` reads as a fact."""
+    rows = release.curve_rows(a_history(epochs=2))
+    assert rows  # the helper works; the point below is the absence
+    manifest = release.ReleaseManifest(
+        source_checkpoint="c", source_checkpoint_md5="0" * 32, epochs_completed=1, steps=1,
+        config_hash="h", timm_model="vit_base_patch16_224", timm_create_kwargs={},
+        pos_encoding="sincos2d", encoder_tensors=1, encoder_parameters=1, encoder_file="e.pt",
+        encoder_md5="1" * 32, fingerprint={}, init_provenance={}, curves=None, milestones=[],
+        probe_note=release.PROBE_NOTE, config={},
+    )
+    assert json.loads(json.dumps(manifest.to_dict()))["curves"] is None
