@@ -363,13 +363,32 @@ def write_curves(rows: Sequence[Mapping[str, Any]], path: Path | str) -> Path:
     return path
 
 
-def read_history(path: Path | str) -> list[dict[str, Any]]:
-    """One run's exported W&B history from JSON — a list of rows, or ``{"history": [...]}``."""
+def read_history_document(path: Path | str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """One run's exported W&B history, plus whatever it declares about where it came from.
+
+    Two accepted shapes. A bare ``[...]`` is rows and nothing else — usable, and unable to show
+    which run it belongs to. A ``{"config_hash": ..., "run_id": ..., "history": [...]}`` document
+    carries its own provenance, and :func:`export_encoder` will refuse it against a checkpoint
+    whose config hash differs.
+
+    That refusal matters for the same reason the split-blocks one does. A curve from a *different*
+    run of the same project plots perfectly: right length, right columns, a loss that descends.
+    Nothing about the released figure would look wrong, and it would be describing other weights.
+    """
     payload = json.loads(Path(path).read_text())
-    rows = payload["history"] if isinstance(payload, Mapping) else payload
+    if isinstance(payload, Mapping):
+        rows = payload.get("history")
+        meta = {k: v for k, v in payload.items() if k != "history"}
+    else:
+        rows, meta = payload, {}
     if not isinstance(rows, list):
         raise ValueError(f"{path} does not hold a list of history rows")
-    return rows
+    return rows, meta
+
+
+def read_history(path: Path | str) -> list[dict[str, Any]]:
+    """Just the rows of :func:`read_history_document`, for callers with no provenance to check."""
+    return read_history_document(path)[0]
 
 
 def probe_epochs(rows: Sequence[Mapping[str, Any]], key: str = "probe/set_md5") -> list[int]:
@@ -731,7 +750,14 @@ def model_card(manifest: ReleaseManifest) -> str:
         else (
             f"`{curves['file']}` — {curves['rows']} rows, {len(curves['columns'])} columns, "
             f"indexed by `{curves['epoch_axis']}`.\n\n"
-            f"> **Read the epoch axis carefully.** {curves['epoch_axis_note']}. The two "
+            + (
+                ""
+                if curves.get("config_hash")
+                else "> **These curves are not shown to belong to these weights.** The history "
+                     "file declared no config hash, so nothing here rules out its coming from "
+                     "another run of the same project.\n\n"
+            )
+            + f"> **Read the epoch axis carefully.** {curves['epoch_axis_note']}. The two "
             f"conventions are off by one for the run's whole length and neither is wrong, so a "
             f"curve read against the other one puts every point an epoch early."
         )
@@ -888,6 +914,26 @@ def export_encoder(
     state = encoder_state_dict(ckpt.model, arch)
     name = assert_timm_loadable(state, arch) if verify_timm else timm_model_name(arch)
 
+    # Everything that can refuse, refuses *before* anything is written. A half-written release is
+    # worse than no release: the first file out is `encoder.pt`, which loads into timm perfectly
+    # and carries none of the provenance that would say which run it came from — a valid weights
+    # file with nothing beside it is exactly what this module spends its length preventing.
+    rows: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {}
+    if history is not None:
+        raw, meta = read_history_document(history)
+        declared = meta.get("config_hash")
+        if declared and declared != ckpt.config_hash:
+            raise ValueError(
+                f"{history} declares config_hash {declared} but this checkpoint's is "
+                f"{ckpt.config_hash} — refusing to ship one run's curves with another's weights"
+            )
+        rows = curve_rows(raw)
+    regions = (
+        None if split_blocks is None
+        else evaluation_regions(split_blocks, ckpt.fingerprint.to_dict())
+    )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     encoder_path = out_dir / "encoder.pt"
     torch.save(state, encoder_path)
@@ -895,12 +941,19 @@ def export_encoder(
     curves: dict[str, Any] | None = None
     probed: list[int] = []
     if history is not None:
-        rows = curve_rows(read_history(history))
         probed = probe_epochs(rows)
         curves_path = write_curves(rows, out_dir / "curves.csv")
         curves = {
             "file": curves_path.name,
             "md5": checkpoint_md5(curves_path),
+            "run_id": meta.get("run_id"),
+            "config_hash": meta.get("config_hash"),
+            "provenance": (
+                "verified: the history file declares this checkpoint's config hash"
+                if meta.get("config_hash")
+                else "UNVERIFIED: the history file declares no config_hash, so nothing shows "
+                     "these curves belong to these weights rather than to another run"
+            ),
             "epoch_axis": EPOCH_AXIS,
             "epoch_axis_note": (
                 "epochs completed, 1-based. W&B's `_step` is the 0-based index of the epoch that "
@@ -917,9 +970,7 @@ def export_encoder(
         hash_files=hash_milestones,
     )
 
-    regions = None
-    if split_blocks is not None:
-        regions = evaluation_regions(split_blocks, ckpt.fingerprint.to_dict())
+    if regions is not None:
         (out_dir / "evaluation_regions.json").write_text(
             json.dumps(regions, indent=2, sort_keys=True) + "\n"
         )
@@ -1016,6 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
         c = manifest.curves
         print(f"  curves    {c['file']}  {c['rows']} rows on {c['epoch_axis']}, "
               f"{len(c['columns'])} columns, probe at {len(c['probed_epochs'])} epochs")
+        print(f"            {c['provenance']}")
     if manifest.milestones:
         at = ", ".join(str(m[EPOCH_AXIS]) for m in manifest.milestones)
         print(f"  milestone {len(manifest.milestones)} riding along (completed {at}); "

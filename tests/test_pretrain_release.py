@@ -605,3 +605,97 @@ def test_a_release_with_no_blocks_tells_a_task_builder_what_to_do_instead():
     card = release.model_card(a_manifest(evaluation_regions=None))
     assert "does not name" in card
     assert "check it against that hash" in card
+
+
+# --- Whose curves are these? ---------------------------------------------------
+
+
+def test_a_history_document_carries_its_own_provenance(tmp_path):
+    """Both accepted shapes: a bare list, and a document that says which run it came from."""
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps(a_history(epochs=2)))
+    rows, meta = release.read_history_document(bare)
+    assert len(rows) == 2 and meta == {}
+
+    doc = tmp_path / "doc.json"
+    doc.write_text(json.dumps({"config_hash": "abc", "run_id": "1o7fon6u",
+                               "history": a_history(epochs=2)}))
+    rows, meta = release.read_history_document(doc)
+    assert len(rows) == 2
+    assert meta["config_hash"] == "abc" and meta["run_id"] == "1o7fon6u"
+
+
+def test_another_runs_curves_are_refused(tmp_path, exported):
+    """A curve from a different run of the same project plots perfectly — right length, right
+    columns, a loss that descends. Nothing about the figure would look wrong and it would be
+    describing other weights."""
+    from pretrain.checkpoint import RunState, save_checkpoint
+    from pretrain.fingerprint import DataFingerprint
+
+    cfg = RunConfig()  # ViT-S, so this stays cheap
+    model = MaskedAutoencoder(cfg.architecture, mask_ratio=cfg.masking.ratio)
+    ckpt = tmp_path / "checkpoint_e0001_s000000001.pt"
+    save_checkpoint(
+        ckpt, config=cfg,
+        fingerprint=DataFingerprint(
+            corpus_dir="c", dataset_version="v", n_tiles=1, selection_list_md5="0" * 32,
+            split_md5="1" * 32, split_blocks_md5="2" * 32, split_state="committed",
+            split_note=None, git_sha="g"),
+        state=RunState(epoch=1, step=1), model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3), rng={})
+
+    history = tmp_path / "other_run.json"
+    history.write_text(json.dumps({"config_hash": "not-this-run", "history": a_history(epochs=2)}))
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="refusing to ship one run's curves"):
+        release.export_encoder(ckpt, out, history=history, verify_timm=False)
+
+    # And it must leave nothing behind. `encoder.pt` is the first file written, it loads into
+    # timm perfectly, and alone in a directory it carries no provenance at all — a refused
+    # export that leaves one has produced the exact artifact this module exists to prevent.
+    assert not out.exists() or list(out.iterdir()) == []
+
+
+def test_a_refused_region_check_also_writes_nothing(tmp_path):
+    """Same rule for the other refusal, so ordering cannot regress for one and not the other."""
+    from pretrain.checkpoint import RunState, save_checkpoint
+    from pretrain.fingerprint import DataFingerprint
+
+    cfg = RunConfig()
+    model = MaskedAutoencoder(cfg.architecture, mask_ratio=cfg.masking.ratio)
+    ckpt = tmp_path / "checkpoint_e0001_s000000001.pt"
+    save_checkpoint(
+        ckpt, config=cfg,
+        fingerprint=DataFingerprint(
+            corpus_dir="c", dataset_version="v", n_tiles=1, selection_list_md5="0" * 32,
+            split_md5="1" * 32, split_blocks_md5="2" * 32, split_state="committed",
+            split_note=None, git_sha="g"),
+        state=RunState(epoch=1, step=1), model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3), rng={})
+
+    out = tmp_path / "out2"
+    with pytest.raises(ValueError, match="refusing to ship one split's"):
+        release.export_encoder(
+            ckpt, out, split_blocks=a_blocks_file(tmp_path / "b.json"), verify_timm=False)
+    assert not out.exists() or list(out.iterdir()) == []
+
+
+def test_curves_with_no_declared_run_are_shipped_but_marked_unverified(exported):
+    """The fixture writes a bare list, which is the shape a plain W&B dump has. It is usable and
+    it cannot show which run it came from, so the release says exactly that rather than implying
+    a link it has not checked."""
+    m = json.loads((exported / "manifest.json").read_text())
+    assert m["curves"]["config_hash"] is None
+    assert m["curves"]["provenance"].startswith("UNVERIFIED")
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert "not shown to belong to these weights" in card
+
+
+def test_a_declared_matching_run_is_recorded_as_verified(tmp_path):
+    card = release.model_card(a_manifest(curves={
+        "file": "curves.csv", "md5": "a" * 32, "epoch_axis": "epochs_completed",
+        "epoch_axis_note": "n", "rows": 400, "columns": ["a"], "probed_epochs": [1],
+        "run_id": "1o7fon6u", "config_hash": "c993d65cdbbde5ea",
+        "provenance": "verified: the history file declares this checkpoint's config hash",
+    }))
+    assert "not shown to belong to these weights" not in card
