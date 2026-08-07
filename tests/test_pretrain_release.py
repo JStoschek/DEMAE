@@ -408,3 +408,122 @@ def test_a_release_with_no_history_says_so_rather_than_shipping_an_unlabelled_cu
         probe_note=release.PROBE_NOTE, config={},
     )
     assert json.loads(json.dumps(manifest.to_dict()))["curves"] is None
+
+
+# --- The write-up, and the sentence that must not come back --------------------
+
+
+def a_manifest(**overrides):
+    """A manifest with every field filled, for card tests that need no 400 MB checkpoint."""
+    fields = dict(
+        source_checkpoint="ckpt.pt", source_checkpoint_md5="0" * 32, epochs_completed=400,
+        steps=92_400, config_hash="h", timm_model="vit_base_patch16_224",
+        timm_create_kwargs={"in_chans": 1, "num_classes": 0, "global_pool": ""},
+        pos_encoding="sincos2d", encoder_tensors=150, encoder_parameters=85_254_144,
+        encoder_file="encoder.pt", encoder_md5="1" * 32,
+        fingerprint={"dataset_version": "bcbd6484", "n_tiles": 500_000, "git_sha": "deadbee"},
+        init_provenance={"mode": "scratch", "verified": True, "spec": None, "note": "n"},
+        curves=None, milestones=[], probe_note=release.PROBE_NOTE, config={},
+    )
+    fields.update(overrides)
+    return release.ReleaseManifest(**fields)
+
+
+@pytest.mark.parametrize("claim", release.RETIRED_CLAIMS)
+def test_the_card_never_makes_a_claim_p100_retired(claim, exported):
+    """P100 §6.3(1), enforced rather than reviewed.
+
+    "First open-weights encoder pretrained on elevation alone" is **false** — an Apache-2.0
+    ViT-B/16 on ~9 M single-channel Copernicus DEM patches has been downloadable since
+    2025-02-20. The sentence is the kind that gets re-typed from memory by someone who last read
+    the plan before the re-check, so the test asserts on the strings rather than trusting review.
+    """
+    card = (exported / "MODEL_CARD.md").read_text()
+    body = card.split("## Related work")[0]
+    # Present only inside the struck-through "these are false" list, never as an assertion.
+    assert f'~~"{claim}"~~' in body
+    assert body.count(claim) == 1
+
+
+def test_the_card_makes_the_narrowed_claim_with_its_qualifiers(exported):
+    """Each qualifier does real work: MIM is not FSQ-VAE tokenization, IBM publishes no transfer
+    number for its tokenizer, and TerraMesh samples the Sentinel grid rather than terrain."""
+    card = (exported / "MODEL_CARD.md").read_text()
+    for qualifier in ("masked-reconstruction", "raw single-channel", "transferable backbone",
+                      "terrain-stratified"):
+        assert qualifier in card
+
+
+def test_the_strongest_competitor_is_named_first(exported):
+    """P100 §6.3(2): a reviewer will find TerraMind whether or not the card does, so the only
+    ordering that survives is the one that leads with it."""
+    card = (exported / "MODEL_CARD.md").read_text()
+    related = card.split("## Related work")[1].split("## The comparison")[0]
+    assert related.index("TerraMind") < related.index("DINO-CV")
+    assert related.index("TerraMind") < related.index("terrain-diffusion-30m")
+
+
+def test_related_work_carries_at_least_four_entries_each_with_a_link_and_a_licence():
+    """The minimum P100 §6.3(2) sets, and the three things each entry owes a reader."""
+    assert len(release.RELATED_WORK) >= 4
+    for work in release.RELATED_WORK:
+        assert work.url.startswith("https://")
+        assert work.licence and work.what_it_is and work.differs
+
+
+def test_the_card_states_the_comparison_it_is_not_making(exported):
+    """P100 §6.3(3): left silent the gap reads as an oversight; stated, it is a scope boundary."""
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert "does not make" in card
+    assert "No head-to-head has been run" in card
+    assert "Phase-2 benchmark" in card
+
+
+def test_the_card_reads_its_numbers_off_the_manifest_rather_than_repeating_them(exported):
+    """A hand-maintained card beside a generated manifest eventually describes a different
+    artifact than the one in the directory."""
+    m = json.loads((exported / "manifest.json").read_text())
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert f"{m['encoder_parameters']:,}" in card
+    assert f"{m['epochs_completed']} epochs completed" in card
+    assert m["config_hash"] in card
+    assert m["pos_encoding"] in card
+
+
+def test_the_card_tells_a_consumer_to_load_strictly(exported):
+    """The strict load is the artifact's whole guarantee, so the card must not hand a reader the
+    ``strict=False`` line that silently accepts a broken export."""
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert "strict=True" in card
+    assert "randomly initialized" in card
+
+
+def test_a_warm_started_card_names_the_licence_and_the_over_reading_caveat():
+    """#86's line: R4's init is an independent reproduction trailing the official weights by
+    0.9 pt, so a narrow gap must not be over-read in either direction."""
+    card = release.model_card(a_manifest(init_provenance={
+        "mode": "imagenet_mae", "verified": True, "checkpoint": "/x/mae.pth",
+        "spec": {"name": "OpenMMLab MAE ViT-B/16", "licence": "Apache-2.0"}, "note": "n",
+    }))
+    assert "Apache-2.0" in card
+    assert "0.9 pt" in card and "over-read" in card
+
+
+def test_an_unverified_warm_start_card_claims_no_licence():
+    """P101 at the write-up boundary, not just in the manifest."""
+    card = release.model_card(a_manifest(init_provenance={
+        "mode": "imagenet_mae", "verified": False, "checkpoint": "/x/mae.pth",
+        "spec": None, "note": "n",
+    }))
+    assert "not presented to the export" in card
+    assert "No URL, md5 or licence is claimed" in card
+
+
+def test_a_card_with_no_curves_says_the_release_is_incomplete():
+    assert "§14-incomplete" in release.model_card(a_manifest(curves=None))
+
+
+def test_the_card_ships_beside_the_weights(exported):
+    """It is a model card: it has to travel with the artifact, not live in the repo."""
+    assert (exported / "MODEL_CARD.md").is_file()
+    assert (exported / "MODEL_CARD.md").read_text().startswith("# DEMAE")

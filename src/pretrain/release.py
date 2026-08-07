@@ -19,6 +19,14 @@ Two of those carry a caveat that is part of the artifact rather than commentary 
   next to the files, and :func:`milestone_set` records how far the nearest real probe was so a
   reader who carries one forward knows they are inferring.
 
+And one that is a claim rather than a caveat: :func:`model_card` writes the release's own
+write-up, because P100's pre-release scoop re-check found §13's headline sentence was **already
+false** — an Apache-2.0 ViT-B/16 on ~9 M single-channel Copernicus DEM patches has been
+downloadable since 2025-02-20. :data:`NOVELTY_CLAIM` is the narrower sentence that survives,
+:data:`RETIRED_CLAIMS` holds the ones that do not so a test can assert they never come back, and
+:data:`RELATED_WORK` names the neighbours strongest-first — which is the only ordering that
+survives review, since a reviewer will find TerraMind whether or not the card does.
+
 ## Why this is not ``{k: v for k, v in state.items() if not is_decoder_parameter(k)}``
 
 Because that file loads into timm cleanly and is wrong.
@@ -478,6 +486,297 @@ class ReleaseManifest:
         return path
 
 
+# --- The write-up -------------------------------------------------------------
+#
+# P100 re-checked §13's scoop assumption before release and found it already broken: an
+# Apache-2.0 ViT-B/16 pretrained on ~9 M single-channel Copernicus DEM patches has been on the
+# hub since 2025-02-20. §13's sentence is retired, and what replaces it is narrower and
+# checkable. The constants below are the release's *claims*, kept next to the code that ships
+# them so that the card cannot be written from memory — and so that
+# :func:`model_card` can be tested for the sentences that must never reappear.
+
+
+#: What this release is first at. Every qualifier is load-bearing (P100 §2): MIM is not FSQ-VAE
+#: tokenization; IBM publishes no probe or transfer number for its DEM tokenizer as a feature
+#: extractor; TerraMesh samples the 10 m Sentinel grid rather than stratifying on terrain.
+NOVELTY_CLAIM: Final = (
+    "the first **masked-reconstruction** encoder on **raw single-channel** elevation, released "
+    "and **evaluated as a transferable backbone**, pretrained on a **terrain-stratified** corpus"
+)
+
+#: Sentences that are false and must not reappear in any release text (P100 §2, §4.3). Held as
+#: data rather than as prose in a doc, because :func:`model_card`'s test asserts against them —
+#: a claim this specific coming back is exactly the kind of regression review does not catch.
+RETIRED_CLAIMS: Final = (
+    "first open-weights encoder pretrained on elevation alone",
+    "first open encoder on elevation",
+    "first open model on Copernicus GLO-30 elevation",
+    "first open-weights model trained on Copernicus GLO-30",
+)
+
+
+@dataclass(frozen=True)
+class RelatedWork:
+    """One neighbouring open artifact, and the one thing that differs. P100 §4."""
+
+    name: str
+    url: str
+    licence: str
+    what_it_is: str
+    differs: str
+
+
+#: The nearest open elevation-pretrained artifacts, **strongest competitor first** — the only
+#: ordering that survives review (P100 §6.3). A release that says "first" beside a
+#: better-resourced IBM/ESA artifact doing the same thing is a credibility problem; naming it
+#: first and stating the difference is a stronger claim because it is checkable.
+RELATED_WORK: Final[tuple[RelatedWork, ...]] = (
+    RelatedWork(
+        name="TerraMind 1.0 DEM Tokenizer (IBM + ESA + FZ Jülich)",
+        url="https://huggingface.co/ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM",
+        licence="Apache-2.0",
+        what_it_is=(
+            "a ViT-B/16 encoder on single-channel DEM, 20 epochs on ~9 M Copernicus DEM patches "
+            "from TerraMesh — the same architecture and modality as this release, at ~18x the "
+            "corpus, on the hub since 2025-02-20"
+        ),
+        differs=(
+            "its objective is FSQ-VAE tokenization, not masked reconstruction, and its "
+            "documented job is to encode DEM into codes for TerraMind's multimodal backbone and "
+            "decode them back. No probe, kNN, linear-eval or transfer number is published for it "
+            "as a feature extractor. Its corpus is co-registered to the 10 m Sentinel grid rather "
+            "than stratified on terrain"
+        ),
+    ),
+    RelatedWork(
+        name="DINO-CV (Budj Bim stone-wall detection)",
+        url="https://github.com/MLinArcheaomatics/BudjBimStoneWall-DINO-CV",
+        licence="CC BY-NC 4.0 (non-commercial)",
+        what_it_is=(
+            "DINO cross-view self-distillation on 188,006 unlabelled DEM-derivative tiles; "
+            "ResNet-50, WideResNet-50-2 and ViT-S/16 backbones, weights downloadable"
+        ),
+        differs=(
+            "it pretrains on DEM *derivatives* — multi-directional hillshade and VAT, both "
+            "3-channel visualizations — where the point of this release is that the derivative "
+            "step can be skipped. One 301 km² site at 10 cm, so regional and three orders of "
+            "magnitude off this corpus's resolution; DINO rather than MAE; ViT-S is its only ViT"
+        ),
+    ),
+    RelatedWork(
+        name="terrain-diffusion-30m",
+        url="https://huggingface.co/xandergos/terrain-diffusion-30m",
+        licence="MIT",
+        what_it_is=(
+            "a hierarchical generative diffusion stack trained on the Copernicus GLO-30 "
+            "dataset — this release's own corpus — on the hub since 2025-12-17"
+        ),
+        differs=(
+            "it is a terrain *synthesis* model and the released artifacts are diffusion UNets; "
+            "nothing in it is offered as a transferable backbone. It is named here because it "
+            "retires any 'first open model on Copernicus GLO-30 elevation' framing outright"
+        ),
+    ),
+    RelatedWork(
+        name="COP-GEN-Beta VAEs",
+        url="https://huggingface.co/mespinosami/copgen-vaes",
+        licence="CC-BY-4.0",
+        what_it_is=(
+            "a DEM-only KL-regularised VAE at 64x64 with 8 latent channels, released as one "
+            "per-modality component of a multimodal generative system"
+        ),
+        differs=(
+            "a convolutional VAE at low resolution rather than a ViT, and not offered as a "
+            "representation encoder. The card does not state the DEM source, scale or resolution"
+        ),
+    ),
+    RelatedWork(
+        name="divae-tokenizer-ahn-448",
+        url="https://huggingface.co/hwh-datascience/divae-tokenizer-ahn-448",
+        licence="Apache-2.0",
+        what_it_is=(
+            "a third-party DiVAE tokenizer following TerraMind's methodology, ViT-B/16 on "
+            "2-channel fused AHN6 elevation over the Netherlands"
+        ),
+        differs=(
+            "a single-checkpoint project release at epoch 2 with no paper and no evaluation, "
+            "and 2-channel rather than raw single-channel. Recorded for completeness rather than "
+            "because it is competitive"
+        ),
+    ),
+)
+
+#: The obvious reviewer question, answered by saying which phase owns it (P100 §6.3(3)). Left
+#: silent it reads as an oversight; stated, it is a scope boundary.
+PHASE2_COMPARISON: Final = (
+    "**How does this encoder compare to TerraMind's DEM tokenizer encoder on the same "
+    "modality?** No head-to-head has been run, and this release does not claim one. It is a "
+    "Phase-2 benchmark rather than a Phase-1 deliverable: it needs a downstream task suite that "
+    "does not exist yet, and running it against an encoder its publisher has never evaluated as "
+    "a feature extractor is a piece of work in its own right. The gap is named here rather than "
+    "left for a reader to notice."
+)
+
+#: Why a *narrow* R4-vs-R5 gap must not be over-read in either direction (#86). Shown only on a
+#: warm-started release, where it is the relevant caveat.
+CONTINUAL_CAVEAT: Final = (
+    "This arm was warm-started from an independent Apache-2.0 reproduction of the ImageNet MAE "
+    "checkpoint, which trails the official weights by 0.9 pt ImageNet linear probe at the "
+    "checkpoint used (#86). A narrow gap between this run and the scratch run should not be "
+    "over-read in either direction."
+)
+
+
+def _related_work_markdown() -> str:
+    lines = []
+    for i, work in enumerate(RELATED_WORK, start=1):
+        lines.append(f"{i}. **[{work.name}]({work.url})** — {work.licence}")
+        lines.append(f"   - What it is: {work.what_it_is}.")
+        lines.append(f"   - What differs: {work.differs}.")
+    return "\n".join(lines)
+
+
+def model_card(manifest: ReleaseManifest) -> str:
+    """The release's write-up, rendered from ``manifest`` so its numbers cannot drift.
+
+    Everything quantitative here is read off the manifest rather than typed, which is the point:
+    a card maintained by hand beside a generated manifest is a card that will eventually
+    describe a different artifact than the one in the directory.
+    """
+    prov = manifest.init_provenance
+    licence = (prov.get("spec") or {}).get("licence")
+    if prov.get("mode") == "scratch":
+        init_line = (
+            "Trained from random initialization. No external weights entered this model, which "
+            "is a property of the configured code path rather than a claim about a file."
+        )
+    elif prov.get("verified"):
+        init_line = (
+            f"Warm-started from {(prov.get('spec') or {}).get('name')}, verified against the "
+            f"file on tensor counts, parameter total, recorded epoch, size and md5. "
+            f"Init licence: **{licence}**.\n\n{CONTINUAL_CAVEAT}"
+        )
+    else:
+        init_line = (
+            f"Warm-started from `{prov.get('checkpoint')}`, which was **not presented to the "
+            f"export**. No URL, md5 or licence is claimed for the initialization — see the "
+            f"manifest's `init_provenance.note`. Provenance is recognized, never assumed."
+        )
+
+    curves = manifest.curves
+    curves_line = (
+        "No training curves were shipped with this export, which makes it **§14-incomplete**."
+        if curves is None
+        else (
+            f"`{curves['file']}` — {curves['rows']} rows, {len(curves['columns'])} columns, "
+            f"indexed by `{curves['epoch_axis']}`.\n\n"
+            f"> **Read the epoch axis carefully.** {curves['epoch_axis_note']}. The two "
+            f"conventions are off by one for the run's whole length and neither is wrong, so a "
+            f"curve read against the other one puts every point an epoch early."
+        )
+    )
+
+    milestones = (
+        "None shipped."
+        if not manifest.milestones
+        else "\n".join(
+            f"- `{m['file']}` — {m[EPOCH_AXIS]} epochs completed, step {m['step']:,}, "
+            f"probe: none (nearest measured probe: {m['nearest_probed_epoch']} epochs completed)"
+            for m in manifest.milestones
+        )
+    )
+
+    kwargs = ", ".join(f"{k}={v!r}" for k, v in manifest.timm_create_kwargs.items())
+    fp = manifest.fingerprint
+    return f"""# DEMAE — {manifest.timm_model} pretrained on single-channel elevation
+
+A masked-autoencoder encoder pretrained on raw single-channel Copernicus GLO-30 elevation
+tiles, released as a transferable backbone for downstream terrain tasks.
+
+- **Architecture:** {manifest.timm_model}, {manifest.encoder_parameters:,} parameters across \
+{manifest.encoder_tensors} tensors
+- **Trained for:** {manifest.epochs_completed} epochs completed, {manifest.steps:,} optimizer steps
+- **Positional embedding:** `{manifest.pos_encoding}`
+- **Config hash:** `{manifest.config_hash}`
+
+## Loading it
+
+```python
+import timm, torch
+
+model = timm.create_model("{manifest.timm_model}", {kwargs})
+state = torch.load("{manifest.encoder_file}", map_location="cpu", weights_only=True)
+model.load_state_dict(state, strict=True)  # strict on purpose — see below
+```
+
+Load it **strictly**. `pos_embed` is a non-persistent buffer in the training model and is
+therefore absent from its `state_dict()`, while timm holds the same tensor as a required learned
+parameter. This export materializes `pos_embed` from the run's own architecture so that the
+strict load succeeds. A `strict=False` load of an export that had *not* done that reports one
+missing key and silently keeps timm's **randomly initialized** positional embedding — no loss,
+shape or key report would differ. The axis ordering shipped here is `{manifest.pos_encoding}`,
+recorded because two orderings are in use across this project's runs and they are each other's
+transpose.
+
+## What this is first at — and what it is not
+
+This release is {NOVELTY_CLAIM}.
+
+Each qualifier does real work, and the broader sentence does not hold. The following claims are
+**false** and are not made here:
+
+{chr(10).join(f'- ~~"{c}"~~' for c in RETIRED_CLAIMS)}
+
+An Apache-2.0 ViT-B/16 pretrained on ~9 M single-channel Copernicus DEM patches has been
+publicly downloadable since 2025-02-20, and an MIT-licensed generative model trained on
+Copernicus GLO-30 since 2025-12-17. Both are named below.
+
+## Related work
+
+Nearest open elevation-pretrained artifacts, strongest first.
+
+{_related_work_markdown()}
+
+## The comparison this release does not make
+
+{PHASE2_COMPARISON}
+
+## Initialization provenance
+
+{init_line}
+
+## Training curves
+
+{curves_line}
+
+## Milestone checkpoints
+
+Kept so that downstream performance can be plotted against pretraining compute.
+
+{milestones}
+
+> {manifest.probe_note}
+
+## Data
+
+- **Dataset version:** `{fp.get('dataset_version')}`
+- **Tiles:** {fp.get('n_tiles') if fp.get('n_tiles') is None else format(fp['n_tiles'], ',')}
+- **Selection list md5:** `{fp.get('selection_list_md5')}`
+- **Split md5:** `{fp.get('split_md5')}` (blocks `{fp.get('split_blocks_md5')}`, \
+state `{fp.get('split_state')}`)
+- **Git SHA:** `{fp.get('git_sha')}`
+
+The `test` geocells are reserved as the downstream evaluation regions; downstream task datasets
+are built there and never from `train` geocells.
+
+## Source
+
+Exported from `{manifest.source_checkpoint}` (md5 `{manifest.source_checkpoint_md5}`).
+`manifest.json` in this directory carries the full config and every field above in machine-
+readable form.
+"""
+
+
 def export_encoder(
     checkpoint: Path | str,
     out_dir: Path | str,
@@ -554,6 +853,7 @@ def export_encoder(
         config=ckpt.config.to_dict(),
     )
     manifest.write(out_dir / "manifest.json")
+    (out_dir / "MODEL_CARD.md").write_text(model_card(manifest))
     return manifest
 
 
@@ -618,6 +918,8 @@ def main(argv: list[str] | None = None) -> int:
         at = ", ".join(str(m[EPOCH_AXIS]) for m in manifest.milestones)
         print(f"  milestone {len(manifest.milestones)} riding along (completed {at}); "
               f"none carries a probe number (#131)")
+    print(f"  card      MODEL_CARD.md  ({len(RELATED_WORK)} related-work entries, "
+          f"{len(RETIRED_CLAIMS)} retired claims named as false)")
     return 0
 
 
