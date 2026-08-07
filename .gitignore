@@ -68,3 +68,10 @@ teardown-*/
 # Neither is ever committed — the checkpoints ship to the bucket and the log to the run record.
 runs/
 *_train.log
+
+# Where `pretrain.release` is driven from: milestone checkpoints pulled back out of the bucket
+# to be hashed, the init checkpoint pulled down to verify R4's provenance, and the built release
+# directories. All of it is large and all of it is re-derivable — the checkpoints from the
+# bucket, the releases from the checkpoints. Ignored rather than merely untracked because a
+# `git add -A` in a shared working tree would otherwise stage ~700 MB of encoder weights.
+.release-work/
