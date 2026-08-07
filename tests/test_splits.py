@@ -512,11 +512,14 @@ def test_the_committed_split_leaks_no_block_across_the_line():
     blocks = json.loads(Path(config.SPLIT_BLOCKS_PATH).read_text())
     test_cells = set(blocks["test"]["cells"])
 
-    # no source COG is split — the finest blocking unit the corpus card allows
+    # no source COG is split — the finest blocking unit the corpus card allows.
+    # Both permutations are taken once, outside the loop: re-indexing the 500k-row arrays
+    # per COG made this one assertion 74s of the suite's runtime, over 22906 iterations.
     order = np.argsort(cogs, kind="stable")
-    boundaries = np.flatnonzero(cogs[order][1:] != cogs[order][:-1])
+    sorted_cogs, sorted_label = cogs[order], label[order]
+    boundaries = np.flatnonzero(sorted_cogs[1:] != sorted_cogs[:-1])
     for start, stop in zip(np.r_[0, boundaries + 1], np.r_[boundaries + 1, len(order)]):
-        assert len(set(label[order][start:stop])) == 1, f"COG {cogs[order][start]} straddles"
+        assert len(set(sorted_label[start:stop])) == 1, f"COG {sorted_cogs[start]} straddles"
 
     # every test geocell is wholly test, and no test tile lives outside one
     assert set(label[np.isin(cells, list(test_cells))]) == {"test"}

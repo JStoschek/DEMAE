@@ -54,6 +54,10 @@ dev = [
     "pillow>=10.0",
     "ipykernel>=6.29",
     "pytest>=8.2",
+    # The suite is ~1600 tests and the gate before every push, so it runs sharded by
+    # default (see `addopts`). Nothing in it shares mutable state across tests — every
+    # write goes to a `tmp_path` — so the only cost of sharding is the process spawn.
+    "pytest-xdist>=3.8",
     # Same story as pillow: arrives transitively under scikit-learn, but the P77 split
     # driver imports `scipy.spatial.cKDTree` directly to measure train-to-hold-out
     # distances, so it is declared directly too.
@@ -67,7 +71,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# `-n auto` takes the suite from 4:45 to under 2:00 on an 8-core box. The floor is the longest
+# single test chain (§15.4's kill-and-resume gate, ~40s), not the worker count, so `auto`
+# is as good as any hand-picked number here. Override with `-n0` when a failure needs a
+# readable traceback or `--pdb` — xdist disables the debugger.
+addopts = "-q -n auto"
 
 [build-system]
 requires = ["hatchling"]
