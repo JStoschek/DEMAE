@@ -281,11 +281,17 @@ One head spec, frozen across arms; only the input channel width differs
   every arm; tuning on the arm you hope wins is the classic thumb on the scale.
 - **Seeds:** 3 seeds per cell for A4/A5/A6/A7 at 20k; 2 seeds for the
   label-efficiency subsets. Report mean ± std.
-- **Features precomputed:** frozen patch tokens for all tiles are extracted once
-  per encoder to fp16 memmaps (~0.3 MB/tile, ~6 GB per encoder per 20k set),
-  so head training is loader-bound-cheap and reruns cost nothing on the GPU.
-  Note: precomputation fixes the A1-filled input per (tile, mask), which is
-  exactly the eval-time contract.
+- **Features are *not* precomputed** *(amended 2026-08-10, §7 —
+  [#120](https://github.com/JStoschek/DEMAE/issues/120))*. The frozen encoder runs inline
+  in the head step, and the void mask is redrawn every epoch per §3.2. The cache this
+  bullet used to specify — fp16 memmaps, 301 KB/tile, 5.6 GiB per encoder per 20k set —
+  was measured to save **$0.50** across the whole benchmark, because a frozen ViT-B
+  forward pass costs 0.179 ms. Against that it fixed the A1-filled input, and therefore
+  the mask, for all 50 epochs: the sentence this bullet used to end with ("precomputation
+  fixes the A1-filled input per (tile, mask), which is exactly the eval-time contract")
+  is true at eval time and is a **frozen training mask** at training time, which §3.2 does
+  not intend. The *eval* side is unchanged — the committed mask list fixes each test
+  instance's input exactly as before.
 
 ### 4.2 DEMAE native fine-tune (A3)
 
@@ -393,16 +399,49 @@ size histogram so the reader can see what distribution the number is over.
 
 ## 7. Compute budget
 
-| Item | 4090-hours | Notes |
-|---|---|---|
-| Feature precompute (3 to 4 encoders x 27k tiles) | 2-3 | fp16 memmaps |
-| Head tuning on A6 + frozen-arm training (A4/A5/A6, 3 seeds, 20k) | 6-9 | heads are ~3M params over cached features |
-| A7 UNet, 3 seeds + label sweep | 4-6 | the priciest baseline |
-| Label-efficiency sweep for A4/A5/A6 (1k, 5k; 2 seeds) | 2-3 | cached features again |
-| A3 fine-tune (R1; +R4 if it fits) | 4-8 | 20 epochs x 20k tiles |
-| A2, A9, A8 inference + secondary 10 m regime | 2-4 | A8 diffusion sampling is the slow one |
-| Eval passes, hydrology metrics | CPU | pysheds/Whitebox, local |
-| **Total** | **20-33** | **~$7-12 at $0.34/hr**, inside budget with slack |
+**Measured, 2026-08-10 — [`p120-primitive-costs.md`](p120-primitive-costs.md)
+([#120](https://github.com/JStoschek/DEMAE/issues/120)).** The table below replaces an
+estimate that was high by 8 to 13x and was denominated in the wrong card at the wrong
+price: this project rents an **RTX 5090** at a real **$0.4016/hr**, not a 4090 at $0.34
+(see [`phase1-pretraining-plan.md`](../phase1-pretraining-plan.md)'s hardware line and
+§12). Every line is a measured primitive times a count, and the primitives are published so
+any new arm can be costed without a fresh run.
+
+Costed for the design §4.1 now specifies — **frozen encoder inline, no feature cache**:
+
+| Item | Count | 5090-min | Notes |
+|---|---|---|---|
+| **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **46.1** | priciest single arm; UNet epoch is 15.4 s against the head's 1.0 |
+| Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
+| Head training A4/A5/A6 | 5 cells x 3 seeds x 50 ep x 20k | 45.1 | |
+| Label-efficiency sweep (1k, 5k; 2 seeds) | 5 cells x 2 seeds x 50 ep x 6k | 9.0 | |
+| Inference over the eval instances | 47 passes x 32k | 4.5 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
+| A3 fine-tune (ViT-B + ViT-S) | 20 ep x 20k | 3.1 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch |
+| **GPU total** | | **153.6 min = 2.56 h** | **$1.03** at $0.4016/hr |
+| **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
+| Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **1.99 h** | 4.6 ms/instance; **the largest single line in the benchmark** (118 min of it is scoring) |
+
+The 48 scored passes are 24 at 20k — A1, A2 and A3 at both capacities, A9, the five frozen
+cells at 3 seeds, A7 at 3 seeds — plus 24 for the label-efficiency sweep, which §6 item 7
+makes a headline claim and therefore scores rather than merely trains.
+
+**The budget is not a constraint and should stop being treated as one.** At $1.03 of GPU
+against a $25 target, no line here justifies a spot-instance strategy or a resume design;
+#117's standing note that *attention and wall-clock are the real budget* is now measured
+rather than asserted. The one number that could still move the total is A9's.
+
+**Why no feature cache** (the §4.1 amendment, priced): precomputing frozen features is
+*cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
+and against that it costs 30.3 GiB, 7.9 TB of re-reads, and a design constraint §4.1 did
+not name: a cached feature fixes the A1-filled input, hence the mask, so head training
+would see **one void per tile for all 50 epochs**, contradicting §3.2's on-the-fly
+`(tile_id, epoch)` masks. Run the encoder inline and redraw the mask each epoch. §9.4's
+Task-2 reuse constraint is unaffected: it binds the frozen-feature *contract*, not whether
+features were written to disk.
+
+**§4.1's "~3M params" is wrong** — the head as specified there measures **1.08M** (384-d)
+and **1.18M** (768-d). Cost is barely affected, but §6 item 4 puts parameter counts in
+every table, so the corrected figures are the ones to print.
 
 ## 8. Risks
 
