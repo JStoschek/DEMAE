@@ -17,14 +17,20 @@ defined before any number is seen:
   identical trained head*, on the same tiles, same masks, same seeds. This is
   the representation claim, and the fairest instrument for it.
 - **C2 (the model is useful):** fine-tuned DEMAE beats classical interpolation
-  (the operational status quo) in metres, slope, and drainage metrics on rugged
-  terrain at every void size, and stays at least even on **flat terrain**, where
-  classical fill is already at the corpus's resolution floor. The parity
+  (the operational status quo) in metres, slope, and **seam continuity** on
+  rugged terrain at every void size, and stays at least even on **flat terrain**,
+  where classical fill is already at the corpus's resolution floor. The parity
   carve-out is by ruggedness, not by void size: p119 measured classical fill at
   0.87 m MAE on small voids and 1.83 m on large ones in the flattest quartile —
   against 12.7 m and 38.6 m in the roughest — so "small voids where splines are
   strong" was the wrong exemption to grant
-  ([`p119-fill-headroom.md`](p119-fill-headroom.md)).
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)). **"Seam continuity"
+  replaces the original "drainage metrics" clause**, which fell with the
+  hydrological metrics: a 224 px window has no upstream context, so D8
+  accumulation near a tile edge is an artifact of the crop. The operational
+  argument is not dropped, only re-sited — an operator's complaint about a bad
+  fill is that it does not join up with the terrain around it, and §5's seam gap
+  measures exactly that ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
 - **C3 (label efficiency):** DEMAE-frozen reaches a given RMSE with far fewer
   head-training tiles than the UNet-from-scratch baseline (the 1k / 5k / 20k
   sweep). This is the foundation-model value proposition.
@@ -417,22 +423,74 @@ synthetic **small** bucket within the same ruggedness band, never against a
 synthetic pooled number, and carry C4's ordering claim rather than a metric
 delta.
 
-- **Elevation error:** MAE, RMSE, NMAD (robust spread, standard in DEM QA), and
-  the 95th percentile absolute error (tail behavior matters for hazards).
-- **Terrain derivatives:** slope RMSE (degrees), aspect error (circular
-  distance, slope-weighted so flat pixels do not dominate), profile-curvature
-  RMSE. Derivative fidelity is more meaningful than pixel RMSE for terrain,
-  and it is where blurry fills get caught.
-- **Hydrological plausibility:** fill each test DEM's void, compute D8 flow
-  accumulation (pysheds or WhiteboxTools) on truth vs filled, report log-flow
-  correlation inside and 2 px around the void, plus extracted stream-network
-  IoU at a fixed accumulation threshold. Drainage continuity is the
-  operational reason void quality matters.
-- **Perceptual/structural:** hillshade SSIM inside the void (hillshade, not raw
-  elevation, is what a human QA analyst looks at). LPIPS optional, not a
-  headline (its ImageNet features are off-domain for hillshades).
-- **Stratification:** every metric also reported by the corpus's ruggedness
-  strata (collapsed to 4 groups for table size). A method that wins on plains
+The set below is **pre-registered and graded**: five headline columns per cell,
+four appendix ones, and nothing else. The grading is measured rather than
+argued — [`p123-metric-discrimination.md`](p123-metric-discrimination.md) scored
+every candidate over 24,000 A1 instances for **separation** (spread across the
+A1 variants over the within-cell instance spread; below ~1.0 a metric cannot
+rank arms above noise) and **redundancy** (within-cell Spearman against the rest
+of the set, never pooled, since terrain drives every metric at once). The rule
+applied is the one that motivated the measurement: a metric that cannot separate
+A1 from truth cannot separate the arms either.
+
+- **Elevation error (headline): RMSE and NMAD.** RMSE because C3 and §4.1's
+  early stop are already worded on it; NMAD because it separated best of all ten
+  candidates (2.51, worst cell 1.89) *and* is less redundant with RMSE (0.92)
+  than the 95th percentile is (0.99). **MAE and p95 move to the appendix** —
+  p95 is the weakest of the three and fails to separate the A1 variants at all
+  in its worst cell (0.86).
+- **Systematic offset (headline): mean per-instance |bias|** — the signed error
+  averaged within an instance, then its magnitude averaged over instances.
+  **The pooled mean signed error is deliberately not reported.** Measured, it
+  cancels to 0.003–0.9 m against MAE of 0.87–38.6 m, so it would print a null
+  for every arm; per-instance |bias| runs at roughly *half* of MAE, and 42–50%
+  of instances carry an offset exceeding half their own MAE. This column is a
+  **guard, not a discriminator**: its separation is modest (0.95) because its
+  job is to catch a fill sitting at the wrong absolute level, a failure mode no
+  other column sees. It is not to be dropped for ranking poorly.
+- **Terrain derivatives (headline): slope RMSE and slope-weighted aspect error**,
+  both from the **Zevenbergen–Thorne** quadratic surface — which profile
+  curvature needs anyway, so one kernel serves all three. ZT's first derivatives
+  are central differences and therefore *numerically identical* to the corpus's
+  own `dataset.metrics.slope_deg` (max divergence 0.0006° over 12,000
+  instances), which keeps benchmark slope and the `slope_mean` defining the
+  ruggedness bands the same quantity. **Horn was measured and rejected**: ~7%
+  different in level, 0.98 identical in ranking, and it would have bought that
+  nothing at the cost of the alignment. **Aspect is headline because it is the
+  only independent signal in the set** (within-cell Spearman −0.07 vs RMSE,
+  −0.02 vs NMAD, +0.26 vs slope) and separates well (1.46). **Profile curvature
+  moves to the appendix**: 0.72 redundant with slope, and unable to separate
+  variants in its worst cell (0.28).
+- **Derivatives score on the full void mask, not an eroded one.** A 3×3 kernel
+  one pixel inside the void does read ground truth, and that was expected to
+  hand an idle arm a free ride. Measured, the effect runs the other way: the
+  boundary ring is where a *discontinuous* fill gets caught, so eroding it
+  **halves** slope's separation (1.89 → 0.91). The free ride is real but worth
+  −0.005 to −0.107° on the smooth interpolators, against 17% of the scored
+  pixels on a small void. The eroded-mask slope is kept as an appendix
+  contamination control; the rule itself is stated in §6.
+- **Seam continuity (headline): the full-minus-eroded slope gap.** Free, since
+  both masks are already computed, and it sign-separates a fill that breaks at
+  the void boundary (+1.33° on the flat-fill control) from every smooth
+  interpolator (−0.005 to −0.107°). **This is what carries the operational half
+  of C2 now that drainage is gone**, and what makes §4.2's cross-fade auditable
+  rather than assumed.
+- **Perceptual/structural: nothing scored.** Hillshade SSIM was measured and
+  cut — weakest separator of all ten candidates (0.56) *and* among the most
+  redundant (−0.84 with slope, −0.42 with RMSE). LPIPS is cut with it, on this
+  section's own former hedge that ImageNet features are off-domain for
+  hillshades. The "what a QA analyst actually looks at" argument is carried by
+  §9's hillshade **panel figure**, which is where it belongs: a picture, not a
+  number nobody can act on.
+- **Stratification:** every metric also reported by ruggedness band, where the
+  four bands are the **quartiles of `slope_mean` over the eligible test pool**,
+  cut on the pool itself — not a collapse of the corpus's k-means strata. The
+  earlier wording ("the corpus's ruggedness strata, collapsed to 4 groups") did
+  not describe a defined operation: those strata are k-means clusters over a
+  six-metric descriptor vector (ADR-0004) with no ordering along a ruggedness
+  axis, so there is no such thing as collapsing them to four. The quartile cut
+  is what p119 and p123 both measured on, and every ruggedness number this plan
+  cites is on it. A method that wins on plains
   and loses in mountains must be visible as such. This is **load-bearing, not
   cosmetic**: p119 measured the classical baseline's error varying ~40× across
   these four bands but only ~3× across the size buckets
@@ -458,6 +516,12 @@ delta.
    head hyperparams tuned once on the neutral encoder (A6), then frozen.
 2. Each encoder fed its native normalization; scoring always in metres;
    per-tile stats from non-void pixels only; identity-mask unit test committed.
+   Derivative metrics score the **full** void mask, including the boundary ring
+   whose 3x3 kernel partly reads true pixels. That ring is included knowingly:
+   it is where a discontinuous fill is caught, and eroding it halves slope's
+   ability to separate arms. The free ride it grants a *smooth* fill was
+   measured at −0.005 to −0.107° and is published beside the eroded-mask control
+   rather than argued away ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
 3. GSD stated per regime; primary regime is DEMAE-native and says so;
    TerraMind gets a retrained head in its own 10 m regime before any
    conclusion is drawn about it.
@@ -582,6 +646,9 @@ every table, so the corrected figures are the ones to print.
 2. The results table (arms x buckets x strata, CIs marked) and three figures:
    RMSE vs void size per arm; the label-efficiency curve (C3); a hillshade
    panel grid (truth, voided, A1, A3, A5, A8) on two rugged and one flat tile.
+   The hillshade panel is **load-bearing, not decorative**: §5 scores no
+   perceptual metric, so this figure is the whole of the visual-quality
+   evidence and is not to be cut for space.
 3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
    and C4 with a rank comparison, plus the fairness checklist and the TerraMind
    caveats.
