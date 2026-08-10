@@ -7,7 +7,13 @@ checkpoint payload (:func:`~pretrain.checkpoint.save_checkpoint`); what does not
 here is the **encoder-only file a consumer actually loads**, the **curves**, the **milestone
 set**, and the manifest that says what all of it is.
 
-Two of those carry a caveat that is part of the artifact rather than commentary on it:
+Three of those carry a caveat or a claim that is part of the artifact rather than commentary
+on it:
+
+- **The weights state their own licence** (:func:`release_licence`), which the first export did
+  not: it named every *neighbour's* licence and the *init's* licence and said nothing about the
+  files in the directory. #103 had already settled the chain — an Apache-2.0 init means one set
+  of terms across every arm — and the conclusion never reached the artifact.
 
 - **The curves are indexed by** :data:`EPOCH_AXIS`, spelled out in the manifest. W&B's ``_step``
   is the 0-based index of the epoch that just ended and
@@ -457,13 +463,26 @@ PROBE_NOTE: Final = (
 
 #: What the ``test`` geocells *are*, as a rule a Phase-2 task builder can act on (plan §9, §14).
 #: Not a description of the split — a constraint on what may be built where.
+#:
+#: The separation numbers are **measured** (P77 §3), and the sentence this replaced was not. Plan
+#: §9 argued that blocking at 10° "puts hundreds of km between train and test, far beyond terrain
+#: autocorrelation ranges"; #77 measured the median at 97 km and the *minimum* at 3.0 km, and the
+#: correction landed in `p77-split.md` without amending §9 — so the first export copied §9's
+#: uncorrected sentence into the one artifact outside consumers read, in the paragraph justifying
+#: why a "generalizes to unseen regions" claim is honest. A claim a reader can check against a
+#: cell list we ship beside it has to be the measured one.
 REGIONS_CONTRACT: Final = (
     "These geocells are the downstream evaluation regions. Every tile inside them was held out "
     "of pretraining, and Phase-2 task datasets (void filling, geomorphon labels, and anything "
     "else evaluated as transfer) are built here and never from `train` geocells. Holding out "
-    "whole 10-degree cells puts hundreds of kilometres between train and test, past terrain "
-    "autocorrelation ranges, which is what makes a later 'generalizes to unseen regions' claim "
-    "honest rather than an artifact of adjacent windows landing on both sides of the split."
+    "whole 10-degree cells bounds the *typical* separation and not the smallest: measured "
+    "tile-to-nearest-train-tile distance has a median of 97 km and a p95 of 348 km, but a "
+    "minimum of 3.0 km, with 3.0% of test tiles inside 10 km of training data and 12.8% inside "
+    "25 km (P77 §3). A whole-cell hold-out has a perimeter. So a 'generalizes to unseen regions' "
+    "claim is honest for the interior and needs a buffer at the rim — and the buffer is priced: "
+    "dropping the train tiles within 10 km of a test cell costs 2,964 tiles (0.62% of train), "
+    "and within 25 km, 12,931 (2.72%). Phase 1 left it unspent; a Phase-2 task built here should "
+    "either spend it or report the rim separately."
 )
 
 
@@ -510,6 +529,104 @@ def evaluation_regions(blocks: Path | str, fingerprint: Mapping[str, Any]) -> di
     }
 
 
+# --- The licence the weights ship under ---------------------------------------
+#
+# #103 settled the licence *chain*: R4 warm-starts from an Apache-2.0 reproduction rather than
+# the official checkpoint whose terms P101 showed are unknowable, so no released artifact
+# inherits a non-commercial term and every one of them can ship under the same licence. What
+# that argument never reached was the artifact. The first export named every neighbour's licence
+# in its related-work section and the *init's* licence under provenance, and said nothing at all
+# about the weights sitting in the directory — the one fact a consumer needs before using them,
+# and the one this project had already spent a research ticket establishing.
+
+#: The terms the released weights are offered under. Apache-2.0 rather than the repo's MIT,
+#: because R4 is a derivative of Apache-2.0 weights and Apache-2.0 is what carries that chain
+#: forward intact; R5 owes nothing to anyone and rides along under the same terms, so the release
+#: has one licence rather than one per arm — which is what #103 bought.
+RELEASE_LICENCE: Final = "Apache-2.0"
+RELEASE_LICENCE_URL: Final = "https://www.apache.org/licenses/LICENSE-2.0"
+
+#: Init licences a release may inherit and still ship under :data:`RELEASE_LICENCE`. Deliberately
+#: a set of one: this is the only provenance the claim has been checked against, so a future arm
+#: warm-started from something else has to extend this on purpose. P101 is the record of what
+#: assuming a licence costs.
+COMPATIBLE_INIT_LICENCES: Final = frozenset({"Apache-2.0"})
+
+#: The canonical Apache-2.0 text, shipped **beside the weights** rather than linked, because
+#: §4(a) asks a redistributor to give recipients a copy of the License and a release directory
+#: pulled out of a bucket carries no repo with it.
+LICENCE_FILE: Final = "LICENSE"
+LICENCE_TEXT_MD5: Final = "3b83ef96387f14655fc854ddc3c6bd57"
+
+
+def licence_text() -> str:
+    """The packaged Apache-2.0 text, refused unless it hashes to :data:`LICENCE_TEXT_MD5`.
+
+    Hashed rather than trusted because this is the one shipped file whose *content* nothing else
+    in the release checks: a truncated or edited licence would look like a licence in every
+    listing, and the artifact would be making a legal claim against text nobody read.
+    """
+    path = Path(__file__).parent / "licences" / f"{RELEASE_LICENCE}.txt"
+    actual = checkpoint_md5(path)
+    if actual != LICENCE_TEXT_MD5:
+        raise ValueError(
+            f"{path} hashes to {actual}, not the canonical {RELEASE_LICENCE} text "
+            f"({LICENCE_TEXT_MD5}) — refusing to ship weights under a licence whose text has "
+            f"been altered"
+        )
+    return path.read_text()
+
+
+def release_licence(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    """Under what terms this run's weights may be redistributed, given where they came from.
+
+    A claim is made only when the chain supports it: ``scratch`` owes nothing to anyone, and a
+    warm start owes whatever its init's licence says. An init that is unverified, or verified
+    under terms outside :data:`COMPATIBLE_INIT_LICENCES`, gets **no licence claim at all** rather
+    than a default — the same rule :func:`init_provenance` applies to provenance, for the same
+    reason. A release that silently claims Apache-2.0 over weights derived from a CC-BY-NC
+    checkpoint would look exactly like this one in every listing.
+    """
+    mode = provenance.get("mode")
+    inherited = (provenance.get("spec") or {}).get("licence")
+    if mode == "scratch":
+        claim, why = True, (
+            "trained from random initialization, so these weights derive from no other "
+            "licensed work and are offered under the release's own terms"
+        )
+    elif provenance.get("verified") and inherited in COMPATIBLE_INIT_LICENCES:
+        claim, why = True, (
+            f"warm-started from {(provenance.get('spec') or {}).get('name')}, which is "
+            f"{inherited} — a permissive licence this release carries forward rather than "
+            f"relicenses, so the derived weights ship under the same terms as their init (#103)"
+        )
+    else:
+        claim, why = False, (
+            "this run was warm-started from weights whose licence this export could not verify, "
+            "so **no licence is claimed for the derived weights** and they must not be "
+            "redistributed on the strength of this manifest. Re-run the export with the init "
+            "file, or establish its terms, before publishing — see `init_provenance.note`"
+        )
+    return {
+        "spdx": RELEASE_LICENCE if claim else None,
+        "url": RELEASE_LICENCE_URL if claim else None,
+        "file": LICENCE_FILE if claim else None,
+        "text_md5": LICENCE_TEXT_MD5 if claim else None,
+        "applies_to": (
+            "encoder.pt and the milestone checkpoints it was exported from. The corpus is "
+            "Copernicus GLO-30 under its own terms and is not redistributed here; this repo's "
+            "source code is MIT and is a separate grant from this one"
+        ),
+        "inherited_from": None if not inherited else {
+            "name": (provenance.get("spec") or {}).get("name"),
+            "url": (provenance.get("spec") or {}).get("url"),
+            "licence": inherited,
+            "licence_source": (provenance.get("spec") or {}).get("licence_source"),
+        },
+        "note": why,
+    }
+
+
 # --- The manifest -------------------------------------------------------------
 
 
@@ -540,6 +657,10 @@ class ReleaseManifest:
     fingerprint: dict[str, Any]
     #: §14's required field, from :func:`init_provenance`.
     init_provenance: dict[str, Any]
+    #: Under what terms these weights may be redistributed, from :func:`release_licence`. Its
+    #: ``spdx`` is ``None`` when the chain does not support a claim, which is a publishable state
+    #: for an internal artifact and not one for an open release.
+    licence: dict[str, Any]
     #: §14's training curves: the shipped file, its hash, and — the part that is not decoration —
     #: the name of the epoch axis it is indexed by. ``None`` when no history was presented, which
     #: is a §14-incomplete release and says so rather than shipping an unlabelled curve.
@@ -743,6 +864,30 @@ def model_card(manifest: ReleaseManifest) -> str:
             f"manifest's `init_provenance.note`. Provenance is recognized, never assumed."
         )
 
+    lic = manifest.licence
+    if lic.get("spdx"):
+        inherited = lic.get("inherited_from")
+        licence_badge = f"`{lic['spdx']}` — full text in `{lic['file']}` beside these weights"
+        licence_line = (
+            f"**These weights are released under [{lic['spdx']}]({lic['url']}).** The full text "
+            f"ships as `{lic['file']}` in this directory (md5 `{lic['text_md5']}`).\n\n"
+            f"{lic['applies_to'].capitalize()}.\n\n{lic['note'].capitalize()}."
+            + (
+                ""
+                if not inherited
+                else f"\n\nInherited from **[{inherited['name']}]({inherited['url']})** "
+                     f"({inherited['licence']}, stated at {inherited['licence_source']}). That "
+                     f"licence travels with these weights; it is not replaced by this one."
+            )
+        )
+    else:
+        licence_badge = "**none claimed** — see below before redistributing"
+        licence_line = (
+            f"**No licence is claimed for these weights, and they should not be published as "
+            f"open weights in this state.** {lic['note'].capitalize()}.\n\n"
+            f"{lic['applies_to'].capitalize()}."
+        )
+
     curves = manifest.curves
     curves_line = (
         "No training curves were shipped with this export, which makes it **§14-incomplete**."
@@ -807,6 +952,11 @@ tiles, released as a transferable backbone for downstream terrain tasks.
 - **Trained for:** {manifest.epochs_completed} epochs completed, {manifest.steps:,} optimizer steps
 - **Positional embedding:** `{manifest.pos_encoding}`
 - **Config hash:** `{manifest.config_hash}`
+- **Licence:** {licence_badge}
+
+## Licence
+
+{licence_line}
 
 ## Loading it
 
@@ -898,7 +1048,9 @@ def export_encoder(
 ) -> ReleaseManifest:
     """Write one run's §14 release into ``out_dir``, and return the manifest.
 
-    Writes ``encoder.pt``, ``manifest.json`` and ``MODEL_CARD.md`` always; ``curves.csv`` when
+    Writes ``encoder.pt``, ``manifest.json`` and ``MODEL_CARD.md`` always; ``LICENSE`` when the
+    provenance chain supports a licence claim, and nothing when it does not (see
+    :func:`release_licence`); ``curves.csv`` when
     ``history`` is given; ``evaluation_regions.json`` when ``split_blocks`` is, and verifies that
     file against the run's own fingerprint before believing it. ``checkpoint_dir`` defaults to the
     directory the exported checkpoint sits in, which is where its milestone siblings are; pass it
@@ -933,8 +1085,16 @@ def export_encoder(
         None if split_blocks is None
         else evaluation_regions(split_blocks, ckpt.fingerprint.to_dict())
     )
+    provenance = init_provenance(ckpt.config, init_file=init_file)
+    licence = release_licence(provenance.to_dict())
+    # Read before the first write, with everything else that can refuse: a release directory
+    # holding weights and a licence file that turned out to be unreadable is worse than one
+    # holding neither, because the listing looks complete.
+    licence_body = licence_text() if licence["spdx"] else None
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    if licence_body is not None:
+        (out_dir / LICENCE_FILE).write_text(licence_body)
     encoder_path = out_dir / "encoder.pt"
     torch.save(state, encoder_path)
 
@@ -989,7 +1149,8 @@ def export_encoder(
         encoder_file=encoder_path.name,
         encoder_md5=checkpoint_md5(encoder_path),
         fingerprint=ckpt.fingerprint.to_dict(),
-        init_provenance=init_provenance(ckpt.config, init_file=init_file).to_dict(),
+        init_provenance=provenance.to_dict(),
+        licence=licence,
         curves=curves,
         milestones=milestones,
         evaluation_regions=regions,
@@ -1061,6 +1222,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  position  epoch {manifest.epochs_completed} completed, step {manifest.steps:,}")
     print(f"  init      {prov['mode']}  ({'verified' if prov['verified'] else 'UNVERIFIED'})")
     print(f"            {prov['note']}")
+    lic = manifest.licence
+    if lic["spdx"]:
+        print(f"  licence   {lic['spdx']}  ({lic['file']} written, text md5 {lic['text_md5']})")
+    else:
+        print("  licence   NONE CLAIMED — these weights must not be published as open weights")
     if manifest.curves is None:
         print("  curves    NONE — §14 requires them; re-run with --history")
     else:

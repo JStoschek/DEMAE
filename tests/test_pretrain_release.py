@@ -176,6 +176,71 @@ def test_a_warm_start_from_an_unrecognized_file_makes_no_licence_claim(tmp_path)
     assert "no provenance claim" in prov.note
 
 
+# --- The licence the weights ship under ----------------------------------------
+
+
+def test_a_scratch_run_ships_under_the_release_licence():
+    lic = release.release_licence({"mode": "scratch", "verified": True, "spec": None})
+    assert lic["spdx"] == release.RELEASE_LICENCE
+    assert lic["inherited_from"] is None
+    assert "derive from no other licensed work" in lic["note"]
+
+
+def test_a_verified_apache_warm_start_carries_its_chain_forward():
+    """#103 bought exactly this: an Apache-2.0 init means one set of terms across every arm."""
+    lic = release.release_licence({
+        "mode": "imagenet_mae", "verified": True,
+        "spec": {"name": "OpenMMLab MAE ViT-B/16", "url": "https://x", "licence": "Apache-2.0",
+                 "licence_source": "https://github.com/open-mmlab/mmselfsup/blob/v1.0.0/LICENSE"},
+    })
+    assert lic["spdx"] == "Apache-2.0"
+    assert lic["inherited_from"]["licence"] == "Apache-2.0"
+    assert lic["inherited_from"]["licence_source"].endswith("LICENSE")
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        pytest.param({"mode": "imagenet_mae", "verified": False, "spec": None}, id="unverified"),
+        pytest.param(
+            {"mode": "imagenet_mae", "verified": True,
+             "spec": {"name": "the official checkpoint", "licence": "CC-BY-NC-4.0"}},
+            id="incompatible",
+        ),
+    ],
+)
+def test_an_unsupported_chain_claims_no_licence_rather_than_defaulting(provenance):
+    """P101's rule at the last boundary it can be broken at.
+
+    The whole point of that ticket is that a licence nobody established is not Apache-2.0 by
+    default. A release that silently claimed it over weights derived from a CC-BY-NC checkpoint
+    would look identical to this one in every listing — same files, same manifest shape.
+    """
+    lic = release.release_licence(provenance)
+    assert lic["spdx"] is None and lic["file"] is None and lic["text_md5"] is None
+    assert "no licence is claimed" in lic["note"]
+
+
+def test_the_shipped_licence_text_is_the_canonical_one():
+    text = release.licence_text()
+    assert "Apache License" in text and "Version 2.0, January 2004" in text
+    from pretrain.init import checkpoint_md5
+    path = Path(release.__file__).parent / "licences" / f"{release.RELEASE_LICENCE}.txt"
+    assert checkpoint_md5(path) == release.LICENCE_TEXT_MD5
+
+
+def test_an_altered_licence_text_is_refused(tmp_path, monkeypatch):
+    """The one shipped file whose *content* nothing else checks: a truncated licence looks like
+    a licence in every listing, and the artifact would be making a legal claim about text that
+    nobody read."""
+    fake_pkg = tmp_path / "pretrain"
+    (fake_pkg / "licences").mkdir(parents=True)
+    (fake_pkg / "licences" / f"{release.RELEASE_LICENCE}.txt").write_text("Apache License, sort of")
+    monkeypatch.setattr(release, "__file__", str(fake_pkg / "release.py"))
+    with pytest.raises(ValueError, match="not the canonical"):
+        release.licence_text()
+
+
 # --- The manifest and the shipping entry point ---------------------------------
 
 
@@ -413,6 +478,7 @@ def test_a_release_with_no_history_says_so_rather_than_shipping_an_unlabelled_cu
         pos_encoding="sincos2d", encoder_tensors=1, encoder_parameters=1, encoder_file="e.pt",
         encoder_md5="1" * 32, fingerprint={}, init_provenance={}, curves=None, milestones=[],
         evaluation_regions=None, probe_note=release.PROBE_NOTE, config={},
+        licence=release.release_licence({"mode": "scratch"}),
     )
     assert json.loads(json.dumps(manifest.to_dict()))["curves"] is None
 
@@ -434,6 +500,9 @@ def a_manifest(**overrides):
         probe_note=release.PROBE_NOTE, config={},
     )
     fields.update(overrides)
+    # Derived rather than defaulted, so a card test that overrides the provenance gets the
+    # licence that provenance actually supports — the two must never be settable apart.
+    fields.setdefault("licence", release.release_licence(fields["init_provenance"]))
     return release.ReleaseManifest(**fields)
 
 
@@ -537,6 +606,53 @@ def test_the_card_ships_beside_the_weights(exported):
     assert (exported / "MODEL_CARD.md").read_text().startswith("# DEMAE")
 
 
+def test_the_release_states_the_licence_of_the_weights_it_ships(exported):
+    """The gap the first export shipped with: it named every *neighbour's* licence in related
+    work and the *init's* licence under provenance, and said nothing about the files in the
+    directory — the one fact a consumer needs before using them."""
+    m = json.loads((exported / "manifest.json").read_text())
+    assert m["licence"]["spdx"] == release.RELEASE_LICENCE
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert "## Licence" in card
+    assert f"released under [{release.RELEASE_LICENCE}]" in card
+
+
+def test_the_licence_text_ships_beside_the_weights_rather_than_as_a_link(exported):
+    """A release directory pulled out of a bucket carries no repo with it, and Apache-2.0 §4(a)
+    asks a redistributor to hand over the License itself."""
+    shipped = exported / release.LICENCE_FILE
+    assert shipped.is_file()
+    from pretrain.init import checkpoint_md5
+    m = json.loads((exported / "manifest.json").read_text())
+    assert checkpoint_md5(shipped) == m["licence"]["text_md5"] == release.LICENCE_TEXT_MD5
+
+
+def test_a_release_with_no_supportable_licence_ships_no_licence_file(tmp_path):
+    """The refusal has to reach the *directory*, not just the manifest: a LICENSE file sitting
+    beside weights is the claim, whatever the JSON says."""
+    from pretrain.checkpoint import RunState, save_checkpoint
+    from pretrain.fingerprint import DataFingerprint
+
+    cfg = RunConfig.vit_base_continual("/rented/box/mae_1600e.pth")  # warm start, no file given
+    model = MaskedAutoencoder(cfg.architecture, mask_ratio=cfg.masking.ratio)
+    ckpt = tmp_path / "checkpoint_e0001_s000000001.pt"
+    save_checkpoint(
+        ckpt, config=cfg,
+        fingerprint=DataFingerprint(
+            corpus_dir="c", dataset_version="v", n_tiles=1, selection_list_md5="0" * 32,
+            split_md5="1" * 32, split_blocks_md5="2" * 32, split_state="committed",
+            split_note=None, git_sha="g"),
+        state=RunState(epoch=1, step=1), model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3), rng={})
+
+    out = tmp_path / "unlicensed"
+    manifest = release.export_encoder(ckpt, out, verify_timm=False)
+    assert manifest.licence["spdx"] is None
+    assert not (out / release.LICENCE_FILE).exists()
+    card = (out / "MODEL_CARD.md").read_text()
+    assert "No licence is claimed for these weights" in card
+
+
 # --- The Phase-2 evaluation-regions contract ----------------------------------
 
 
@@ -589,6 +705,30 @@ def test_the_release_ships_the_regions_as_their_own_file(exported):
     on_disk = json.loads((exported / "evaluation_regions.json").read_text())
     assert on_disk == m["evaluation_regions"]
     assert on_disk["split_blocks_md5"] == m["fingerprint"]["split_blocks_md5"]
+
+
+def test_the_regions_contract_states_the_measured_separation_and_not_the_corrected_claim():
+    """#77 measured what plan §9 asserted, and the first export shipped §9's sentence anyway.
+
+    §9 says blocking at 10° "puts hundreds of km between train and test, far beyond terrain
+    autocorrelation ranges". P77 §3 measured a **97 km median** and a **3.0 km minimum**, with
+    12.8% of test tiles inside 25 km of training data — a whole-cell hold-out has a perimeter.
+    The correction landed in the research memo and not in §9, so the export copied the wrong
+    sentence into the one artifact outside consumers read, in the paragraph justifying why a
+    "generalizes to unseen regions" claim is honest. Asserted on the string, because that is the
+    kind of sentence a future edit re-types from the plan.
+    """
+    contract = release.REGIONS_CONTRACT
+    assert "hundreds of" not in contract
+    assert "97 km" in contract and "3.0 km" in contract and "12.8%" in contract
+    # And the remedy is priced rather than left as an exercise, per P77's own costing.
+    assert "2,964" in contract and "12,931" in contract
+
+
+def test_the_card_carries_the_measured_separation_to_the_reader(exported):
+    card = (exported / "MODEL_CARD.md").read_text()
+    assert "hundreds of" not in card
+    assert "median of 97 km" in card
 
 
 def test_the_card_names_every_held_out_geocell(exported):
