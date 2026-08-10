@@ -87,11 +87,42 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
   operationally on GLO-30, DEMAE's home turf and honestly labeled as such;
   TerraMind runs out-of-distribution here and the writeup says so. Both ViTs
   produce a 14x14 token grid, so the head is byte-identical.
+- **TerraMind's position embedding is re-derived at 14x14, centre-anchored, not
+  bicubically resized** (ADR-0011, [#133](https://github.com/JStoschek/DEMAE/issues/133)).
+  The tokenizer was trained at 256 px, so `ViTEncoder.pos_emb` is natively
+  `[1, 768, 16, 16]`, and terratorch's `forward` resizes it with
+  `F.interpolate(..., mode="bicubic")` on every 224 px pass. That resize preserves
+  *normalized* position and therefore stretches the token index spacing to
+  **1.1429** where a crop's spacing is exactly **1.0** — the drift accumulates past
+  a full patch width by the far edge, and only **20 of 196** tokens still rank their
+  own correct embedding nearest. The embedding is not learned
+  (`sincos_pos_emb=True, learnable_pos_emb=False`), so it is a closed-form function
+  of integer grid index and can be re-derived exactly. A 224 px tile at 30 m *is* a
+  crop of a 256 px scene at 30 m, so the faithful embedding is the crop, not the
+  resize. We use the **centre** anchor, `pos_emb[:, :, 1:15, 1:15]` — equivalently
+  indices 1-14 — which removes the stretch without also introducing a translation.
+  This makes both encoders in-distribution at 224 px simultaneously: TerraMind sees
+  indices 1-14, a subset of its trained 0-15, and DEMAE sees its own native 0-13.
+  Neither is handicapped, so §2.2 no longer owes the reader a caveat here.
 - **Secondary regime (A5 only): TerraMind-native check.** The same geographic
   windows bilinearly resampled to 10 m, center-cropped to 224 px (covering
   2.24 km instead of 6.72 km), TerraMind + head retrained. If TerraMind-at-10m
   still loses A4 vs A5, the GSD objection is closed. Run this once, at the 20k
   training size only.
+- **Ablation row (A5 only, 20k training size): bicubic vs re-derived `pos_emb`.**
+  One row reporting A5's metrics under terratorch's default resize against the
+  centre-anchored re-derivation, so the ADR-0011 intervention is evidenced in the
+  results rather than asserted in prose. Pre-registered here; it may be **dropped
+  before any arm runs** if [#134](https://github.com/JStoschek/DEMAE/issues/134)'s
+  materiality check returns a mean per-token cosine >= 0.99 between the two feature
+  sets, in which case the choice is immaterial and the row buys nothing.
+- **Not considered: moving the primary regime to 256 px.** It looks symmetric and is
+  not. Both encoders use fixed sin-cos, so a 256 px regime would give TerraMind its
+  trained 0-15 while DEMAE saw indices **14 and 15 for the first time** — an
+  extrapolation beyond its training range that re-derivation cannot fix, because you
+  cannot crop into indices that do not exist. It would also retile the corpus to
+  7.68 km windows, reopening the frozen Phase-0 tiling, strata and split. This is
+  distinct from the out-of-scope secondary 10 m regime, which is about GSD, not grid.
 
 ### 2.3 Capacity: report it, and bracket it
 

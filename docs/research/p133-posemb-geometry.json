@@ -1,0 +1,74 @@
+{
+  "adr_0011_anchor": [
+    1,
+    1
+  ],
+  "anchors": {
+    "0,0": {
+      "identity_retained": 20,
+      "rel_rms_vs_bicubic": 0.26246027348210443,
+      "rel_rms_vs_top_left": 0.0
+    },
+    "0,1": {
+      "identity_retained": 44,
+      "rel_rms_vs_bicubic": 0.20892513779400762,
+      "rel_rms_vs_top_left": 0.1650814246772674
+    },
+    "0,2": {
+      "identity_retained": 24,
+      "rel_rms_vs_bicubic": 0.26246027348210454,
+      "rel_rms_vs_top_left": 0.3094011751613137
+    },
+    "1,0": {
+      "identity_retained": 33,
+      "rel_rms_vs_bicubic": 0.20892513779400765,
+      "rel_rms_vs_top_left": 0.1650814246772674
+    },
+    "1,1": {
+      "identity_retained": 72,
+      "rel_rms_vs_bicubic": 0.13569830967329363,
+      "rel_rms_vs_top_left": 0.23346038967446414
+    },
+    "1,2": {
+      "identity_retained": 42,
+      "rel_rms_vs_bicubic": 0.20892513779400776,
+      "rel_rms_vs_top_left": 0.35068641827803687
+    },
+    "2,0": {
+      "identity_retained": 20,
+      "rel_rms_vs_bicubic": 0.26246027348210454,
+      "rel_rms_vs_top_left": 0.3094011751613137
+    },
+    "2,1": {
+      "identity_retained": 45,
+      "rel_rms_vs_bicubic": 0.20892513779400776,
+      "rel_rms_vs_top_left": 0.35068641827803687
+    },
+    "2,2": {
+      "identity_retained": 24,
+      "rel_rms_vs_bicubic": 0.2624602734821046,
+      "rel_rms_vs_top_left": 0.43755933812730347
+    }
+  },
+  "bicubic_index_spacing": 1.1428571428571428,
+  "bicubic_source_index_first": 0.0714285714285714,
+  "bicubic_source_index_last": 14.928571428571429,
+  "bicubic_vs_centre_identity_retained": 72,
+  "bicubic_vs_centre_rel_rms": 0.13569830967329363,
+  "bicubic_vs_top_left_identity_retained": 20,
+  "bicubic_vs_top_left_rel_rms": 0.26246027348210443,
+  "crop_index_spacing": 1.0,
+  "distinct_token_cosine_max": 0.9863740616132628,
+  "distinct_token_cosine_min": 0.6613945843868956,
+  "embed_dim": 768,
+  "n_tokens": 196,
+  "native_grid": [
+    16,
+    16
+  ],
+  "rederived_minus_top_left_crop_max_abs": 0.0,
+  "target_grid": [
+    14,
+    14
+  ]
+}
