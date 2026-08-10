@@ -18,7 +18,7 @@ the host Phase 1 actually rented:
 |---|---|---|
 | GPU | 20–33 "4090-hours" | **2.56 h** |
 | GPU dollars | $7–12 at $0.34/hr | **$1.03** at the real $0.4016/hr |
-| CPU eval | "CPU" — no number | **1.99 h**, single core, local |
+| CPU eval | "CPU" — no number | **2-5 h**, single core, local |
 
 The <$25 target is not binding and never was. §7's own hedge — "inside budget with slack" —
 was right for the wrong reason: the slack is an order of magnitude, not a fraction.
@@ -29,10 +29,10 @@ seconds — 1.31 h, $0.53 — and is rejected for reasons that have nothing to d
 
 Three findings ride along:
 
-- **Scoring is the biggest single line in the whole benchmark**: 118 minutes of CPU,
-  against the largest GPU line's 46. The CPU total (1.99 h) is 78% of the entire GPU
-  program (2.56 h) — comparable to it, not larger, but of the same order, which is not how
-  §7's bare "CPU" reads.
+- **Scoring is the biggest single line in the whole benchmark**: 118 minutes of CPU at
+  this ticket's scoring-only rate, against the largest GPU line's 46. The CPU total is
+  1.99 h scoring-only and 5.2 h at the end-to-end rate p119 measured on the same machine
+  (§4) — between 78% and 2x the entire GPU program, which is not how §7's bare "CPU" reads.
 - **The UNet is the priciest single arm**, 46 of the GPU program's 154 minutes. §7's guess
   that A7 is "the priciest baseline" is right; its guess of 4–6 hours is 6× high.
 - **A9 is unpriced and is the largest uncertainty left.** It is the one arm this ticket
@@ -208,6 +208,21 @@ Scoring is 4.6 ms per instance with the truth tile's derivatives cached across a
 buckets, and 6.8 ms without; the cache is worth 32% and costs 2.5 ms per tile to build, so
 it is the one optimization here that pays for itself.
 
+**An independent read on primitive 5, and it runs the cost up.**
+[`p119-fill-headroom.md`](p119-fill-headroom.md) did a real end-to-end scoring pass on this
+same machine and corpus — 48,000 instances, CPU-only, **9.7 min wall clock**, i.e.
+**12.1 ms per instance**. That is 2.6× this ticket's 4.6 ms, on a *narrower* metric set
+(metres and slope; no curvature, aspect, NMAD, p95 or SSIM). The gap is explained rather
+than explained away: p119's instance count multiplies in **five fill variants** including
+thin-plate spline, which is far costlier than the bilinear `fillnodata` priced here, and
+its wall clock carries shard reads and a parquet write that this primitive excludes.
+
+The honest reading is that 4.6 ms is a floor for scoring alone, and a real pass with I/O
+lands nearer 12 ms. At p119's end-to-end rate the CPU line would be **5.2 h** rather than
+1.99 h. That moves no verdict — it is still not GPU dollars, and it makes scoring an even
+more dominant single line — but the CPU row should be read as **2–5 h**, not as a point
+estimate.
+
 Two notes on what these numbers do *not* cover:
 
 - The inference line prices an **encoder forward**. A2 and A3 also run the decoder, and
@@ -334,9 +349,9 @@ convention; every timing it produced is in
    batch-128 measurement on the 5090 would be the thing that closes this.
 3. **`torch.compile` is off locally and was on for the anchors**, so the ratio carries the
    anchors' compile gain. Conservative for anything that would not be compiled.
-4. **The eval pass is single-threaded and on a laptop.** The host has 8 cores; the honest
-   read of 1.99 h is "one core-hour times two", and it parallelizes trivially over
-   instances.
+4. **The eval pass is single-threaded and on a laptop**, and 1.99 h is the scoring-only
+   floor — p119's end-to-end rate on the same machine puts it at 5.2 h (§4), so read the
+   CPU row as 2-5 h. The host has 8 cores and it parallelizes trivially over instances.
 5. **`_blob_mask` is a stand-in for `benchmark.masks`, which does not exist yet.** It
    produces §3.2-legal blobs of the right size, which is what the cost depends on; it is
    not the committed generator and makes no claim to be.

@@ -419,14 +419,14 @@ Costed for the design §4.1 now specifies — **frozen encoder inline, no featur
 | A3 fine-tune (ViT-B + ViT-S) | 20 ep x 20k | 3.1 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch |
 | **GPU total** | | **153.6 min = 2.56 h** | **$1.03** at $0.4016/hr |
 | **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
-| Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **1.99 h** | 4.6 ms/instance; **the largest single line in the benchmark** (118 min of it is scoring) |
+| Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **2-5 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
 
 The 48 scored passes are 24 at 20k — A1, A2 and A3 at both capacities, A9, the five frozen
 cells at 3 seeds, A7 at 3 seeds — plus 24 for the label-efficiency sweep, which §6 item 7
 makes a headline claim and therefore scores rather than merely trains.
 
 **The budget is not a constraint and should stop being treated as one.** At $1.03 of GPU
-against a $25 target, no line here justifies a spot-instance strategy or a resume design;
+against a $25 target — the CPU hours are the project's own laptop, not rent — no line here justifies a spot-instance strategy or a resume design;
 #117's standing note that *attention and wall-clock are the real budget* is now measured
 rather than asserted. The one number that could still move the total is A9's.
 
