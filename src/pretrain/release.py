@@ -589,23 +589,27 @@ def release_licence(provenance: Mapping[str, Any]) -> dict[str, Any]:
     """
     mode = provenance.get("mode")
     inherited = (provenance.get("spec") or {}).get("licence")
+    # Written sentence-cased at the source. The card renders these verbatim: an earlier version
+    # called `str.capitalize()` on them to fix the leading letter, which lowercases *everything
+    # after* it — and shipped "the corpus is copernicus glo-30" and "this repo's source code is
+    # mit" to consumers before anyone read the published file.
     if mode == "scratch":
         claim, why = True, (
-            "trained from random initialization, so these weights derive from no other "
-            "licensed work and are offered under the release's own terms"
+            "Trained from random initialization, so these weights derive from no other "
+            "licensed work and are offered under the release's own terms."
         )
     elif provenance.get("verified") and inherited in COMPATIBLE_INIT_LICENCES:
         claim, why = True, (
-            f"warm-started from {(provenance.get('spec') or {}).get('name')}, which is "
+            f"Warm-started from {(provenance.get('spec') or {}).get('name')}, which is "
             f"{inherited} — a permissive licence this release carries forward rather than "
-            f"relicenses, so the derived weights ship under the same terms as their init (#103)"
+            f"relicenses, so the derived weights ship under the same terms as their init (#103)."
         )
     else:
         claim, why = False, (
-            "this run was warm-started from weights whose licence this export could not verify, "
+            "This run was warm-started from weights whose licence this export could not verify, "
             "so **no licence is claimed for the derived weights** and they must not be "
             "redistributed on the strength of this manifest. Re-run the export with the init "
-            "file, or establish its terms, before publishing — see `init_provenance.note`"
+            "file, or establish its terms, before publishing — see `init_provenance.note`."
         )
     return {
         "spdx": RELEASE_LICENCE if claim else None,
@@ -613,9 +617,9 @@ def release_licence(provenance: Mapping[str, Any]) -> dict[str, Any]:
         "file": LICENCE_FILE if claim else None,
         "text_md5": LICENCE_TEXT_MD5 if claim else None,
         "applies_to": (
-            "encoder.pt and the milestone checkpoints it was exported from. The corpus is "
-            "Copernicus GLO-30 under its own terms and is not redistributed here; this repo's "
-            "source code is MIT and is a separate grant from this one"
+            "These terms cover `encoder.pt` and the milestone checkpoints it was exported from. "
+            "The corpus is Copernicus GLO-30 under its own terms and is not redistributed here; "
+            "this repo's source code is MIT and is a separate grant from this one."
         ),
         "inherited_from": None if not inherited else {
             "name": (provenance.get("spec") or {}).get("name"),
@@ -871,7 +875,7 @@ def model_card(manifest: ReleaseManifest) -> str:
         licence_line = (
             f"**These weights are released under [{lic['spdx']}]({lic['url']}).** The full text "
             f"ships as `{lic['file']}` in this directory (md5 `{lic['text_md5']}`).\n\n"
-            f"{lic['applies_to'].capitalize()}.\n\n{lic['note'].capitalize()}."
+            f"{lic['applies_to']}\n\n{lic['note']}"
             + (
                 ""
                 if not inherited
@@ -884,8 +888,7 @@ def model_card(manifest: ReleaseManifest) -> str:
         licence_badge = "**none claimed** — see below before redistributing"
         licence_line = (
             f"**No licence is claimed for these weights, and they should not be published as "
-            f"open weights in this state.** {lic['note'].capitalize()}.\n\n"
-            f"{lic['applies_to'].capitalize()}."
+            f"open weights in this state.** {lic['note']}\n\n{lic['applies_to']}"
         )
 
     curves = manifest.curves

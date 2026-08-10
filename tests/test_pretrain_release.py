@@ -627,6 +627,23 @@ def test_the_licence_text_ships_beside_the_weights_rather_than_as_a_link(exporte
     assert checkpoint_md5(shipped) == m["licence"]["text_md5"] == release.LICENCE_TEXT_MD5
 
 
+@pytest.mark.parametrize("proper", ["Copernicus GLO-30", "MIT", "Apache-2.0"])
+def test_the_licence_section_keeps_proper_nouns_cased(proper):
+    """The first published version ran ``str.capitalize()`` on these sentences to fix a leading
+    letter, which lowercases *everything after* it — so consumers were handed "the corpus is
+    copernicus glo-30" and "this repo's source code is mit". A licence section that mangles the
+    names of the things it is making claims about is not a licence section anyone should rely on,
+    and nothing here reads the rendered text except a human who happens to open the file.
+    """
+    card = release.model_card(a_manifest(init_provenance={
+        "mode": "imagenet_mae", "verified": True, "checkpoint": "/x/mae.pth",
+        "spec": {"name": "OpenMMLab MAE ViT-B/16", "url": "https://x", "licence": "Apache-2.0",
+                 "licence_source": "https://x/LICENSE"}, "note": "n",
+    }))
+    section = card.split("## Licence")[1].split("## Loading it")[0]
+    assert proper in section
+
+
 def test_a_release_with_no_supportable_licence_ships_no_licence_file(tmp_path):
     """The refusal has to reach the *directory*, not just the manifest: a LICENSE file sitting
     beside weights is the claim, whatever the JSON says."""
