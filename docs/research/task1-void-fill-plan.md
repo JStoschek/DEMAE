@@ -28,6 +28,16 @@ defined before any number is seen:
 - **C3 (label efficiency):** DEMAE-frozen reaches a given RMSE with far fewer
   head-training tiles than the UNet-from-scratch baseline (the 1k / 5k / 20k
   sweep). This is the foundation-model value proposition.
+- **C4 (the ranking survives real geometry):** the *ordering* of arms on real
+  SRTM void shapes, **within a ruggedness band**, does not contradict the
+  ordering on synthetic masks. This is deliberately an ordering claim and **not**
+  a metric-delta claim: the real-void family is drawn at its natural size
+  distribution and the synthetic families are bucket-balanced, so a difference
+  in metres between the two would confound void *shape* with void *size* (§3.3).
+  Ordering is confound-free because every arm is scored on the identical
+  instance set. C4 fails if an arm pair swaps rank between the synthetic and
+  real-void rows within the same band — which would put C1 in question, since
+  C1's comparison is made entirely on synthetic masks.
 
 If C2 partially fails (e.g., Diff-DEM wins on texture), that is reported, not
 hidden; PANGAEA-style candor is part of the deliverable. C1 and C3 are the
@@ -169,14 +179,16 @@ A seeded `benchmark.masks` generator, one committed mask list per eval tile
   directly comparable). One void per tile per eval instance; every eval tile
   appears once per bucket **for the two synthetic families (i) and (ii)**, so
   bucket scores are computed over identical tile sets.
-- **The real-void family (iii) is exempt from bucket balancing.** Real SRTM
-  voids are ~94% small and the 128 to 160 px bucket is empty in practice — two
-  cells measured at true 1 arc-second returned 139 and 175 components in
-  16 to 48 px, 2 and 6 in 64 to 96, and **zero** in 128 to 160. Forcing
-  667-per-bucket would mean either fabricating large voids, which destroys the
-  only thing the family contributes, or silently reweighting, which makes it
-  non-comparable anyway. It is drawn at its natural size distribution and
-  reported as its own row instead (§3.3).
+- **The real-void family (iii) carries no bucket axis.** Two cells measured at
+  true 1 arc-second returned 139 and 175 components in 16 to 48 px, 2 and 6 in
+  64 to 96, and **zero** in 128 to 160. Forcing 667-per-bucket would mean either
+  fabricating large voids, which destroys the only thing the family contributes,
+  or silently reweighting, which makes it non-comparable anyway. It is drawn at
+  its natural size distribution and reported as its own rows instead (§3.3).
+  Note that the 128 to 160 px bucket is under separate pressure for the
+  *synthetic* families too — this section's interior-margin and 40%-area
+  constraints are jointly unsatisfiable above 141 px — so whether that bucket
+  survives at all is settled elsewhere, and this bullet does not assume it does.
 - **Constraints:** voids fully interior (≥ 8 px from tile edge); void may not
   cover > 40% of the tile; the same mask list is reused verbatim by every arm.
 
@@ -203,7 +215,13 @@ corrects this section on four points, each recorded below.
 - **Not the Atlas.** Measured void fractions: Himalaya 3.7 to 22.5%, Andes
   0.03 to 2.0%, Atlas 0.03 to 0.16%. Atlas cells yield 4 to 24 usable
   components each against the Himalaya's 174 to 689 — two orders of magnitude
-  poorer. It is dropped from the void-rich region list.
+  poorer. It is dropped from the void-rich region list. **The Andes stay, and
+  the reason is diversity, not volume**: at ~148 small components per cell they
+  contribute perhaps a fifth of the Himalaya's yield and ~1 large component per
+  cell, so on volume alone they are marginal. They are kept because a family
+  whose entire claim is "real void geometry" is weaker if every void comes from
+  one massif, under one radar look-direction, in one climate. The 7 Andes
+  granules cost ~8 MB of the fetch's 28.4 MB.
 - **Not NASADEM_SHHP.** NASADEM's reprocessing filled **52 to 63%** of SRTM's
   voids (NASADEM User Guide V1, Table 3), so an SHHP mask is the population that
   survived a better phase unwrapper: a smaller, differently-shaped phenomenon,
@@ -229,18 +247,66 @@ corrects this section on four points, each recorded below.
   GLO-30 below 50 degrees latitude are the *same lattice*, so the mask is
   cropped and pasted, never interpolated (P125 §10.1). The benchmark code
   asserts `|lat| < 50` rather than discovering it, since GLO-30 widens its
-  longitude spacing poleward.
-- **The fourth eval family, at its natural size distribution.** ~2,000
-  instances drawn **as measured — roughly 94% small, 5% medium, 1% large** —
-  reported as its own row, with the size histogram published beside the score,
-  and exempt from §3.2's bucket balancing. This is deliberate: the family is not
-  a fourth point of comparison against the bucketed synthetic families, it is a
-  **distribution-shift check** — do methods tuned on synthetic blobs hold up on
-  real void geometry, at the sizes real voids actually come in? Framed that way
-  the small-void skew is the experiment rather than a defect. Real voids are
-  strikingly non-compact (perimeter ~2.0 to 2.2x that of an equal-area disc) and
-  concentrate in steep terrain and radar shadow; the stratified transplant
-  preserves that difficulty rather than averaging it away.
+  longitude spacing poleward. **This protocol is not an invention** — mask
+  extraction plus stratum-matched relocation onto void-free terrain is
+  **Reuter et al. 2007**'s validation design, the method behind CGIAR-CSI's
+  SRTM v4 fill, and it is cited as such rather than presented as new (§10).
+- **Stratum assignment comes from GLO-30, not from SRTM.** Matching a void to a
+  ruggedness stratum requires knowing the terrain the void sits on — which SRTM,
+  by definition, never observed there. Two ways out, and only one is unbiased:
+  inferring the stratum from the observed SRTM pixels *surrounding* the void
+  measures the wrong terrain and biases systematically flat, because radar
+  shadow occurs precisely where the surroundings are less extreme than the hole.
+  So the stratum is computed from **GLO-30 at the void's own coordinates** —
+  void-free there, on the same lattice below 50 degrees, and through the same
+  code path that assigns strata to every other tile in the corpus. The SRTM
+  granule contributes the void's *shape* and nothing else.
+- **The size distribution is bimodal, and the ceiling is this benchmark's tile,
+  not nature.** Within the 16 to 160 px window the plan scores, the draw is
+  roughly **94% small, 5% medium, 1% large**. That window is not the whole
+  story and the writeup must not imply it is: real voids are abundant *below*
+  160 px and abundant again far *above* it — `N30E080`'s largest component is
+  ~1,289 px equivalent diameter and every void-rich cell holds several over
+  400 px — while 128 to 160 px sits in a genuine trough, big enough to be rare,
+  small enough that the giants overshoot it (P125 §11.2). The giants are
+  excluded because a 400 px void cannot fit inside a 224 px tile under §3.2's
+  40%-area cap, i.e. **by this benchmark's tile geometry, not by scarcity**.
+  The published size histogram therefore shows the excluded >160 px tail
+  alongside the scored range, so a reader can see what the tile size cut.
+- **Reported as two size sub-rows plus a count.** Instance budget per §3.2's
+  eval-instance contract, split as drawn:
+  - **real-small** (16 to 48 px) — the headline row. Its honest comparison
+    partner is the *synthetic small bucket within the same ruggedness band*,
+    not the synthetic pooled number, and tables state that explicitly.
+  - **real-medium+** (64 to 96 px) — reported separately so the headline row
+    stays size-comparable to synthetic small.
+  - **128 to 160 px** — reported as an **instance count with no metric
+    attached**. At ~1% of the draw split across ruggedness bands this is single
+    digits per cell; publishing a mean over it would invite a significance the
+    number cannot carry.
+- **Stratified by ruggedness, with a population floor.** Every sub-row is broken
+  out by the corpus's four collapsed ruggedness groups (§5). This is what makes
+  the family readable at all: p119 measured the classical baseline varying ~40x
+  across those bands against ~3x across size, so a pooled real-void number is a
+  statement about which terrain the voids happened to land on. **Any band with
+  fewer than 100 instances is reported as a count, not a metric.** Concentration
+  in the rugged bands (R3/R4) is *expected*, not a surprise — radar shadow is a
+  steep-terrain phenomenon — and a thin or empty R1 is a predicted outcome of
+  this design rather than a defect in it. The realised histogram is checked
+  against that expectation once the granules land, and this section amended if
+  it is badly wrong.
+- **What the family is for.** It is not a fourth point of metric comparison
+  against the bucketed synthetic families — with a 94%-small draw against
+  bucket-balanced synthetics, a difference in metres would confound shape with
+  size. It carries **C4**, an *ordering* claim: does the arm ranking established
+  on synthetic blobs still hold when the void shapes are real? Ordering is
+  immune to the size confound because every arm sees the identical instances.
+  Real voids are strikingly non-compact (perimeter ~2.0 to 2.2x that of an
+  equal-area disc) and concentrate in steep terrain and radar shadow; the
+  stratum-matched transplant preserves that difficulty rather than averaging it
+  away. **Do not upgrade C4 into a metric-delta claim without first adding a
+  size- and tile-matched synthetic control** — that control was considered and
+  deliberately not built, because the ordering claim is what this draw supports.
 
 ### 3.4 Diff-DEM cross-eval (transfer test)
 
@@ -341,8 +407,15 @@ where DEMAE must show it.
 
 All metrics computed **only inside the void**, in metres, per (family, bucket),
 over the fixed test mask lists. The real-void family is the one exception: it
-carries no bucket axis (§3.2), so it is a single row per arm, published with its
-size histogram so the reader can see what distribution the number is over.
+carries no bucket axis (§3.2), so instead of one row per bucket it reports
+**two size sub-rows per arm — real-small (16 to 48 px) and real-medium+
+(64 to 96 px) — plus a bare instance count for 128 to 160 px** (§3.3). Both
+sub-rows are published with the size histogram, including its excluded >160 px
+tail, so the reader can see what distribution the number is over and what the
+224 px tile cut off. Comparisons drawn against this family are against the
+synthetic **small** bucket within the same ruggedness band, never against a
+synthetic pooled number, and carry C4's ordering claim rather than a metric
+delta.
 
 - **Elevation error:** MAE, RMSE, NMAD (robust spread, standard in DEM QA), and
   the 95th percentile absolute error (tail behavior matters for hazards).
@@ -366,7 +439,11 @@ size histogram so the reader can see what distribution the number is over.
   ([`p119-fill-headroom.md`](p119-fill-headroom.md)), so a pooled per-arm number
   is dominated by the rugged tail and hides the fact that the flattest quartile
   is already at the resolution floor. Where table space forces a choice, drop a
-  size bucket before dropping a ruggedness band.
+  size bucket before dropping a ruggedness band. **Population floor:** a
+  (row, band) cell with fewer than 100 instances is reported as a count with no
+  metric rather than pooled into a neighbouring band. This binds hardest on the
+  real-void family, which takes whatever distribution SRTM gives it and is
+  expected to concentrate in R3/R4 (§3.3).
 - **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
   pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
@@ -395,7 +472,7 @@ size histogram so the reader can see what distribution the number is over.
    same prominence as wins; C3's low-label sweep is the pre-registered fallback
    claim.
 8. Pre-registration: this memo is committed before the first head trains;
-   success criteria C1-C3 are defined above the results, not after them.
+   success criteria C1-C4 are defined above the results, not after them.
 
 ## 7. Compute budget
 
@@ -505,8 +582,9 @@ every table, so the corrected figures are the ones to print.
 2. The results table (arms x buckets x strata, CIs marked) and three figures:
    RMSE vs void size per arm; the label-efficiency curve (C3); a hillshade
    panel grid (truth, voided, A1, A3, A5, A8) on two rugged and one flat tile.
-3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers,
-   plus the fairness checklist and the TerraMind caveats.
+3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
+   and C4 with a rank comparison, plus the fairness checklist and the TerraMind
+   caveats.
 4. If C1 holds, the same frozen-feature cache feeds Task 2's probes unchanged,
    which is why this ordering is efficient. **Two constraints on that contract
    are now measured** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
@@ -523,7 +601,11 @@ every table, so the corrected figures are the ones to print.
 Diff-DEM (github.com/kylelo/Diff-DEM; IEEE GRSL 2024) · SRTMGL1N
 (earthdata.nasa.gov, `.num` class raster; predicate and geometry measured in
 `p125-srtm-void-geometry.md`) · SRTM Collection User Guide V3 (Table 2, the
-`.NUM` fill values) · SRTM v2.1 (3 arc-second, Wayback per-tile capture of
+`.NUM` fill values) · **Reuter, Nelson & Jarvis 2007** (*Int. J. Geogr. Inf.
+Sci.* 21(9), 983–1008; the void-fill validation design this plan's §3.3
+transplant protocol follows — mask extraction plus stratum-matched relocation
+onto void-free terrain — and the method behind CGIAR-CSI's SRTM v4 fill) ·
+SRTM v2.1 (3 arc-second, Wayback per-tile capture of
 `dds.cr.usgs.gov`; degraded fallback only) · TerraMind (arXiv 2504.11171; tokenizer model card, Apache-2.0) · TerraMesh
 (arXiv 2504.11172, 10 m DEM resampling) · terratorch v1.2.10 source (encoder
 extraction path, normalization constants) · PANGAEA (arXiv 2412.04204, frozen
