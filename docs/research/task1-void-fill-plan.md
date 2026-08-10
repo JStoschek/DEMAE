@@ -17,12 +17,33 @@ defined before any number is seen:
   identical trained head*, on the same tiles, same masks, same seeds. This is
   the representation claim, and the fairest instrument for it.
 - **C2 (the model is useful):** fine-tuned DEMAE beats classical interpolation
-  (the operational status quo) on medium and large voids in metres, slope, and
-  drainage metrics, and stays at least even on small voids where splines are
-  strong.
+  (the operational status quo) in metres, slope, and **seam continuity** on
+  rugged terrain at every void size, and stays at least even on **flat terrain**,
+  where classical fill is already at the corpus's resolution floor. The parity
+  carve-out is by ruggedness, not by void size: p119 measured classical fill at
+  0.87 m MAE on small voids and 1.83 m on large ones in the flattest quartile —
+  against 12.7 m and 38.6 m in the roughest — so "small voids where splines are
+  strong" was the wrong exemption to grant
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)). **"Seam continuity"
+  replaces the original "drainage metrics" clause**, which fell with the
+  hydrological metrics: a 224 px window has no upstream context, so D8
+  accumulation near a tile edge is an artifact of the crop. The operational
+  argument is not dropped, only re-sited — an operator's complaint about a bad
+  fill is that it does not join up with the terrain around it, and §5's seam gap
+  measures exactly that ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
 - **C3 (label efficiency):** DEMAE-frozen reaches a given RMSE with far fewer
   head-training tiles than the UNet-from-scratch baseline (the 1k / 5k / 20k
   sweep). This is the foundation-model value proposition.
+- **C4 (the ranking survives real geometry):** the *ordering* of arms on real
+  SRTM void shapes, **within a ruggedness band**, does not contradict the
+  ordering on synthetic masks. This is deliberately an ordering claim and **not**
+  a metric-delta claim: the real-void family is drawn at its natural size
+  distribution and the synthetic families are bucket-balanced, so a difference
+  in metres between the two would confound void *shape* with void *size* (§3.3).
+  Ordering is confound-free because every arm is scored on the identical
+  instance set. C4 fails if an arm pair swaps rank between the synthetic and
+  real-void rows within the same band — which would put C1 in question, since
+  C1's comparison is made entirely on synthetic masks.
 
 If C2 partially fails (e.g., Diff-DEM wins on texture), that is reported, not
 hidden; PANGAEA-style candor is part of the deliverable. C1 and C3 are the
@@ -86,7 +107,13 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
 - **Primary regime (all arms): 224x224 at native 30 m.** The task is defined
   operationally on GLO-30, DEMAE's home turf and honestly labeled as such;
   TerraMind runs out-of-distribution here and the writeup says so. Both ViTs
-  produce a 14x14 token grid, so the head is byte-identical.
+  produce a 14x14 token grid, so the head is byte-identical. **Measured, and it
+  co-registers patch-for-patch:** TerraMind's DEM tokenizer was trained at 256 px
+  and its `pos_emb` is natively `[1, 768, 16, 16]`
+  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §6). The
+  next bullet is how that premise is made to hold without costing TerraMind
+  anything; it settles [#133](https://github.com/JStoschek/DEMAE/issues/133) and
+  supersedes the provisional text this bullet carried while #133 was open.
 - **TerraMind's position embedding is re-derived at 14x14, centre-anchored, not
   bicubically resized** (ADR-0011, [#133](https://github.com/JStoschek/DEMAE/issues/133)).
   The tokenizer was trained at 256 px, so `ViTEncoder.pos_emb` is natively
@@ -104,6 +131,7 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
   This makes both encoders in-distribution at 224 px simultaneously: TerraMind sees
   indices 1-14, a subset of its trained 0-15, and DEMAE sees its own native 0-13.
   Neither is handicapped, so §2.2 no longer owes the reader a caveat here.
+  Distinct from the secondary regime below, which is about GSD, not grid.
 - **Secondary regime (A5 only): TerraMind-native check.** The same geographic
   windows bilinearly resampled to 10 m, center-cropped to 224 px (covering
   2.24 km instead of 6.72 km), TerraMind + head retrained. If TerraMind-at-10m
@@ -185,14 +213,16 @@ A seeded `benchmark.masks` generator, one committed mask list per eval tile
   directly comparable). One void per tile per eval instance; every eval tile
   appears once per bucket **for the two synthetic families (i) and (ii)**, so
   bucket scores are computed over identical tile sets.
-- **The real-void family (iii) is exempt from bucket balancing.** Real SRTM
-  voids are ~94% small and the 128 to 160 px bucket is empty in practice — two
-  cells measured at true 1 arc-second returned 139 and 175 components in
-  16 to 48 px, 2 and 6 in 64 to 96, and **zero** in 128 to 160. Forcing
-  667-per-bucket would mean either fabricating large voids, which destroys the
-  only thing the family contributes, or silently reweighting, which makes it
-  non-comparable anyway. It is drawn at its natural size distribution and
-  reported as its own row instead (§3.3).
+- **The real-void family (iii) carries no bucket axis.** Two cells measured at
+  true 1 arc-second returned 139 and 175 components in 16 to 48 px, 2 and 6 in
+  64 to 96, and **zero** in 128 to 160. Forcing 667-per-bucket would mean either
+  fabricating large voids, which destroys the only thing the family contributes,
+  or silently reweighting, which makes it non-comparable anyway. It is drawn at
+  its natural size distribution and reported as its own rows instead (§3.3).
+  Note that the 128 to 160 px bucket is under separate pressure for the
+  *synthetic* families too — this section's interior-margin and 40%-area
+  constraints are jointly unsatisfiable above 141 px — so whether that bucket
+  survives at all is settled elsewhere, and this bullet does not assume it does.
 - **Constraints:** voids fully interior (≥ 8 px from tile edge); void may not
   cover > 40% of the tile; the same mask list is reused verbatim by every arm.
 
@@ -219,7 +249,13 @@ corrects this section on four points, each recorded below.
 - **Not the Atlas.** Measured void fractions: Himalaya 3.7 to 22.5%, Andes
   0.03 to 2.0%, Atlas 0.03 to 0.16%. Atlas cells yield 4 to 24 usable
   components each against the Himalaya's 174 to 689 — two orders of magnitude
-  poorer. It is dropped from the void-rich region list.
+  poorer. It is dropped from the void-rich region list. **The Andes stay, and
+  the reason is diversity, not volume**: at ~148 small components per cell they
+  contribute perhaps a fifth of the Himalaya's yield and ~1 large component per
+  cell, so on volume alone they are marginal. They are kept because a family
+  whose entire claim is "real void geometry" is weaker if every void comes from
+  one massif, under one radar look-direction, in one climate. The 7 Andes
+  granules cost ~8 MB of the fetch's 28.4 MB.
 - **Not NASADEM_SHHP.** NASADEM's reprocessing filled **52 to 63%** of SRTM's
   voids (NASADEM User Guide V1, Table 3), so an SHHP mask is the population that
   survived a better phase unwrapper: a smaller, differently-shaped phenomenon,
@@ -245,18 +281,66 @@ corrects this section on four points, each recorded below.
   GLO-30 below 50 degrees latitude are the *same lattice*, so the mask is
   cropped and pasted, never interpolated (P125 §10.1). The benchmark code
   asserts `|lat| < 50` rather than discovering it, since GLO-30 widens its
-  longitude spacing poleward.
-- **The fourth eval family, at its natural size distribution.** ~2,000
-  instances drawn **as measured — roughly 94% small, 5% medium, 1% large** —
-  reported as its own row, with the size histogram published beside the score,
-  and exempt from §3.2's bucket balancing. This is deliberate: the family is not
-  a fourth point of comparison against the bucketed synthetic families, it is a
-  **distribution-shift check** — do methods tuned on synthetic blobs hold up on
-  real void geometry, at the sizes real voids actually come in? Framed that way
-  the small-void skew is the experiment rather than a defect. Real voids are
-  strikingly non-compact (perimeter ~2.0 to 2.2x that of an equal-area disc) and
-  concentrate in steep terrain and radar shadow; the stratified transplant
-  preserves that difficulty rather than averaging it away.
+  longitude spacing poleward. **This protocol is not an invention** — mask
+  extraction plus stratum-matched relocation onto void-free terrain is
+  **Reuter et al. 2007**'s validation design, the method behind CGIAR-CSI's
+  SRTM v4 fill, and it is cited as such rather than presented as new (§10).
+- **Stratum assignment comes from GLO-30, not from SRTM.** Matching a void to a
+  ruggedness stratum requires knowing the terrain the void sits on — which SRTM,
+  by definition, never observed there. Two ways out, and only one is unbiased:
+  inferring the stratum from the observed SRTM pixels *surrounding* the void
+  measures the wrong terrain and biases systematically flat, because radar
+  shadow occurs precisely where the surroundings are less extreme than the hole.
+  So the stratum is computed from **GLO-30 at the void's own coordinates** —
+  void-free there, on the same lattice below 50 degrees, and through the same
+  code path that assigns strata to every other tile in the corpus. The SRTM
+  granule contributes the void's *shape* and nothing else.
+- **The size distribution is bimodal, and the ceiling is this benchmark's tile,
+  not nature.** Within the 16 to 160 px window the plan scores, the draw is
+  roughly **94% small, 5% medium, 1% large**. That window is not the whole
+  story and the writeup must not imply it is: real voids are abundant *below*
+  160 px and abundant again far *above* it — `N30E080`'s largest component is
+  ~1,289 px equivalent diameter and every void-rich cell holds several over
+  400 px — while 128 to 160 px sits in a genuine trough, big enough to be rare,
+  small enough that the giants overshoot it (P125 §11.2). The giants are
+  excluded because a 400 px void cannot fit inside a 224 px tile under §3.2's
+  40%-area cap, i.e. **by this benchmark's tile geometry, not by scarcity**.
+  The published size histogram therefore shows the excluded >160 px tail
+  alongside the scored range, so a reader can see what the tile size cut.
+- **Reported as two size sub-rows plus a count.** Instance budget per §3.2's
+  eval-instance contract, split as drawn:
+  - **real-small** (16 to 48 px) — the headline row. Its honest comparison
+    partner is the *synthetic small bucket within the same ruggedness band*,
+    not the synthetic pooled number, and tables state that explicitly.
+  - **real-medium+** (64 to 96 px) — reported separately so the headline row
+    stays size-comparable to synthetic small.
+  - **128 to 160 px** — reported as an **instance count with no metric
+    attached**. At ~1% of the draw split across ruggedness bands this is single
+    digits per cell; publishing a mean over it would invite a significance the
+    number cannot carry.
+- **Stratified by ruggedness, with a population floor.** Every sub-row is broken
+  out by the corpus's four collapsed ruggedness groups (§5). This is what makes
+  the family readable at all: p119 measured the classical baseline varying ~40x
+  across those bands against ~3x across size, so a pooled real-void number is a
+  statement about which terrain the voids happened to land on. **Any band with
+  fewer than 100 instances is reported as a count, not a metric.** Concentration
+  in the rugged bands (R3/R4) is *expected*, not a surprise — radar shadow is a
+  steep-terrain phenomenon — and a thin or empty R1 is a predicted outcome of
+  this design rather than a defect in it. The realised histogram is checked
+  against that expectation once the granules land, and this section amended if
+  it is badly wrong.
+- **What the family is for.** It is not a fourth point of metric comparison
+  against the bucketed synthetic families — with a 94%-small draw against
+  bucket-balanced synthetics, a difference in metres would confound shape with
+  size. It carries **C4**, an *ordering* claim: does the arm ranking established
+  on synthetic blobs still hold when the void shapes are real? Ordering is
+  immune to the size confound because every arm sees the identical instances.
+  Real voids are strikingly non-compact (perimeter ~2.0 to 2.2x that of an
+  equal-area disc) and concentrate in steep terrain and radar shadow; the
+  stratum-matched transplant preserves that difficulty rather than averaging it
+  away. **Do not upgrade C4 into a metric-delta claim without first adding a
+  size- and tile-matched synthetic control** — that control was considered and
+  deliberately not built, because the ordering claim is what this draw supports.
 
 ### 3.4 Diff-DEM cross-eval (transfer test)
 
@@ -297,11 +381,17 @@ One head spec, frozen across arms; only the input channel width differs
   every arm; tuning on the arm you hope wins is the classic thumb on the scale.
 - **Seeds:** 3 seeds per cell for A4/A5/A6/A7 at 20k; 2 seeds for the
   label-efficiency subsets. Report mean ± std.
-- **Features precomputed:** frozen patch tokens for all tiles are extracted once
-  per encoder to fp16 memmaps (~0.3 MB/tile, ~6 GB per encoder per 20k set),
-  so head training is loader-bound-cheap and reruns cost nothing on the GPU.
-  Note: precomputation fixes the A1-filled input per (tile, mask), which is
-  exactly the eval-time contract.
+- **Features are *not* precomputed** *(amended 2026-08-10, §7 —
+  [#120](https://github.com/JStoschek/DEMAE/issues/120))*. The frozen encoder runs inline
+  in the head step, and the void mask is redrawn every epoch per §3.2. The cache this
+  bullet used to specify — fp16 memmaps, 301 KB/tile, 5.6 GiB per encoder per 20k set —
+  was measured to save **$0.50** across the whole benchmark, because a frozen ViT-B
+  forward pass costs 0.179 ms. Against that it fixed the A1-filled input, and therefore
+  the mask, for all 50 epochs: the sentence this bullet used to end with ("precomputation
+  fixes the A1-filled input per (tile, mask), which is exactly the eval-time contract")
+  is true at eval time and is a **frozen training mask** at training time, which §3.2 does
+  not intend. The *eval* side is unchanged — the committed mask list fixes each test
+  instance's input exactly as before.
 
 ### 4.2 DEMAE native fine-tune (A3)
 
@@ -351,26 +441,95 @@ where DEMAE must show it.
 
 All metrics computed **only inside the void**, in metres, per (family, bucket),
 over the fixed test mask lists. The real-void family is the one exception: it
-carries no bucket axis (§3.2), so it is a single row per arm, published with its
-size histogram so the reader can see what distribution the number is over.
+carries no bucket axis (§3.2), so instead of one row per bucket it reports
+**two size sub-rows per arm — real-small (16 to 48 px) and real-medium+
+(64 to 96 px) — plus a bare instance count for 128 to 160 px** (§3.3). Both
+sub-rows are published with the size histogram, including its excluded >160 px
+tail, so the reader can see what distribution the number is over and what the
+224 px tile cut off. Comparisons drawn against this family are against the
+synthetic **small** bucket within the same ruggedness band, never against a
+synthetic pooled number, and carry C4's ordering claim rather than a metric
+delta.
 
-- **Elevation error:** MAE, RMSE, NMAD (robust spread, standard in DEM QA), and
-  the 95th percentile absolute error (tail behavior matters for hazards).
-- **Terrain derivatives:** slope RMSE (degrees), aspect error (circular
-  distance, slope-weighted so flat pixels do not dominate), profile-curvature
-  RMSE. Derivative fidelity is more meaningful than pixel RMSE for terrain,
-  and it is where blurry fills get caught.
-- **Hydrological plausibility:** fill each test DEM's void, compute D8 flow
-  accumulation (pysheds or WhiteboxTools) on truth vs filled, report log-flow
-  correlation inside and 2 px around the void, plus extracted stream-network
-  IoU at a fixed accumulation threshold. Drainage continuity is the
-  operational reason void quality matters.
-- **Perceptual/structural:** hillshade SSIM inside the void (hillshade, not raw
-  elevation, is what a human QA analyst looks at). LPIPS optional, not a
-  headline (its ImageNet features are off-domain for hillshades).
-- **Stratification:** every metric also reported by the corpus's ruggedness
-  strata (collapsed to 4 groups for table size). A method that wins on plains
-  and loses in mountains must be visible as such.
+The set below is **pre-registered and graded**: five headline columns per cell,
+four appendix ones, and nothing else. The grading is measured rather than
+argued — [`p123-metric-discrimination.md`](p123-metric-discrimination.md) scored
+every candidate over 24,000 A1 instances for **separation** (spread across the
+A1 variants over the within-cell instance spread; below ~1.0 a metric cannot
+rank arms above noise) and **redundancy** (within-cell Spearman against the rest
+of the set, never pooled, since terrain drives every metric at once). The rule
+applied is the one that motivated the measurement: a metric that cannot separate
+A1 from truth cannot separate the arms either.
+
+- **Elevation error (headline): RMSE and NMAD.** RMSE because C3 and §4.1's
+  early stop are already worded on it; NMAD because it separated best of all ten
+  candidates (2.51, worst cell 1.89) *and* is less redundant with RMSE (0.92)
+  than the 95th percentile is (0.99). **MAE and p95 move to the appendix** —
+  p95 is the weakest of the three and fails to separate the A1 variants at all
+  in its worst cell (0.86).
+- **Systematic offset (headline): mean per-instance |bias|** — the signed error
+  averaged within an instance, then its magnitude averaged over instances.
+  **The pooled mean signed error is deliberately not reported.** Measured, it
+  cancels to 0.003–0.9 m against MAE of 0.87–38.6 m, so it would print a null
+  for every arm; per-instance |bias| runs at roughly *half* of MAE, and 42–50%
+  of instances carry an offset exceeding half their own MAE. This column is a
+  **guard, not a discriminator**: its separation is modest (0.95) because its
+  job is to catch a fill sitting at the wrong absolute level, a failure mode no
+  other column sees. It is not to be dropped for ranking poorly.
+- **Terrain derivatives (headline): slope RMSE and slope-weighted aspect error**,
+  both from the **Zevenbergen–Thorne** quadratic surface — which profile
+  curvature needs anyway, so one kernel serves all three. ZT's first derivatives
+  are central differences and therefore *numerically identical* to the corpus's
+  own `dataset.metrics.slope_deg` (max divergence 0.0006° over 12,000
+  instances), which keeps benchmark slope and the `slope_mean` defining the
+  ruggedness bands the same quantity. **Horn was measured and rejected**: ~7%
+  different in level, 0.98 identical in ranking, and it would have bought that
+  nothing at the cost of the alignment. **Aspect is headline because it is the
+  only independent signal in the set** (within-cell Spearman −0.07 vs RMSE,
+  −0.02 vs NMAD, +0.26 vs slope) and separates well (1.46). **Profile curvature
+  moves to the appendix**: 0.72 redundant with slope, and unable to separate
+  variants in its worst cell (0.28).
+- **Derivatives score on the full void mask, not an eroded one.** A 3×3 kernel
+  one pixel inside the void does read ground truth, and that was expected to
+  hand an idle arm a free ride. Measured, the effect runs the other way: the
+  boundary ring is where a *discontinuous* fill gets caught, so eroding it
+  **halves** slope's separation (1.89 → 0.91). The free ride is real but worth
+  −0.005 to −0.107° on the smooth interpolators, against 17% of the scored
+  pixels on a small void. The eroded-mask slope is kept as an appendix
+  contamination control; the rule itself is stated in §6.
+- **Seam continuity (headline): the full-minus-eroded slope gap.** Free, since
+  both masks are already computed, and it sign-separates a fill that breaks at
+  the void boundary (+1.33° on the flat-fill control) from every smooth
+  interpolator (−0.005 to −0.107°). **This is what carries the operational half
+  of C2 now that drainage is gone**, and what makes §4.2's cross-fade auditable
+  rather than assumed.
+- **Perceptual/structural: nothing scored.** Hillshade SSIM was measured and
+  cut — weakest separator of all ten candidates (0.56) *and* among the most
+  redundant (−0.84 with slope, −0.42 with RMSE). LPIPS is cut with it, on this
+  section's own former hedge that ImageNet features are off-domain for
+  hillshades. The "what a QA analyst actually looks at" argument is carried by
+  §9's hillshade **panel figure**, which is where it belongs: a picture, not a
+  number nobody can act on.
+- **Stratification:** every metric also reported by ruggedness band, where the
+  four bands are the **quartiles of `slope_mean` over the eligible test pool**,
+  cut on the pool itself — not a collapse of the corpus's k-means strata. The
+  earlier wording ("the corpus's ruggedness strata, collapsed to 4 groups") did
+  not describe a defined operation: those strata are k-means clusters over a
+  six-metric descriptor vector (ADR-0004) with no ordering along a ruggedness
+  axis, so there is no such thing as collapsing them to four. The quartile cut
+  is what p119 and p123 both measured on, and every ruggedness number this plan
+  cites is on it. A method that wins on plains
+  and loses in mountains must be visible as such. This is **load-bearing, not
+  cosmetic**: p119 measured the classical baseline's error varying ~40× across
+  these four bands but only ~3× across the size buckets
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)), so a pooled per-arm number
+  is dominated by the rugged tail and hides the fact that the flattest quartile
+  is already at the resolution floor. Where table space forces a choice, drop a
+  size bucket before dropping a ruggedness band. **Population floor:** a
+  (row, band) cell with fewer than 100 instances is reported as a count with no
+  metric rather than pooled into a neighbouring band. This binds hardest on the
+  real-void family, which takes whatever distribution SRTM gives it and is
+  expected to concentrate in R3/R4 (§3.3).
 - **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
   pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
@@ -385,6 +544,12 @@ size histogram so the reader can see what distribution the number is over.
    head hyperparams tuned once on the neutral encoder (A6), then frozen.
 2. Each encoder fed its native normalization; scoring always in metres;
    per-tile stats from non-void pixels only; identity-mask unit test committed.
+   Derivative metrics score the **full** void mask, including the boundary ring
+   whose 3x3 kernel partly reads true pixels. That ring is included knowingly:
+   it is where a discontinuous fill is caught, and eroding it halves slope's
+   ability to separate arms. The free ride it grants a *smooth* fill was
+   measured at −0.005 to −0.107° and is published beside the eroded-mask control
+   rather than argued away ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
 3. GSD stated per regime; primary regime is DEMAE-native and says so;
    TerraMind gets a retrained head in its own 10 m regime before any
    conclusion is drawn about it.
@@ -399,32 +564,103 @@ size histogram so the reader can see what distribution the number is over.
    same prominence as wins; C3's low-label sweep is the pre-registered fallback
    claim.
 8. Pre-registration: this memo is committed before the first head trains;
-   success criteria C1-C3 are defined above the results, not after them.
+   success criteria C1-C4 are defined above the results, not after them.
 
 ## 7. Compute budget
 
-| Item | 4090-hours | Notes |
-|---|---|---|
-| Feature precompute (3 to 4 encoders x 27k tiles) | 2-3 | fp16 memmaps |
-| Head tuning on A6 + frozen-arm training (A4/A5/A6, 3 seeds, 20k) | 6-9 | heads are ~3M params over cached features |
-| A7 UNet, 3 seeds + label sweep | 4-6 | the priciest baseline |
-| Label-efficiency sweep for A4/A5/A6 (1k, 5k; 2 seeds) | 2-3 | cached features again |
-| A3 fine-tune (R1; +R4 if it fits) | 4-8 | 20 epochs x 20k tiles |
-| A2, A9, A8 inference + secondary 10 m regime | 2-4 | A8 diffusion sampling is the slow one |
-| Eval passes, hydrology metrics | CPU | pysheds/Whitebox, local |
-| **Total** | **20-33** | **~$7-12 at $0.34/hr**, inside budget with slack |
+**Measured, 2026-08-10 — [`p120-primitive-costs.md`](p120-primitive-costs.md)
+([#120](https://github.com/JStoschek/DEMAE/issues/120)).** The table below replaces an
+estimate that was high by 8 to 13x and was denominated in the wrong card at the wrong
+price: this project rents an **RTX 5090** at a real **$0.4016/hr**, not a 4090 at $0.34
+(see [`phase1-pretraining-plan.md`](../phase1-pretraining-plan.md)'s hardware line and
+§12). Every line is a measured primitive times a count, and the primitives are published so
+any new arm can be costed without a fresh run.
+
+Costed for the design §4.1 now specifies — **frozen encoder inline, no feature cache**:
+
+| Item | Count | 5090-min | Notes |
+|---|---|---|---|
+| **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **46.1** | priciest single arm; UNet epoch is 15.4 s against the head's 1.0 |
+| Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
+| Head training A4/A5/A6 | 5 cells x 3 seeds x 50 ep x 20k | 45.1 | |
+| Label-efficiency sweep (1k, 5k; 2 seeds) | 5 cells x 2 seeds x 50 ep x 6k | 9.0 | |
+| Inference over the eval instances | 47 passes x 32k | 4.5 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
+| A3 fine-tune (ViT-B + ViT-S) | 20 ep x 20k | 3.1 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch |
+| **GPU total** | | **153.6 min = 2.56 h** | **$1.03** at $0.4016/hr |
+| **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
+| Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **2-5 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+
+The 48 scored passes are 24 at 20k — A1, A2 and A3 at both capacities, A9, the five frozen
+cells at 3 seeds, A7 at 3 seeds — plus 24 for the label-efficiency sweep, which §6 item 7
+makes a headline claim and therefore scores rather than merely trains.
+
+**The budget is not a constraint and should stop being treated as one.** At $1.03 of GPU
+against a $25 target — the CPU hours are the project's own laptop, not rent — no line here justifies a spot-instance strategy or a resume design;
+#117's standing note that *attention and wall-clock are the real budget* is now measured
+rather than asserted. The one number that could still move the total is A9's.
+
+**Why no feature cache** (the §4.1 amendment, priced): precomputing frozen features is
+*cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
+and against that it costs 30.3 GiB, 7.9 TB of re-reads, and a design constraint §4.1 did
+not name: a cached feature fixes the A1-filled input, hence the mask, so head training
+would see **one void per tile for all 50 epochs**, contradicting §3.2's on-the-fly
+`(tile_id, epoch)` masks. Run the encoder inline and redraw the mask each epoch. §9.4's
+Task-2 reuse constraint is unaffected: it binds the frozen-feature *contract*, not whether
+features were written to disk.
+
+**§4.1's "~3M params" is wrong** — the head as specified there measures **1.08M** (384-d)
+and **1.18M** (768-d). Cost is barely affected, but §6 item 4 puts parameter counts in
+every table, so the corrected figures are the ones to print.
 
 ## 8. Risks
 
 - **Norm-inversion bugs** silently flatter or sabotage an arm: the identity
   test plus a golden-tile fixture (known void, hand-checked fill) gate every
   arm's eval.
-- **A1 pre-fill quality ceiling:** if bilinear fill is too good on small voids,
-  learned residuals look like noise; the small-void bucket exists to show this
-  honestly (C2 only requires parity there).
-- **TerraMind feature extraction pitfalls:** `diffusers==0.30.0` pin, NaN
-  filling before the global z-score, and confirming the 14x14 grid on 224 px
-  input; §3.4 of the selection memo has the verified code path.
+- **A1 pre-fill quality ceiling: measured, and the saturating axis is ruggedness,
+  not void size** ([`p119-fill-headroom.md`](p119-fill-headroom.md)). This row
+  used to read "if bilinear fill is too good on small voids, learned residuals
+  look like noise; the small-void bucket exists to show this honestly." The
+  measurement — 1,600 real corpus tiles, 48,000 scored instances — says the
+  bucket axis is the wrong one:
+  - **Small voids are not saturated.** Pooled, the best classical variant leaves
+    **MAE 5.2 m** on the small bucket, against GLO-30's own σ ≈ 2.43 m
+    (LE90 4 m / 1.645). Only 42% of small-void instances beat σ. There is ample
+    residual signal there.
+  - **Flat terrain is saturated, at every size.** On the flattest ruggedness
+    quartile (R1, median slope 1.0°, relief 40 m) a *small* void fills to
+    **0.87 m MAE** with 96% of instances under σ, and even a *large* void fills
+    to **1.83 m**. At that point the fill is within a factor of two of the
+    int16-metre storage quantisation and there is nothing left to learn.
+  - **Rugged terrain has the headroom.** On R4 (12.9°, 583 m relief) a small void
+    already costs **12.7 m** and a large one **38.6 m**, with 0% beating σ. The
+    spread across ruggedness bands is ~40×; across size buckets, ~3×.
+
+  Consequences, applied elsewhere in this plan: §5's ruggedness stratification is
+  promoted from a table-completeness nicety to the axis the headline result lives
+  on, and C2's parity carve-out (§0) is retargeted from the small-void bucket to
+  flat terrain. Which classical fill is chosen is *not* a risk —
+  TPS beats bilinear `fillnodata` by a median of 0.2 m and wins only 55% of
+  paired instances, so A1's identity barely moves the ceiling.
+- **TerraMind feature extraction: run, not hypothetical**
+  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)). The
+  path works end to end in 36 s on the laptop, on terratorch 1.2.10 /
+  diffusers 0.39.0, and the weights are public Apache-2.0 with **no login**.
+  Three of this row's original four pitfalls did not survive the run:
+  - **The `diffusers==0.30.0` pin does not exist.** terratorch declares a bare
+    `diffusers`; `0.30.0` appears only in the text of an import-failure warning.
+    The real hazard is the opposite one — nothing is pinned, so a future
+    `diffusers` can break the tokenizer import with no lockfile signal. Pin
+    `diffusers` in the benchmark's own environment, at the version it is
+    verified on.
+  - **The 14x14 grid is confirmed** on 224 px input, with the resampling caveat
+    now recorded in §2.2.
+  - **Global-vs-per-tile normalization is the live one, and it fails silently.**
+    DEMAE's loader emits per-tile-standardized tiles; TerraMind wants one global
+    affine over metres. The encoder accepts both and returns a plausible
+    `[1, 768, 14, 14]` either way, with no error. The TerraMind arms therefore
+    cannot consume the pretraining loader's output — see §9.4.
+  - NaN filling before the z-score is untested here and stands as written.
 - **Contiguous-mask shift sinks A2:** expected and framed as the zero-shot vs
   fine-tuned delta, not buried.
 - **Spot-instance reclaim:** heads checkpoint every epoch to the synced
@@ -438,17 +674,33 @@ size histogram so the reader can see what distribution the number is over.
 2. The results table (arms x buckets x strata, CIs marked) and three figures:
    RMSE vs void size per arm; the label-efficiency curve (C3); a hillshade
    panel grid (truth, voided, A1, A3, A5, A8) on two rugged and one flat tile.
-3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers,
-   plus the fairness checklist and the TerraMind caveats.
+   The hillshade panel is **load-bearing, not decorative**: §5 scores no
+   perceptual metric, so this figure is the whole of the visual-quality
+   evidence and is not to be cut for space.
+3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
+   and C4 with a rank comparison, plus the fairness checklist and the TerraMind
+   caveats.
 4. If C1 holds, the same frozen-feature cache feeds Task 2's probes unchanged,
-   which is why this ordering is efficient.
+   which is why this ordering is efficient. **Two constraints on that contract
+   are now measured** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
+   the TerraMind arms take **raw metres under TerraMind's global affine**, never
+   the pretraining loader's per-tile-standardized output (§7 there) — so a cache
+   shared with the DEMAE arms has to distinguish the two normalizations somehow,
+   and how is a design call this ticket does not make; and the extractor needs
+   only `encoder` + `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the
+   1.15 GB checkpoint** — since the remaining 196M is the diffusion decoder that
+   no in-scope arm calls.
 
 ## 10. Key sources
 
 Diff-DEM (github.com/kylelo/Diff-DEM; IEEE GRSL 2024) · SRTMGL1N
 (earthdata.nasa.gov, `.num` class raster; predicate and geometry measured in
 `p125-srtm-void-geometry.md`) · SRTM Collection User Guide V3 (Table 2, the
-`.NUM` fill values) · SRTM v2.1 (3 arc-second, Wayback per-tile capture of
+`.NUM` fill values) · **Reuter, Nelson & Jarvis 2007** (*Int. J. Geogr. Inf.
+Sci.* 21(9), 983–1008; the void-fill validation design this plan's §3.3
+transplant protocol follows — mask extraction plus stratum-matched relocation
+onto void-free terrain — and the method behind CGIAR-CSI's SRTM v4 fill) ·
+SRTM v2.1 (3 arc-second, Wayback per-tile capture of
 `dds.cr.usgs.gov`; degraded fallback only) · TerraMind (arXiv 2504.11171; tokenizer model card, Apache-2.0) · TerraMesh
 (arXiv 2504.11172, 10 m DEM resampling) · terratorch v1.2.10 source (encoder
 extraction path, normalization constants) · PANGAEA (arXiv 2412.04204, frozen

@@ -1,0 +1,99 @@
+{
+  "constants": {
+    "matches_this_script": true,
+    "mean": 670.665,
+    "modality": "tok_dem@224",
+    "source": "terratorch.models.backbones.terramind",
+    "std": 951.272
+  },
+  "device": "cpu",
+  "encoder_feature_stats": {
+    "max": 27.949323654174805,
+    "mean": 0.07225754857063293,
+    "min": -40.710289001464844,
+    "std": 2.6495838165283203
+  },
+  "encoder_output_dtype": "float32",
+  "encoder_output_shape": [
+    1,
+    768,
+    14,
+    14
+  ],
+  "encoder_output_shape_at_256": [
+    1,
+    768,
+    16,
+    16
+  ],
+  "encoder_params": 90172416,
+  "input_shape": [
+    1,
+    1,
+    224,
+    224
+  ],
+  "input_stats": {
+    "mean": 1.1757619380950928,
+    "std": 0.25657355785369873
+  },
+  "intermediate_shape": [
+    1,
+    768,
+    14,
+    14
+  ],
+  "intermediates_all_same_shape": true,
+  "issue": 118,
+  "last_intermediate_is_encoder_output": true,
+  "model": "terramind_v1_tokenizer_dem",
+  "n_intermediates": 12,
+  "params": {
+    "decoder": 196140560,
+    "encoder": 90172416,
+    "quant_proj": 3845,
+    "quantize": 0,
+    "total": 286316821
+  },
+  "pos_emb_is_interpolated_at_224": true,
+  "pos_emb_shape": [
+    1,
+    768,
+    16,
+    16
+  ],
+  "prepare_input_is_identity": true,
+  "quant_proj_module": "Conv2d(768, 5, kernel_size=(1, 1), stride=(1, 1))",
+  "quant_proj_output_shape": [
+    1,
+    5,
+    14,
+    14
+  ],
+  "tile": {
+    "content_hash": "3218118173686835670",
+    "lat": 0.5955555555555556,
+    "local_relief_metres": 1165.4765625,
+    "lon": 30.155555555555555,
+    "mean_metres": 1789.1343994140625,
+    "split": "test",
+    "std_metres": 244.06881713867188,
+    "stratum_id": 12,
+    "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1344_448"
+  },
+  "versions": {
+    "diffusers": "0.39.0",
+    "numpy": "2.5.1",
+    "terratorch": "1.2.10",
+    "timm": "1.0.28",
+    "torch": "2.13.0"
+  },
+  "weights": {
+    "bytes": 1145511376,
+    "gated": false,
+    "hf_hub_filename": "TerraMind_Tokenizer_DEM.pt",
+    "hf_hub_id": "ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM",
+    "licence": "apache-2.0",
+    "needs_account": false
+  }
+}
