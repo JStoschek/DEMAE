@@ -431,11 +431,44 @@ no mask token in inference mode). Convention, applied identically to A4/A5/A6/A7
 2. Encode the filled tile with the frozen encoder.
 3. Concatenate the binary void mask (downsampled to the token grid, and at full
    resolution inside the head's upsampling path) to the head input.
-4. The head predicts a **residual over the A1 fill**, not raw elevation.
-   Residual formulation is current best practice in the DEM-correction
-   literature (GrounDiff, FathomDEM-style pipelines) and means every learned
-   arm starts from the classical baseline and must *improve* it; a head that
-   learns nothing scores exactly A1, which makes the table legible.
+4. The head predicts a **residual over the A1 fill**, not raw elevation. This
+   means every learned arm starts from the classical baseline and must
+   *improve* it; a head that learns nothing scores exactly A1, which makes the
+   table legible.
+
+   **The precedent has two halves, and they are different objects**
+   *(amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129);
+   this bullet used to call the residual "current best practice in the
+   DEM-correction literature (GrounDiff, FathomDEM-style pipelines)", which
+   attributes to GrounDiff both a claim it never makes and a base surface it
+   does not use, [#124](https://github.com/JStoschek/DEMAE/issues/124) §6.1)*:
+
+   - **Residual over an *interpolated* base is the classical void-filling
+     convention**, and it predates the learned literature by ~20 years:
+     Grohman, Kroenung & Strebeck's delta surface fill (*PE&RS* 72(3), 2006) and
+     **Luedeling, Siebert & Buerkert's TIN delta surface** (*ISPRS J.* 62(4),
+     2007), whose own §3.1 describes this construction in words — "adding this
+     difference surface to the SRTM base surface results in an elevation model
+     that accounts for the varying vertical bias within the void". Substitute
+     "A1 fill" for "SRTM base surface" and "head output" for "difference
+     surface" and it is this bullet. That is the citation this plan wants: a
+     void-filling paper, with a base surface interpolated across the void.
+   - **Residual over the *input* surface is what modern learned DEM correction
+     does**, which is a different base. GrounDiff's residual is the nDSM over
+     the observed DSM (that paper's §3.2: **Eq. 4** emits the residual `r̂` and
+     per-pixel confidence logits `ℓ`, and **Eq. 5** gates the ungated DTM
+     branch `s − r̂` against the DSM `s` itself), and FathomDEM's output
+     is "the per-pixel error in the COPDEM values". The evidence worth taking
+     from that lineage is a measurement rather than a convention — GrounDiff's
+     **Table 4 ablation**, "predicting residuals (nDSM) instead of absolute
+     elevations improves accuracy by 17%".
+   - **Neither modern paper does void filling at all.** GrounDiff is DSM→DTM
+     ground extraction over complete rasters and gap filling appears nowhere in
+     it; FathomDEM corrects an observed surface it never has to invent. That is
+     precisely why their base differs from this plan's: **inside a void there is
+     no input to be a residual to**, so A1 has to manufacture one. The two
+     halves are cited for different things — the classical line for the
+     construction, the learned line for the 17%.
 
 DEMAE's native arms (A2/A3) instead use token dropping, which is the honest
 representation of "MAE inpaints natively"; both conventions are documented and
@@ -492,7 +525,20 @@ sees is a committed input rather than a reproduction of the generator's RNG.
   ([#128](https://github.com/JStoschek/DEMAE/issues/128)) and is deliberately
   *not* replaced by another competitor's protocol. Nothing about the parameter
   changes — only its stated reason, which was resting on a comparability §0
-  now denies. Why the size axis is worth having at all is a terrain argument,
+  now denies. **For the record of what that clause was worth even on its own
+  terms** ([#124](https://github.com/JStoschek/DEMAE/issues/124) §3.2,
+  [#129](https://github.com/JStoschek/DEMAE/issues/129)): the match it asserted
+  was in *file pixels only*. Diff-DEM buckets 64–96 / 96–128 / 128–160 on a
+  256 px tile at 10 m, so this plan shares two of its three ranges even
+  nominally — 64–96 exactly, 128–160 only up to the 158 top set above — while
+  **the middle one, 96–128, is omitted** and a small bucket (16–48) is added
+  below the whole range. And a shared pixel boundary is not a shared void: at
+  30 m the same pixel count is **3× the ground extent**. What the pixel match
+  approximately preserves is the void's size *relative to its tile* — 25–62% of
+  tile width there against 29–71% here — which is a **design convenience**, a
+  reason the two protocols probe voids of the same relative severity and never
+  a reason their metres could share a column. Why the size axis is worth having
+  at all is a terrain argument,
   measured in [#119](https://github.com/JStoschek/DEMAE/issues/119) and
   [#126](https://github.com/JStoschek/DEMAE/issues/126), not a comparability
   one. One void per tile per eval instance; every eval tile
@@ -870,11 +916,22 @@ low-label regime, and C3 is where DEMAE must show it.
 3. *(was: precompute frozen features — deleted, §4.1. There is no feature
    precompute step; the encoder runs inline.)*
 4. Tune head hyperparams on A6/val; freeze.
-5. Run A4, A5, A6, A7 at 20k; then the 1k/5k sweep; then A3; then A2/A9
-   (inference only). **That is the whole run list** — the A8 cross-eval and the
-   secondary 10 m regime were both ruled out of scope and are no longer tail
-   items waiting for spare budget
-   ([#128](https://github.com/JStoschek/DEMAE/issues/128)).
+5. Run the **four primary frozen cells at three seeds each — A4-R5, A4-R4, A5,
+   A6 — plus A7 at three seeds, and the two ViT-S appendix cells (A4-S, A6-S)
+   at one seed**, all at 20k; then the 1k/5k sweep (R4 and ViT-S are both out of
+   it); then A3; then A2/A9 (inference only). **That is the whole run list** —
+   the A8 cross-eval and the secondary 10 m regime were both ruled out of scope
+   and are no longer tail items waiting for spare budget
+   ([#128](https://github.com/JStoschek/DEMAE/issues/128)). *(This step read
+   "Run A4, A5, A6, A7 at 20k" until
+   [#129](https://github.com/JStoschek/DEMAE/issues/129), which is the arm list
+   from before §2.3's rewrite split A4 by init and cut ViT-S to two single-seed
+   appendix cells; §7's 39-pass count has been on the current shape since
+   [#122](https://github.com/JStoschek/DEMAE/issues/122) and the order of
+   operations had not caught up. **§7's pass breakdown is the authority on cell
+   and seed counts**; this step orders them and should be re-read against it
+   rather than maintained beside it, which is how it drifted in the first
+   place.)*
 
 ## 5. Metrics and statistics
 
@@ -915,6 +972,29 @@ A1 from truth cannot separate the arms either.
   than the 95th percentile is (0.99). **MAE and p95 move to the appendix** —
   p95 is the weakest of the three and fails to separate the A1 variants at all
   in its worst cell (0.86).
+
+  **NMAD and p95 both come from one source, and it should be named**
+  *(amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129);
+  every reading in this paragraph is
+  [`p124-voidfill-comparability.md`](p124-voidfill-comparability.md) §7.4's,
+  which read the paper in full)*:
+  Höhle & Höhle 2009 (*ISPRS J.* 64(4), 398–406) **Table 2**, "Proposed accuracy
+  measures for DEMs", whose argument is that DEM error distributions are
+  heavy-tailed so the Gaussian measures are the wrong ones. That table lists
+  four — median error, **NMAD** (its Eq. 2, `1.4826 · median|Δh − m|`), the
+  68.3% quantile of |Δh|, and the **95% quantile of |Δh|**. This plan took two
+  of the four without saying so, and the paper gives p95 a better justification
+  than the bare "tail behaviour matters" this section used to carry: 95% of
+  errors lie in `[0, Q̂(0.95)]` and the remaining 5% "can be of any value",
+  which is what makes it robust to up to 5% blunders. The grading above is why
+  those two land where they do; the citation is why they were candidates at all.
+  Two further notes from the same paper, both load-bearing elsewhere here:
+  non-parametric measures are already required for *non-open terrain* by the
+  ASPRS Lidar Committee (2004), which is the field's own precedent for robust
+  reporting exactly where terrain is hard; and the paper's own suggested
+  extension is "modelling the p-quantile as a function of terrain classes" —
+  i.e. the stratification bullet below is this paper's generalisation, not an
+  invention of this plan.
 - **Systematic offset (headline): mean per-instance |bias|** — the signed error
   averaged within an instance, then its magnitude averaged over instances.
   **The pooled mean signed error is deliberately not reported.** Measured, it
@@ -982,7 +1062,24 @@ A1 from truth cannot separate the arms either.
   axis, so there is no such thing as collapsing them to four. The quartile cut
   is what p119 and p123 both measured on, and every ruggedness number this plan
   cites is on it. A method that wins on plains
-  and loses in mountains must be visible as such. This is **load-bearing, not
+  and loses in mountains must be visible as such. **The precedent is
+  FathomDEM Table 1 *and*, closer to home, Luedeling et al. 2007 Table 3**
+  *(added 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129))*.
+  FathomDEM reports ME/MAE/RMSE across 23 landscape and land-cover masks and
+  reads them for meaning — its worst accuracy is in steep slopes, and its
+  Bare-class stratum is used to show the model correctly leaves already-good
+  pixels alone. Luedeling's Table 3 is the same practice **on this exact task**:
+  ∆GPS error against 187,500 differential-GPS points, **inside vs outside the
+  void**, in four slope classes (0–10°, 10–20°, 20–30°, 30–60°), and its
+  headline is a stratification result — the delta-filled surface's ∆GPS spread
+  inside the voids runs **58.8 m in the flattest class against 106.4 m in the
+  steepest**. Those two endpoints are what
+  [`p124-voidfill-comparability.md`](p124-voidfill-comparability.md) §6.3
+  records from the paper, and they are what this citation rests on; the two
+  intermediate classes were not read across, so **nothing here claims the rise
+  is monotonic**. The sentence above is that table, in 2007, and a
+  void-filling paper is the better of the two citations for it. This is
+  **load-bearing, not
   cosmetic**: p119 measured the classical baseline's error varying ~40× across
   these four bands but only ~3× across the size buckets
   ([`p119-fill-headroom.md`](p119-fill-headroom.md)), so a pooled per-arm number
@@ -1320,6 +1417,25 @@ every table, so the corrected figures are the ones to print.
 3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
    and C4 with a rank comparison, plus the fairness checklist and the TerraMind
    caveats.
+
+   **The memo opens on §0's incomparability paragraph, not on a comparison**
+   *(amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129))*.
+   §0's "internally controlled comparison, and there is nothing external to
+   stand it beside" is a deliverable, not a caveat: it is what stops a reader
+   arriving at the table expecting a competitor column and reading its absence
+   as an omission. It goes in the memo in the same load-bearing position §6
+   gives the fairness checklist. The reason this needs saying is that void
+   filling was **selected** partly on the opposite premise —
+   [`downstream-task-selection.md`](downstream-task-selection.md) §1 criterion 4
+   ranked it because open competitor code "lands next to something". That reason
+   did not survive [#124](https://github.com/JStoschek/DEMAE/issues/124) and
+   [#128](https://github.com/JStoschek/DEMAE/issues/128), and is struck in the
+   memo that carries it. **The task remains the right first choice on the
+   reasons that did survive** — the MAE decoder is natively an inpainter, it is
+   the cheapest of the candidate tasks, and the money plot (before/after
+   hillshades) is strong — so nothing about this plan's existence rests on the
+   struck one. Writing that down is the difference between a selection that was
+   re-checked and one that was never revisited.
 4. **What Task 2 inherits is the frozen-feature *extractor contract*, not a
    feature cache** *(amended 2026-08-11 —
    [#121](https://github.com/JStoschek/DEMAE/issues/121))*. This item used to
@@ -1385,7 +1501,7 @@ every table, so the corrected figures are the ones to print.
      TerraMind arm's figure does not exist yet and the build session measures it
      on first run rather than inheriting this one.
    - **`extractor_spec.json` is committed** and joins the family whose defining
-     property is that the committed file is what later phases re-read (§3.5). It
+     property is that the committed file is what later phases re-read (§3.4). It
      re-checks itself at load — encoder identity and checkpoint md5, TerraMind's
      constants (the **named** v1 lookup §2.1 requires, *and* its value against
      `670.665 / 951.272`: the name is what picks the right pair of the three that
@@ -1425,7 +1541,20 @@ SRTM v2.1 (3 arc-second, Wayback per-tile capture of
 terratorch v1.2.10 source (encoder extraction path, normalization constants,
 `tokenizer_register.py`'s per-modality `epochs=20` for DEM) · Major TOM (arXiv
 2402.12095, the 10 km grid whose 10.68 km cells overlap) · PANGAEA (arXiv 2412.04204, frozen
-protocol + baseline bar) · MAE (arXiv 2111.06377) · GrounDiff (arXiv 2511.10391,
-residual formulation) · FathomDEM (ERL 2025, stratified DEM eval practice) ·
+protocol + baseline bar) · MAE (arXiv 2111.06377) · **Grohman, Kroenung &
+Strebeck 2006** (*Photogramm. Eng. Remote Sens.* 72(3), 213–216; the Delta
+Surface Fill method — residual over an interpolated base, §2.4 — *not reached in
+full text, characterised through Luedeling et al. 2007 who describe it in
+detail*) · **Luedeling, Siebert & Buerkert 2007** (*ISPRS J. Photogramm. Remote
+Sens.* 62(4), 283–294, doi:10.1016/j.isprsjprs.2007.05.004; the TIN delta
+surface — §2.4's construction in words, and **Table 3**, void-fill error by
+slope class inside vs outside the void, which is §5's stratification on this
+task) · **Höhle & Höhle 2009** (*ISPRS J. Photogramm. Remote Sens.* 64(4),
+398–406, doi:10.1016/j.isprsjprs.2009.02.003; **Table 2**, the robust DEM
+accuracy measures §5's NMAD and p95 are two of) · GrounDiff (arXiv 2511.10391;
+residual over the **input DSM**, and the **Table 4** 17% ablation — cited for
+the measurement, not for a convention, and it does no void filling, §2.4) ·
+FathomDEM (ERL 2025; residual over the input COPDEM, and **Table 1**'s
+mask-stratified reporting) ·
 Kornblith et al. (arXiv 1905.00414) for the CKA follow-up if features get
 compared directly.
