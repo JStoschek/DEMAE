@@ -26,7 +26,10 @@ defined before any number is seen:
   0.87 m MAE on small voids and 1.83 m on large ones in the flattest quartile —
   against 12.7 m and 38.6 m in the roughest — so "small voids where splines are
   strong" was the wrong exemption to grant
-  ([`p119-fill-headroom.md`](p119-fill-headroom.md)). **"Seam continuity"
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)). **The "at every void size"
+  half is read off §9's RMSE-vs-void-size figure, not off the table**, which
+  pools the size buckets ([#136](https://github.com/JStoschek/DEMAE/issues/136))
+  — which is why that figure is load-bearing. **"Seam continuity"
   replaces the original "drainage metrics" clause**, which fell with the
   hydrological metrics: a 224 px window has no upstream context, so D8
   accumulation near a tile edge is an artifact of the crop. The operational
@@ -52,7 +55,12 @@ defined before any number is seen:
   quartile ([#135](https://github.com/JStoschek/DEMAE/issues/135)), so C4 is
   evaluable in R4 and nowhere else. That narrows the claim and states the
   narrowing up front — and R4 is also where the arms have the most room to
-  separate, so it is the band in which a rank swap says the most about C1.
+  separate, so it is the band in which a rank swap says the most about C1. **It
+  prints as its own rank block** — synthetic blob small, real-small and
+  real-medium+ in R4, ranked on RMSE and slope RMSE
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136)) — so that the ordering
+  claim is what the reader is handed, rather than three columns of metres they
+  would be free to subtract.
 
 If C2 partially fails (e.g., A7 wins on seam continuity while losing on metres),
 that is reported, not
@@ -813,7 +821,13 @@ low-label regime, and C3 is where DEMAE must show it.
 ## 5. Metrics and statistics
 
 All metrics computed **only inside the void**, in metres, per (family, bucket),
-over the fixed test mask lists. The real-void family is the one exception: it
+over the fixed test mask lists. **Computed and printed are different questions**,
+and this section settles both: every metric is computed for every
+(arm, family, bucket, band) cell and committed to the results parquet, while the
+*printed* table is a deliberate subset fixed in advance under **The printed
+table** below ([#136](https://github.com/JStoschek/DEMAE/issues/136)). Nothing
+below that collapses an axis for print discards a number.
+The real-void family is the one exception: it
 carries no bucket axis (§3.2), so instead of one row per bucket it reports
 **two size sub-rows per arm — real-small (16 to 48 px) and real-medium+
 (64 to 96 px) — plus a bare instance count for 128 to 160 px** (§3.3). Both
@@ -879,6 +893,21 @@ A1 from truth cannot separate the arms either.
   interpolator (−0.005 to −0.107°). **This is what carries the operational half
   of C2 now that drainage is gone**, and what makes §4.2's cross-fade auditable
   rather than assumed.
+
+  **Printed as signed degrees to 3 dp, with the sign carried as a visual channel
+  rather than left to be read off the digits, and against a threshold fixed here
+  before any arm runs: a gap above +0.15° is a seam break; |gap| ≤ 0.15° is
+  not** ([#136](https://github.com/JStoschek/DEMAE/issues/136)). The scale is
+  the reason both halves are needed. It is wildly asymmetric — the break side
+  sits an order of magnitude above the intact side, and the intact side is a
+  cluster straddling zero — so a raw signed column reads as noise and a bare
+  `> 0` rule would fire on that scatter. **+0.15° sits in an empty region**,
+  above the measured smooth-interpolator floor of −0.107° and far below the
+  flat-fill control's +1.33°, so it is placed by the gap in the measurements
+  rather than tuned to a result. The eroded-mask slope §5 keeps as a
+  contamination control needs no column of its own: the gap is defined as
+  full-minus-eroded, so printing full slope beside the gap makes the eroded
+  number recoverable by subtraction.
 - **Perceptual/structural: nothing scored.** Hillshade SSIM was measured and
   cut — weakest separator of all ten candidates (0.56) *and* among the most
   redundant (−0.84 with slope, −0.42 with RMSE). LPIPS is cut with it, on this
@@ -901,7 +930,10 @@ A1 from truth cannot separate the arms either.
   ([`p119-fill-headroom.md`](p119-fill-headroom.md)), so a pooled per-arm number
   is dominated by the rugged tail and hides the fact that the flattest quartile
   is already at the resolution floor. Where table space forces a choice, drop a
-  size bucket before dropping a ruggedness band. **Population floor:** a
+  size bucket before dropping a ruggedness band — **a rule that has now been
+  applied rather than held in reserve**: the printed table keeps all four bands
+  and pools the buckets away entirely
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136)). **Population floor:** a
   (row, band) cell with fewer than 100 instances is reported as a count with no
   metric rather than pooled into a neighbouring band. This binds hardest on the
   real-void family, which takes whatever distribution SRTM gives it. **The
@@ -927,10 +959,77 @@ A1 from truth cannot separate the arms either.
   this is a note against changing it. One knock-on: §7's **32k eval instances**
   predates #126's reshaping and #135's counts — the total is **30,000 synthetic +
   9,978 real = ~40k**, which moves the two eval lines by ~25% and no conclusion.
-- **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
-  pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
-  CI excludes zero. Three-seed spread reported separately from bootstrap CI
-  (seed variance vs data variance are different quantities).
+- **The printed table** *(pre-registered 2026-08-11 —
+  [#136](https://github.com/JStoschek/DEMAE/issues/136))*. Printed in full, the
+  grid is **1,430 headline numbers** — 11 arm rows (A1; A2, A3 and A4 each split
+  R5/R4; A5; A6; A7; A9) × 26 cells (2 synthetic families × 3 buckets × 4 bands,
+  plus the real family's two sub-rows in R4 alone) × 5 headline metrics — and
+  another 1,144 in the appendix set. Two axes come off the page:
+
+  - **The size buckets are pooled**, one number per (arm, band). p119 measured
+    error varying **~40× across the bands and only ~3× across the buckets**, so
+    the bucket axis is the low-information one, and the pool is well defined
+    rather than an artifact of sampling because §3.2 balances the buckets by
+    construction (1,250 instances per row-band per bucket). Size does not
+    vanish: it moves to §9's RMSE-vs-void-size figure, which C2's "at every void
+    size" is read off, and which §9 now marks load-bearing for exactly that
+    reason. A monotonicity claim reads better off a curve than off three columns.
+  - **The blob family is the headline; the rectangle family is not printed.**
+    Blobs are §3.2's "standard proxy for radar-shadow voids", which is what real
+    SRTM voids are; rectangles are a sensor-dropout proxy, and **no C-claim
+    mentions them** — C1 through C4 were checked one by one against this. They
+    are still drawn, still scored and still in the parquet, and carry a one-line
+    robustness statement in the memo. A family carrying no claim should not cost
+    half the page width.
+
+  What prints is **330 numbers on one page**: 11 arms × 4 bands × 5 metrics for
+  the blob family, plus 11 arms × 2 sub-rows × 5 metrics for the real family in
+  R4. Parameter counts total and trainable ride along per §6 item 4.
+
+  **C4 gets its own block, and it prints ranks rather than metres.** Pooling the
+  buckets would otherwise have deleted C4's comparator, since the real family is
+  compared against the synthetic **small** bucket within band (§3.3) and that row
+  is now inside the pool. The block restores it: the three R4 instance sets —
+  synthetic blob small, real-small, real-medium+ — for all 11 arms on RMSE and
+  slope RMSE, **66 rank cells**. Ranks, not metres, because §0 makes C4 an
+  *ordering* claim precisely so that a natural-distribution family is never
+  differenced against a bucket-balanced one; three columns of metres side by side
+  would invite that subtraction whatever the caption said, and a rank swap — the
+  thing C4 actually tests — is visible at a glance instead. Restoring the
+  comparator by refusing to pool R4 was considered and rejected: it would make one
+  band structurally unlike the other three, so the band column would stop meaning
+  one thing.
+
+  **The four appendix metrics live in the parquet and are printed nowhere.** MAE,
+  p95 and profile curvature were graded into the appendix *because* they were
+  redundant or could not separate the A1 variants, so printing them would
+  re-import the exact noise the 24,000-instance measurement was run to remove.
+  The fourth, eroded-mask slope, is the contamination control this section
+  promises to publish — and it is published, by arithmetic rather than by column,
+  since the seam gap is full-minus-eroded and the full slope is headline. The
+  memo states where the parquet is and what is in it.
+
+- **Statistics:** paired bootstrap over test tiles (10k resamples) on RMSE and
+  slope RMSE; report 95% CIs and mark table cells where the CI excludes zero.
+  **The marked pairs are four, pre-registered here, not all of them**
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136)):
+  **A4-R5 vs A5** and **A4-R5 vs A6** (C1's two comparisons), **A3 vs A1**
+  (C2), and **A4-R5 vs A7 at 20k** (C3's endpoint). Every other pair is computed
+  into the parquet and simply left unmarked in print. This section used to
+  commit to "each arm pair", which is C(11,2) = **55 pairs × 26 cells × 2
+  metrics = 2,860 CIs** at 10k resamples — unprintable, and a
+  multiple-comparisons surface nobody had priced. Naming the four before any
+  number exists is the pre-registration doing its actual job: which comparisons
+  matter is fixed by the claims, not by which ones happen to clear zero.
+  Three-seed spread is reported separately from bootstrap CI (seed variance vs
+  data variance are different quantities) and lives **in the parquet plus one
+  printed line giving the maximum spread observed across the headline table**.
+  It is deliberately *not* a ± in every cell: only 5 of the 11 arm rows carry
+  three seeds at all (A4-R5, A4-R4, A5, A6, A7 — A1/A2/A3/A9 are single-pass and
+  the two ViT-S appendix cells are single-seed per §2.3), so a per-cell ± would
+  imply a seed structure most rows do not have, and reads as a CI besides. A
+  spread large enough to threaten a claim earns a paragraph, not a decoration in
+  330 cells.
 - **Efficiency footnote:** params trained, params total, and single-tile
   inference time per arm (A9's diffusion decode vs A3's single forward pass is
   a real operational difference worth one honest row — the contrast used to be
@@ -979,7 +1078,14 @@ A1 from truth cannot separate the arms either.
    same prominence as wins; C3's low-label sweep is the pre-registered fallback
    claim.
 8. Pre-registration: this memo is committed before the first head trains;
-   success criteria C1-C4 are defined above the results, not after them.
+   success criteria C1-C4 are defined above the results, not after them. **So is
+   the reporting shape** ([#136](https://github.com/JStoschek/DEMAE/issues/136)):
+   which axes the headline table prints, which **four** arm pairs carry a
+   bootstrap CI mark, and the **+0.15°** threshold above which a seam gap counts
+   as a seam break. Each of those is a choice that would be worth nothing decided
+   after the numbers existed — a table shape picked to flatter a result, a pair
+   set chosen from whichever comparisons cleared zero, a threshold slid to put an
+   arm on the right side of it.
 
 ## 7. Compute budget
 
@@ -1118,12 +1224,32 @@ every table, so the corrected figures are the ones to print.
 
 1. `benchmark/` module + committed tile/mask/split artifacts (reproduces every
    table from the repo).
-2. The results table (arms x buckets x strata, CIs marked) and three figures:
-   RMSE vs void size per arm; the label-efficiency curve (C3); a hillshade
-   panel grid (truth, voided, A1, A3, A5, A7) on two rugged and one flat tile.
-   The hillshade panel is **load-bearing, not decorative**: §5 scores no
-   perceptual metric, so this figure is the whole of the visual-quality
-   evidence and is not to be cut for space.
+2. The results table and three figures. **The table's shape is pre-registered in
+   §5 under "The printed table"** *(amended 2026-08-11 —
+   [#136](https://github.com/JStoschek/DEMAE/issues/136))*; this item used to say
+   "arms x buckets x strata, CIs marked", which is 1,430 headline numbers with
+   CIs on 55 arm pairs and was never printable. What prints is **11 arms × 4
+   ruggedness bands × 5 metrics for the blob family, plus the real family's two
+   sub-rows in R4 — 330 numbers** — with the size buckets pooled, the rectangle
+   family in the parquet only, CI marks on **four pre-registered arm pairs**, and
+   a separate **C4 rank block** of 66 cells. Then three figures:
+
+   - **RMSE vs void size per arm.** **Load-bearing, and newly so:** #136 pooled
+     the size buckets out of the table, making this figure the only place void
+     size appears and therefore the whole of C2's "at every void size" evidence.
+     Not to be cut for space.
+   - **The label-efficiency curve (C3).** The whole of C3 — the sweep's 16 scored
+     passes (§7) print here and nowhere else, their numbers in the parquet.
+   - **A hillshade panel grid** (truth, voided, A1, A3, A5, A7) on two rugged and
+     one flat tile. **Load-bearing, not decorative**: §5 scores no perceptual
+     metric, so this figure is the whole of the visual-quality evidence and is
+     not to be cut for space.
+
+   **There is no fourth figure for ruggedness, and the reason is the table's
+   shape.** The bands are the printed table's column groups at full resolution
+   across all five metrics, so p119's ~40× is already the most visible thing on
+   the page; a figure would restate it. Dropping the buckets is what bought the
+   space to keep the bands whole.
 3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
    and C4 with a rank comparison, plus the fairness checklist and the TerraMind
    caveats.
