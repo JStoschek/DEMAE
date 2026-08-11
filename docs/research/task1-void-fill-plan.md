@@ -140,10 +140,16 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
 - **Ablation row (A5 only, 20k training size): bicubic vs re-derived `pos_emb`.**
   One row reporting A5's metrics under terratorch's default resize against the
   centre-anchored re-derivation, so the ADR-0011 intervention is evidenced in the
-  results rather than asserted in prose. Pre-registered here; it may be **dropped
-  before any arm runs** if [#134](https://github.com/JStoschek/DEMAE/issues/134)'s
-  materiality check returns a mean per-token cosine >= 0.99 between the two feature
-  sets, in which case the choice is immaterial and the row buys nothing.
+  results rather than asserted in prose. Pre-registered here, with the drop condition
+  fixed in ADR-0011 before any number existed — and **the row stays**:
+  [#134](https://github.com/JStoschek/DEMAE/issues/134)'s materiality check measured a
+  mean per-token cosine of **0.9708** between the two feature sets over 300 tiles and
+  58,800 tokens, below the 0.99 that would have made the choice immaterial
+  ([`p134-posemb-materiality.md`](p134-posemb-materiality.md)). Two constraints on how
+  the row is reported come from that run. It is a **tail, not a shift** — the median
+  token is at 0.993 and the 1st percentile at 0.525 — and linear CKA is a kinder 0.981,
+  so a pooled or rotation-tolerant readout would understate the effect. Report it on
+  this section's positional head, not on a summary statistic of the features.
 - **Not considered: moving the primary regime to 256 px.** It looks symmetric and is
   not. Both encoders use fixed sin-cos, so a 256 px regime would give TerraMind its
   trained 0-15 while DEMAE saw indices **14 and 15 for the first time** — an

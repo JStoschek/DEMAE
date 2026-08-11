@@ -5,7 +5,7 @@
 - **Context ticket:** "Decide the primary regime's input size, now that TerraMind's native grid is 16x16" ([issue #133](https://github.com/JStoschek/DEMAE/issues/133)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** terratorch 1.2.10 source (`terramind/tokenizer/models/vit_models.py`); the probe run in [#118](https://github.com/JStoschek/DEMAE/issues/118) §6; the closed-form checks recorded in [Context](#context) below, which need no weights and no GPU
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.2
-- **Materiality check:** [#134](https://github.com/JStoschek/DEMAE/issues/134), pre-registered, may drop the ablation row this ADR adds
+- **Materiality check:** [#134](https://github.com/JStoschek/DEMAE/issues/134), pre-registered — **run 2026-08-11, returned 0.9708, so the ablation row this ADR adds stays** ([`p134-posemb-materiality.md`](../research/p134-posemb-materiality.md))
 
 ## Context
 
@@ -123,7 +123,8 @@ under all three variants and reports mean per-token cosine and CKA. **At >= 0.99
 the choice is immaterial and the ablation row is dropped; below that the row stays.** Note what
 #134 cannot do: feature drift cannot pick a winner, because "better" needs a metric and a metric
 needs the trained head. There is no result that restores bicubic — bicubic is geometrically wrong
-whatever the drift — so the check governs the row, not the spec.
+whatever the drift — so the check governs the row, not the spec. **Outcome: material, 0.9708 —
+see [Amendment 1](#amendment-1-2026-08-11--134-returns-09708-the-row-stays).**
 
 ## Consequences
 
@@ -159,3 +160,40 @@ whatever the drift — so the check governs the row, not the spec.
   is rejected for. #134 measures the contrast that is actually actionable instead.
 - **Move the primary regime to 256 px (#133 option 3).** Rejected — see Decision 3.
 - **Top-left anchor.** Rejected — see Decision 2.
+
+## Amendments
+
+### Amendment 1 (2026-08-11) — #134 returns 0.9708, the row stays
+
+**Source:** the materiality check pre-registered in Decision 5,
+[#134](https://github.com/JStoschek/DEMAE/issues/134), read out in
+[`p134-posemb-materiality.md`](../research/p134-posemb-materiality.md). **Supersedes:** nothing.
+Decisions 1-4 stand exactly as taken — as Decision 5 anticipated, no result here could have
+restored bicubic, and none did. This discharges the pre-registration and *characterizes* the drift
+in three ways the Context section did not predict.
+
+**The outcome.** Mean per-token cosine between the bicubic and centre feature sets is **0.9708**
+over 300 tiles and 58,800 tokens, against the 0.99 fixed the day before. Below the line, so plan
+§2.2's ablation row **stays**.
+
+**Three characterizations.**
+
+1. **Linear CKA is a kinder 0.9815.** The two arms induce nearly the same *geometry* over tokens
+   while placing individual tokens visibly differently. A pooled or rotation-tolerant readout of
+   the ablation would therefore understate it; §2.2's positional head is what the row must be
+   reported on.
+2. **The drift is a tail, not a shift.** Median token 0.993, 1st percentile 0.525, worst token
+   −0.088. Most patches are untouched and a minority are unrecognizable — which is a claim about
+   specific patches, and exactly the kind of claim prose cannot settle and a results row can.
+3. **The Context section's edge-ward accumulation is a fact about the embedding, not about the
+   features.** It is correct as written — the index error does grow monotonically along each row —
+   but the *feature* damage does not inherit that shape: the per-position pattern is real and
+   structured (0.923 to 0.994, far above the 1.6e-6 run-to-run floor) yet not monotone from near
+   corner to far. Twelve layers of global self-attention redistribute a disturbance, so this is
+   unsurprising in hindsight; it is recorded because the Context section invites the opposite
+   expectation. No claim is made about why the pattern has the shape it has — that would need
+   per-layer probing no in-scope arm needs.
+
+**Also confirmed, discharging this ADR's tamper-evidence consequence:** the `pos_emb` that comes
+down with the checkpoint *is* the closed form — `[1, 768, 16, 16]`, equal to a freshly built
+`build_2d_sincos_posemb(16, 16)` — so cropping it really is re-deriving it.
