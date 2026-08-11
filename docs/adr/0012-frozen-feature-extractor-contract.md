@@ -4,7 +4,7 @@
 - **Date:** 2026-08-11
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
-- **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.5, §4.1, §9.4
+- **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
 - **Depends on:** [ADR-0011](0011-terramind-posemb-rederived-at-14x14.md) — the TerraMind arm's `pos_emb` derivation is a declared field of this contract, not a separate convention
 
 ## Context

@@ -10,10 +10,15 @@ representation study.
 
 ## 0. Recommendation
 
-**Task 1: DEM void filling** (synthetic masks + real SRTM voids, head-to-head
-against the open Diff-DEM baseline). The MAE decoder *is* an inpainter, so this is
-the cheapest possible task and the cleanest pretraining-to-task story, and it is
-GeomorPM's headline task (task-level comparability).
+**Task 1: DEM void filling** (synthetic masks + real SRTM voids). The MAE decoder
+*is* an inpainter, so this is the cheapest possible task and the cleanest
+pretraining-to-task story, and the money plot — before/after hillshades — is the
+strongest in the portfolio. *(Amended 2026-08-11 —
+[#129](https://github.com/JStoschek/DEMAE/issues/129): this recommendation also
+read "head-to-head against the open Diff-DEM baseline" and "it is GeomorPM's
+headline task (task-level comparability)". Both were struck with §1's
+comparability criterion — neither competitor yields a number this benchmark can
+stand beside. The three reasons left standing are the ones that chose the task.)*
 
 **Task 2: Landform classification** (rule-generated geomorphons as the primary
 label set, the independent Iwahashi & Pike 2018 map as the second). Frozen-encoder
@@ -49,9 +54,31 @@ height) is rejected with reasons in §4.
 3. **Signal plausibility.** Elevation alone must plausibly carry the task's
    signal at 30 m. This is the criterion that kills landslide detection and
    sinkholes.
-4. **Comparability.** Prefer tasks GeomorPM evaluated (void filling, landform
-   classification) or where an open competitor ships code + data + weights
-   (Diff-DEM), so numbers land next to something.
+4. **Comparability — struck, and the tasks survive it** *(amended 2026-08-11 —
+   [#129](https://github.com/JStoschek/DEMAE/issues/129))*. This criterion read:
+   "Prefer tasks GeomorPM evaluated (void filling, landform classification) or
+   where an open competitor ships code + data + weights (Diff-DEM), so numbers
+   land next to something." **No number of ours will land next to any of
+   theirs.** Both candidates were opened and read:
+   Diff-DEM's committed `tif_metric.py` de-normalises to metres using the ground
+   truth tile's own extrema, void interior included, so its metres and ours are
+   different quantities ([#124](https://github.com/JStoschek/DEMAE/issues/124));
+   GeomorPM's CC BY 4.0 deposit ships *pretrained* weights only, with no
+   void-filling checkpoint and no fine-tune config, behind a paywalled paper
+   ([#128](https://github.com/JStoschek/DEMAE/issues/128)). More broadly there is
+   no shared benchmark in this task at all — the field's most-cited evaluation
+   (Reuter et al. 2007) publishes mean *rank* and never metres, and the most
+   recent work retrains its competitors rather than citing them. So this
+   criterion selected nothing, and where it was cited as a reason below it has
+   been struck — in §0, §2.1, §3.1, and the §2 preamble that lists the
+   Diff-DEM design residue this criterion left behind. **Neither task's ranking
+   depends on it**: void filling is still first for §2.1's surviving reasons,
+   and landform classification is still second for §3.1's. What replaces the
+   criterion is a requirement, carried into the plan as a deliverable
+   ([`task1-void-fill-plan.md`](task1-void-fill-plan.md) §0, §6 item 6, §9): say
+   in the writeup that the table is an **internally controlled comparison with
+   nothing external to stand beside it**, rather than leaving its single-column
+   shape to be read as an omission.
 5. **Portfolio value.** Each task needs a money plot: before/after hillshades for
    void filling, the accuracy-vs-label-fraction curve for landforms.
 
@@ -62,13 +89,35 @@ released 2025 to mid-2026 closes the "open-weights DEM-only MAE" niche.
 
 ## 2. Task 1: DEM void filling
 
+> **This section is the *selection* argument, and
+> [`task1-void-fill-plan.md`](task1-void-fill-plan.md) supersedes it wherever the
+> two disagree on design** *(note added 2026-08-11 —
+> [#129](https://github.com/JStoschek/DEMAE/issues/129))*. **Every mention of
+> Diff-DEM below is superseded**, and they are named here rather than left for a
+> reader to hit: §2.2's **"Cross-eval on Diff-DEM's data"**, §2.3's
+> **released-Diff-DEM-checkpoint baseline**, §2.5's "expect Diff-DEM to win on
+> texture … report both", and §5's budget line billing a **"Diff-DEM
+> cross-eval"** are all **out of scope** — the arm they became was ruled out in
+> [#128](https://github.com/JStoschek/DEMAE/issues/128) and the plan carries no
+> external arm at all (plan §0, §6 item 6). §2.2's size buckets are likewise no
+> longer "matching Diff-DEM's protocol": the boundaries now follow from the 40%
+> area cap and equivalent-diameter geometry, and the large bucket tops at 158 px
+> (plan §3.2). Those bullets are left standing as the record of what was
+> selected and on what basis; the plan's §7 is the live budget. What is *not*
+> superseded is why this task was chosen, below — minus its comparability
+> clause (§1 criterion 4).
+
 ### 2.1 Why
 
 Void filling is MAE's native objective wearing a different mask shape. Pretraining
 already reconstructed 75% of every tile from the remaining 25%; the task is to swap
-random patch dropout for contiguous void geometries and evaluate in metres. It is
-also GeomorPM's flagship task, real SRTM voids make it more than a toy, and there
-is an open, directly runnable competitor.
+random patch dropout for contiguous void geometries and evaluate in metres. Real
+SRTM voids make it more than a toy, it is the cheapest of the candidate tasks, and
+the money plot is strong. *(This paragraph also claimed the task as "GeomorPM's
+flagship" with "an open, directly runnable competitor"; struck with §1's
+comparability criterion — [#129](https://github.com/JStoschek/DEMAE/issues/129).
+The competitor is open and its scoring code was read in full; what it is not is
+commensurable.)*
 
 ### 2.2 Data and labels
 
@@ -142,9 +191,15 @@ accuracy and speed; report both and say which matters for hydrology.
 ### 3.1 Why
 
 Per-pixel landform classification is the canonical dense probing task for a
-terrain encoder, it is GeomorPM-comparable, labels are free and unlimited, and the
+terrain encoder, labels are free and unlimited, and the
 low-label-fraction curve (1% / 10% / 100%) is the single most persuasive
-foundation-model plot. It is also the natural harness for the TerraMind
+foundation-model plot. *(This sentence also read "it is GeomorPM-comparable";
+struck with §1's comparability criterion —
+[#129](https://github.com/JStoschek/DEMAE/issues/129). GeomorPM's deposit ships
+pretrained weights only, so there is no landform-task number of theirs to stand
+beside either. Task 2's own map may find otherwise on its own evidence; what is
+struck here is the *selection* reason, and Task 2 ranks second without it.)*
+It is also the natural harness for the TerraMind
 representation comparison, because probes are exactly the fair instrument for
 comparing frozen encoders of different widths.
 
