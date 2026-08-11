@@ -1,0 +1,443 @@
+{
+  "arms": {
+    "bandwidth_matched_30m": {
+      "code_usage": {
+        "codebook_size": 15360,
+        "entropy_bits": 7.130982598464157,
+        "entropy_bits_bootstrap": {
+          "ci95": [
+            7.005937335212339,
+            7.203645403917463
+          ],
+          "sd": 0.05071850295104594
+        },
+        "entropy_bits_bootstrap_mean": 7.10946275197208,
+        "entropy_bits_miller_madow": 7.137386397880348,
+        "entropy_bits_per_dim": [
+          2.6061668045534736,
+          2.551086983019793,
+          1.9258771088966504,
+          1.8692989576009222,
+          1.4612897455248635
+        ],
+        "entropy_ceiling_bits": 13.906890595608518,
+        "n_codes_used": 523,
+        "perplexity": 140.16502560530034
+      },
+      "ground_metres": 6720.0,
+      "gsd_metres": 30.0,
+      "n_tokens": 58800,
+      "residual": {
+        "max": 0.9357280731201172,
+        "mean": 0.4662093222141266,
+        "mean_code_space": 0.07847078889608383,
+        "mean_per_dim": [
+          0.20096081693967183,
+          0.19984610776106518,
+          0.16933536529541016,
+          0.14442129631837208,
+          0.11402048816283544
+        ],
+        "median": 0.47978630661964417,
+        "min": 7.696054672123864e-05,
+        "p01": 0.10756841376423835,
+        "p99": 0.7673342680931092,
+        "sd": 0.1463119238615036,
+        "units": "fsq_levels"
+      },
+      "saturated_fraction": 0.6794897959183673,
+      "saturated_fraction_per_dim": [
+        0.5593367346938776,
+        0.5107142857142857,
+        0.7219557823129252,
+        0.7961224489795917,
+        0.8093197278911564
+      ]
+    },
+    "native_30m": {
+      "code_usage": {
+        "codebook_size": 15360,
+        "entropy_bits": 7.140345265948641,
+        "entropy_bits_bootstrap": {
+          "ci95": [
+            7.017251355691059,
+            7.213444412599465
+          ],
+          "sd": 0.05062561568518431
+        },
+        "entropy_bits_bootstrap_mean": 7.118685901741075,
+        "entropy_bits_miller_madow": 7.146859475699594,
+        "entropy_bits_per_dim": [
+          2.6063534763334566,
+          2.548048147753458,
+          1.926507057580097,
+          1.872980883328884,
+          1.464453084576325
+        ],
+        "entropy_ceiling_bits": 13.906890595608518,
+        "n_codes_used": 532,
+        "perplexity": 141.0776135037103
+      },
+      "ground_metres": 6720.0,
+      "gsd_metres": 30.0,
+      "n_tokens": 58800,
+      "residual": {
+        "max": 0.9378331899642944,
+        "mean": 0.4660436511039734,
+        "mean_code_space": 0.07847321033477783,
+        "mean_per_dim": [
+          0.20083980758984885,
+          0.19915549904108049,
+          0.169231249888738,
+          0.1444266125559807,
+          0.11429220562179883
+        ],
+        "median": 0.4801017791032791,
+        "min": 5.718358079320751e-05,
+        "p01": 0.10565040588378906,
+        "p99": 0.7659456354379655,
+        "sd": 0.14723850786685944,
+        "units": "fsq_levels"
+      },
+      "saturated_fraction": 0.6794659863945578,
+      "saturated_fraction_per_dim": [
+        0.5595238095238095,
+        0.5119557823129253,
+        0.7219557823129251,
+        0.7950680272108843,
+        0.8088265306122451
+      ]
+    },
+    "terramesh_10m": {
+      "code_usage": {
+        "codebook_size": 15360,
+        "entropy_bits": 7.122893902631439,
+        "entropy_bits_bootstrap": {
+          "ci95": [
+            6.9847550698905225,
+            7.214699680832838
+          ],
+          "sd": 0.058481343185254366
+        },
+        "entropy_bits_bootstrap_mean": 7.100558664569864,
+        "entropy_bits_miller_madow": 7.129935628426255,
+        "entropy_bits_per_dim": [
+          2.0710124998250694,
+          2.851522719451644,
+          1.232460601007807,
+          1.9885315885465928,
+          1.5467665509054622
+        ],
+        "entropy_ceiling_bits": 13.906890595608518,
+        "n_codes_used": 575,
+        "perplexity": 139.38136732816338
+      },
+      "ground_metres": 2240.0,
+      "gsd_metres": 10.0,
+      "n_tokens": 58800,
+      "residual": {
+        "max": 0.9840571284294128,
+        "mean": 0.46758759021759033,
+        "mean_code_space": 0.07737301290035248,
+        "mean_per_dim": [
+          0.19243695636590322,
+          0.20881018539269766,
+          0.17497460693120956,
+          0.15382064282894134,
+          0.08673061343530813
+        ],
+        "median": 0.47855032980442047,
+        "min": 0.003978658001869917,
+        "p01": 0.11595297984778881,
+        "p99": 0.7729193460941318,
+        "sd": 0.1456422060728073,
+        "units": "fsq_levels"
+      },
+      "saturated_fraction": 0.6934897959183673,
+      "saturated_fraction_per_dim": [
+        0.6525340136054424,
+        0.3841156462585034,
+        0.806360544217687,
+        0.7607653061224489,
+        0.8636734693877549
+      ]
+    },
+    "upsampled_10m": {
+      "code_usage": {
+        "codebook_size": 15360,
+        "entropy_bits": 6.808115963330161,
+        "entropy_bits_bootstrap": {
+          "ci95": [
+            6.674950095408364,
+            6.892760324192861
+          ],
+          "sd": 0.053343684779262705
+        },
+        "entropy_bits_bootstrap_mean": 6.786136730429398,
+        "entropy_bits_miller_madow": 6.813894104182701,
+        "entropy_bits_per_dim": [
+          2.5900685191489847,
+          2.5803594639932825,
+          1.9353981856831974,
+          1.7780154579936605,
+          1.3447636842152446
+        ],
+        "entropy_ceiling_bits": 13.906890595608518,
+        "n_codes_used": 472,
+        "perplexity": 112.05909711047933
+      },
+      "ground_metres": 2240.0,
+      "gsd_metres": 10.0,
+      "n_tokens": 58800,
+      "residual": {
+        "max": 1.0097019672393799,
+        "mean": 0.4748954474925995,
+        "mean_code_space": 0.07924595475196838,
+        "mean_per_dim": [
+          0.2125838130712509,
+          0.21052280565102896,
+          0.17689100553592046,
+          0.1462359346449375,
+          0.11052376056710879
+        ],
+        "median": 0.4875640422105789,
+        "min": 0.00943868886679411,
+        "p01": 0.12457896307110787,
+        "p99": 0.7743054509162903,
+        "sd": 0.14592345058918,
+        "units": "fsq_levels"
+      },
+      "saturated_fraction": 0.6781938775510203,
+      "saturated_fraction_per_dim": [
+        0.5583333333333336,
+        0.4869557823129252,
+        0.709234693877551,
+        0.8131972789115648,
+        0.8232482993197278
+      ]
+    }
+  },
+  "bandwidth_match_factor": 2.986666666666667,
+  "bootstrap": {
+    "n_replicates": 1000,
+    "resampled": "tiles",
+    "seed": 140
+  },
+  "constants": {
+    "matches_this_script": true,
+    "mean": 670.665,
+    "modality": "tok_dem@224",
+    "source": "terratorch.models.backbones.terramind",
+    "std": 951.272
+  },
+  "demae": {
+    "first_tile_id": "Copernicus_DSM_COG_10_N00_00_E033_00_DEM_1792_1792",
+    "last_tile_id": "Copernicus_DSM_COG_10_N49_00_E091_00_DEM_896_896",
+    "lat_range": [
+      -88.03111111111112,
+      79.96888888888888
+    ],
+    "lon_range": [
+      -168.3111111111111,
+      159.84
+    ],
+    "n_source_cogs": 208,
+    "n_strata": 20,
+    "selection_rule": "p134",
+    "tiles_per_stratum": 15
+  },
+  "device": "mps",
+  "does_not_measure": "what that costs at void filling. Only a retrained head answers that, and plan \u00a72.2 declines to build one.",
+  "entropy_ceiling_bits": 13.906890595608518,
+  "entropy_difference": {
+    "native_30m_vs_bandwidth_matched_30m": {
+      "ci95": [
+        -0.01472961628353966,
+        -0.003390620080127938
+      ],
+      "mean": -0.009223149768995822,
+      "point": -0.009362667484484,
+      "sd": 0.0028113872804768182
+    },
+    "native_30m_vs_terramesh_10m": {
+      "ci95": [
+        -0.17435753560776973,
+        0.13603363077208852
+      ],
+      "mean": -0.018127237171211386,
+      "point": -0.01745136331720154,
+      "sd": 0.07948406908421102
+    },
+    "native_30m_vs_upsampled_10m": {
+      "ci95": [
+        -0.3692663742816138,
+        -0.29786743742951644
+      ],
+      "mean": -0.33254917131167655,
+      "point": -0.3322293026184795,
+      "sd": 0.018046085671585402
+    },
+    "upsampled_10m_vs_bandwidth_matched_30m": {
+      "ci95": [
+        0.2888992595032407,
+        0.35871596660811694
+      ],
+      "mean": 0.32332602154268075,
+      "point": 0.3228666351339955,
+      "sd": 0.017973818484115327
+    },
+    "upsampled_10m_vs_terramesh_10m": {
+      "ci95": [
+        0.14885654278745022,
+        0.47787415716142767
+      ],
+      "mean": 0.31442193414046515,
+      "point": 0.31477793930127795,
+      "sd": 0.08149140732976785
+    }
+  },
+  "issue": 140,
+  "limit": "An input-side diagnostic on the tokenizer's own quantizer. It reads on distribution, never on downstream error, and it fixes no threshold.",
+  "measures": "whether native 30 m inputs are off-distribution for TerraMind's DEM tokenizer",
+  "model": "terramind_v1_tokenizer_dem",
+  "n_tiles_per_arm": 300,
+  "normalization": "terramind_global_z_score",
+  "paired_residual": {
+    "native_30m_vs_bandwidth_matched_30m": {
+      "ci95": [
+        -0.000473004343184754,
+        0.0008042968929538377
+      ],
+      "mean": 0.00016564627488454184,
+      "n": 300,
+      "sd": 0.005643855333601314,
+      "se": 0.00032584813961220233
+    },
+    "native_30m_vs_upsampled_10m": {
+      "ci95": [
+        0.006524771896715723,
+        0.011178785713796055
+      ],
+      "mean": 0.008851778805255889,
+      "n": 300,
+      "sd": 0.020564123764249626,
+      "se": 0.00118727023909383
+    },
+    "upsampled_10m_vs_bandwidth_matched_30m": {
+      "ci95": [
+        -0.011005220678239454,
+        -0.006367044382503242
+      ],
+      "mean": -0.008686132530371348,
+      "n": 300,
+      "sd": 0.02049414443848051,
+      "se": 0.0011832299808367795
+    }
+  },
+  "posemb_control": {
+    "adr": "0011",
+    "arms": {
+      "bandwidth_matched_30m": {
+        "entropy_bits": 7.232758414498999,
+        "residual_mean": 0.4729090929031372,
+        "saturated_fraction": 0.6716632653061224
+      },
+      "native_30m": {
+        "entropy_bits": 7.244526649971469,
+        "residual_mean": 0.47278305888175964,
+        "saturated_fraction": 0.6718673469387755
+      },
+      "terramesh_10m": {
+        "entropy_bits": 7.259721908032034,
+        "residual_mean": 0.4780292510986328,
+        "saturated_fraction": 0.682530612244898
+      },
+      "upsampled_10m": {
+        "entropy_bits": 6.901718329816793,
+        "residual_mean": 0.4829796254634857,
+        "saturated_fraction": 0.667156462585034
+      }
+    },
+    "entropy_difference": {
+      "native_30m_vs_bandwidth_matched_30m": -0.011768235472469968,
+      "native_30m_vs_terramesh_10m": 0.015195258060565209,
+      "native_30m_vs_upsampled_10m": -0.3428083201546759,
+      "upsampled_10m_vs_bandwidth_matched_30m": 0.3310400846822059,
+      "upsampled_10m_vs_terramesh_10m": 0.3580035782152411
+    },
+    "max_abs_shift_in_entropy_difference": 0.04322563891396314,
+    "max_abs_shift_in_residual_mean": 0.01044166088104248,
+    "note": "ADR-0011 Decision 2 replaces terratorch's bicubic 16->14 pos_emb resize with the centre-anchored crop on every frozen-encoder pass, and #134 measured the two feature sets 0.9708 apart. The arms above drive the checkpoint's own path, because 'off-distribution for this tokenizer' is a question about the tokenizer as released. This is the same run under ADR-0011's embedding, so the departure is measured rather than argued."
+  },
+  "quantizer": {
+    "code_matches_module": true,
+    "codebook_size": 15360,
+    "decoder_parameters_unused": 196140560,
+    "encoder_parameters": 90172416,
+    "index_matches_module": true,
+    "levels": [
+      8,
+      8,
+      8,
+      6,
+      5
+    ],
+    "module": "FiniteScalarQuantizer",
+    "parameters": 0,
+    "quant_proj_parameters": 3845
+  },
+  "reading_rule": "#122's symmetry rule: this result is not available to explain a TerraMind loss unless it is also priced as a discount on a TerraMind win.",
+  "runtime_seconds": 47.04387807846069,
+  "terramesh": {
+    "bytes_fetched": 37748736,
+    "elevation_range_metres": [
+      -5.0,
+      6448.0
+    ],
+    "first_sample_id": "47U_1147R_0_0",
+    "gated": false,
+    "last_sample_id": "575U_659L_1_2",
+    "lat_range": [
+      -45.21253973486314,
+      70.56372527343444
+    ],
+    "licence": "cc-by-sa-4.0",
+    "lon_range": [
+      -161.6636707149025,
+      170.90570681069272
+    ],
+    "modality": "DEM",
+    "n_shards": 9,
+    "n_tiles": 300,
+    "private": false,
+    "repo_id": "ibm-esa-geospatial/TerraMesh",
+    "revision": "e144fef5cba860bf12e376cc01648ad379d2a88d",
+    "sample_id_list_sha256": "3f56d6dfe67289e0",
+    "selection_rule": "round-robin over the first members of each shard's prefix",
+    "shards": [
+      "val/DEM/majortom_shard_000001.tar",
+      "val/DEM/majortom_shard_000002.tar",
+      "val/DEM/majortom_shard_000003.tar",
+      "val/DEM/majortom_shard_000004.tar",
+      "val/DEM/majortom_shard_000005.tar",
+      "val/DEM/majortom_shard_000006.tar",
+      "val/DEM/majortom_shard_000007.tar",
+      "val/DEM/majortom_shard_000008.tar",
+      "val/DEM/ssl4eos12_shard_000009.tar"
+    ],
+    "split": "val",
+    "tile_px": 264,
+    "tiles_committed": 0
+  },
+  "tokens_per_tile": 196,
+  "uniform_residual_rms": 0.6454972243679028,
+  "uniform_residual_rms_note": "What the per-token residual would be if the latents fell on the rounding grid at random. A scale marker for a statistic that has none; no decision hangs on it, and #140 fixes no threshold and no drop condition.",
+  "versions": {
+    "diffusers": "0.39.0",
+    "numcodecs": "0.16.5",
+    "numpy": "2.5.1",
+    "terratorch": "1.2.10",
+    "timm": "1.0.28",
+    "torch": "2.13.0"
+  }
+}

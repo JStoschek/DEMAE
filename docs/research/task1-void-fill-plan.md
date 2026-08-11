@@ -239,17 +239,53 @@ Decisions:
   the **code-usage entropy** over those 15,360 codes (against a 13.91-bit
   ceiling), read directly on whether an input is off-distribution for *this*
   tokenizer — with no target, no head and no training, and therefore comparable
-  across GSDs in a way metres are not. Native 30 m is measured against **two**
+  across GSDs in a way metres are not. Native 30 m was measured against **two**
   references, because each closes the other's hole: the same geographic windows
-  upsampled to 10 m and centre-cropped to 224 px, which fixes terrain and varies
-  bandwidth; and a sample of real TerraMesh DEM tiles, which fixes bandwidth and
-  varies geography. It is encoder-only — 90.2M of the 1.15 GB checkpoint, the
+  upsampled to 10 m and centre-cropped to 224 px, which fixes the geography and
+  varies bandwidth; and a sample of real TerraMesh DEM tiles, which fixes
+  bandwidth and varies geography. *(That description of the first reference was
+  incomplete as pre-registered, and #140 says so rather than quietly rewriting
+  it: at a fixed 224 px, "upsample to 10 m and crop" also cuts the ground extent
+  from 6.72 km to 2.24 km, so the arm varies extent as well as bandwidth and the
+  two references do not in fact close each other's holes. That is what the fourth
+  arm below exists to fix.)* It is encoder-only — 90.2M of the 1.15 GB
+  checkpoint, counted in the record and matching #118 §8 — the
   same parts A5 and A9 already load — so it costs no new regime, no retrained
   head and no scope reopen. **Its limit is stated wherever it is reported:** it
   measures whether 30 m inputs are off-distribution for the tokenizer, *never*
   what that costs at void filling. Only a retrained head answers the second
-  question, and that is what the next bullet declines to build. Measured under
-  [#140](https://github.com/JStoschek/DEMAE/issues/140), before any arm runs.
+  question, and that is what the next bullet declines to build.
+- **Measured, before any arm ran: the shift is not visible in the quantizer.**
+  [#140](https://github.com/JStoschek/DEMAE/issues/140) ran the diagnostic over
+  300 tiles per arm, 58,800 tokens each
+  ([`p140-gsd-quantizer.md`](p140-gsd-quantizer.md)). **Native 30 m is
+  indistinguishable from TerraMesh's own val DEM tiles**: the code-entropy gap is
+  **−0.018 bits, 95% CI [−0.175, +0.136]** against a 13.907-bit ceiling, and the
+  quantization residual — in FSQ level units, where each axis's grid spacing is 1
+  — is marginally *smaller* for native 30 m (0.4660) than for TerraMesh (0.4676).
+  A **fourth** arm was added to separate bandwidth from the ground extent it is
+  confounded with at a fixed pixel count, and it is what makes the reading safe:
+  **the bandwidth component alone is 0.0093 bits**, against 0.323 for extent and
+  0.315 for geography — 35× smaller than either thing the two references confound
+  it with. **And the direction runs the other way from the intuition the old
+  phrasing carried:** putting these windows onto TerraMind's native 10 m grid —
+  TerraMesh's own recipe — *lowers* code entropy by 0.332 bits and *raises* the
+  residual, so the next bullet's out-of-scope 10 m regime is not a correction the
+  plan is passing up. Two things keep all of this small, and travel with the
+  numbers wherever they are quoted. **The limit:** this reads on whether 30 m
+  inputs are off-distribution for the tokenizer, *never* on what that costs at
+  void filling. **The scale:** every arm, TerraMesh's included, reaches only ~7.1
+  of 13.907 bits with two thirds of latent dimensions pinned to a terminal level,
+  so no arm's absolute level means anything on its own and only the differences
+  between them are read. Re-run under ADR-0011's re-derived `pos_emb` as well as
+  the checkpoint's own, because the arms drive the latter and that is a departure
+  from the ADR: the levels shift ~0.10 bits and every comparison above survives
+  (`p140-gsd-quantizer.md` §6).
+- **The caveat stays, and stays symmetric.** A measurement that finds no shift is
+  not a licence to drop it — it is what stops the caveat being used later, in
+  either direction, as an unpriced explanation. #122's rule still governs: not
+  available to explain a TerraMind loss unless also priced as a discount on a
+  TerraMind win. **No threshold was set before the run and none is set after it.**
 - **Not considered: a secondary 10 m TerraMind-native regime.** Ruled out of
   scope at this map's charting, and reaffirmed here on evidence stronger than the
   ruling had. It would be built by bilinearly resampling the same geographic
