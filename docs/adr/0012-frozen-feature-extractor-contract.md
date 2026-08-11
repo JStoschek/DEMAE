@@ -104,8 +104,15 @@ different, and both tasks' C1 claims silently stop being about the same features
 
 1. **Encoder identity** — declared checkpoint md5 and architecture against the model actually loaded.
    This is where §2.3's R4-vs-R5 `pos_embed` axis-order precondition is enforced rather than remembered.
-2. **TerraMind's constants** — `v1_pretraining_mean/std["tok_dem@224"]` still read `670.665 / 951.272`,
-   inheriting p118's refusal, so a terratorch upgrade that retunes them fails loudly.
+2. **TerraMind's constants** — the **named** v1 lookup `v1_pretraining_mean/std["tok_dem@224"]`,
+   whose value is then checked against `670.665 / 951.272`, inheriting p118's refusal. The two
+   halves catch different things and §2.1 needs both: [#138](https://github.com/JStoschek/DEMAE/issues/138)
+   found **three** DEM constant pairs shipping across IBM's artifacts (651.663/928.168 in the dataset
+   loader, 435.726/560.326 in the v0.1 tokenizer), so the *name* is what selects the pair matching the
+   v1 checkpoint this plan benchmarks — hardcoding a value would silently accept whichever pair happened
+   to sit at that number. The *value* check is what catches a terratorch upgrade retuning the pair the
+   name resolves to. §2.1's "by name rather than by value" is about **selection**, and does not mean the
+   value goes unchecked.
 3. **Shape and layer count** — twelve intermediates, `(N, 196, D)`, `D` matching the declared width.
 4. **The ADR-0011 `pos_emb` derivation** for the TerraMind arm, as a declared field rather than a
    convention living in extraction code.

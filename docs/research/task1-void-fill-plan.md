@@ -1070,9 +1070,12 @@ every table, so the corrected figures are the ones to print.
    - **`extractor_spec.json` is committed** and joins the family whose defining
      property is that the committed file is what later phases re-read (§3.5). It
      re-checks itself at load — encoder identity and checkpoint md5, TerraMind's
-     `670.665 / 951.272`, shape and layer count, and ADR-0011's `pos_emb`
-     derivation as a declared field — and its md5 goes in the benchmark's run
-     record, not in Phase 1's frozen four-field data fingerprint.
+     constants (the **named** v1 lookup §2.1 requires, *and* its value against
+     `670.665 / 951.272`: the name is what picks the right pair of the three that
+     ship, the value is what catches a terratorch retune), shape and layer count,
+     and ADR-0011's `pos_emb` derivation as a declared field — and its md5 goes in
+     the benchmark's run record, not in Phase 1's frozen four-field data
+     fingerprint.
 
    **[`task2-landform-plan.md`](task2-landform-plan.md) is stale on this in
    three places** and is *not* amended here, because Task 2 is out of this map's
