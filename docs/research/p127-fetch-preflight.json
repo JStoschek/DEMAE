@@ -1,0 +1,163 @@
+{
+ "checked_utc": "2026-08-11T15:08:16Z",
+ "draw_cells": [
+  "N28E086",
+  "N28E085",
+  "N29E085",
+  "N28E087",
+  "N27E088",
+  "N28E088",
+  "N30E080",
+  "N29E080",
+  "N30E081",
+  "N35E075",
+  "N35E076",
+  "N36E074",
+  "N36E075",
+  "N29E095",
+  "N29E094",
+  "N28E095",
+  "N30E095",
+  "S10W077",
+  "S09W077",
+  "S13W072",
+  "S16W068",
+  "S17W068",
+  "S33W070",
+  "S32W070"
+ ],
+ "cmr": {
+  "catalog_size": 735,
+  "found": 24,
+  "missing": [],
+  "url_mismatched": [],
+  "total_mb": 28.43,
+  "granules": [
+   {
+    "cell": "N28E086",
+    "size_mb": 0.802501,
+    "url_matches": true
+   },
+   {
+    "cell": "N28E085",
+    "size_mb": 1.40569,
+    "url_matches": true
+   },
+   {
+    "cell": "N29E085",
+    "size_mb": 0.405467,
+    "url_matches": true
+   },
+   {
+    "cell": "N28E087",
+    "size_mb": 0.78481,
+    "url_matches": true
+   },
+   {
+    "cell": "N27E088",
+    "size_mb": 1.5304,
+    "url_matches": true
+   },
+   {
+    "cell": "N28E088",
+    "size_mb": 0.320125,
+    "url_matches": true
+   },
+   {
+    "cell": "N30E080",
+    "size_mb": 1.52493,
+    "url_matches": true
+   },
+   {
+    "cell": "N29E080",
+    "size_mb": 1.38622,
+    "url_matches": true
+   },
+   {
+    "cell": "N30E081",
+    "size_mb": 0.865022,
+    "url_matches": true
+   },
+   {
+    "cell": "N35E075",
+    "size_mb": 2.18722,
+    "url_matches": true
+   },
+   {
+    "cell": "N35E076",
+    "size_mb": 2.83286,
+    "url_matches": true
+   },
+   {
+    "cell": "N36E074",
+    "size_mb": 2.4733,
+    "url_matches": true
+   },
+   {
+    "cell": "N36E075",
+    "size_mb": 2.04408,
+    "url_matches": true
+   },
+   {
+    "cell": "N29E095",
+    "size_mb": 1.63187,
+    "url_matches": true
+   },
+   {
+    "cell": "N29E094",
+    "size_mb": 1.13965,
+    "url_matches": true
+   },
+   {
+    "cell": "N28E095",
+    "size_mb": 1.07966,
+    "url_matches": true
+   },
+   {
+    "cell": "N30E095",
+    "size_mb": 1.20659,
+    "url_matches": true
+   },
+   {
+    "cell": "S10W077",
+    "size_mb": 0.865652,
+    "url_matches": true
+   },
+   {
+    "cell": "S09W077",
+    "size_mb": 0.635367,
+    "url_matches": true
+   },
+   {
+    "cell": "S13W072",
+    "size_mb": 0.452321,
+    "url_matches": true
+   },
+   {
+    "cell": "S16W068",
+    "size_mb": 0.452014,
+    "url_matches": true
+   },
+   {
+    "cell": "S17W068",
+    "size_mb": 1.13537,
+    "url_matches": true
+   },
+   {
+    "cell": "S33W070",
+    "size_mb": 0.840603,
+    "url_matches": true
+   },
+   {
+    "cell": "S32W070",
+    "size_mb": 0.431997,
+    "url_matches": true
+   }
+  ]
+ },
+ "auth": {
+  "state": "no-credentials",
+  "detail": "no `machine urs.earthdata.nasa.gov` entry in ~/.netrc",
+  "ok": false
+ }
+}
