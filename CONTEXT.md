@@ -661,6 +661,31 @@ GitHub issue #1.
   plausible-looking function (see **The composition**). Where the two encoders genuinely differ
   they get **named fields, never a shared index**: DEMAE norms after its last block and
   TerraMind does not, so "the last layer" and "block twelve" are two things.
+- **Seam gap / seam break** — the **seam gap** is slope RMSE on the full void mask minus
+  slope RMSE on the eroded one, and it is a *signed* diagnostic whose **sign is the signal**:
+  a fill that joins the terrain around it scores negative, one that breaks at the void boundary
+  scores positive. A **seam break** is a gap above **+0.15°** — a threshold placed in the empty
+  region between the measured smooth-interpolator floor (−0.107°) and the flat-fill control
+  (+1.33°), and fixed before any arm ran, because a threshold slid afterwards is worth nothing
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136)). It is what carries the operational
+  half of Task 1's C2 now that the hydrological metrics are gone: an operator's complaint about
+  a bad fill is that it does not join up. Free to compute, since both masks exist anyway — and
+  it makes the eroded-mask number recoverable by subtraction rather than needing its own column.
+- **Headline / appendix metric** — the graded split of Task 1's metric set, decided by
+  *measurement* over 24,000 instances rather than by argument: a metric that cannot separate
+  the classical baseline from truth cannot separate the arms either. **Headline** metrics are
+  printed; **appendix** ones are computed and committed to the results parquet and printed
+  nowhere, because they were demoted for being redundant or unable to separate, and printing
+  them would re-import the noise the grading removed. The distinction is about what a number is
+  allowed to *carry a claim*, not about what is worth computing — everything is computed.
+- **The printed table** — the pre-registered subset of Task 1's results grid that actually
+  reaches the page, as distinct from the grid itself: **computed and printed are different
+  questions**, and collapsing an axis for print discards no number. Which axes collapse is
+  fixed before any result exists, on the same logic as the C-claims — a table shape chosen
+  after the numbers is a table shape chosen to flatter them
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136)). The axis kept is the one carrying
+  information: ruggedness varies ~40× across its bands, void size only ~3× across its buckets,
+  so bands stay whole and buckets pool into a figure.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
