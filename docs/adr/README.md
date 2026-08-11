@@ -19,6 +19,7 @@ existing ADR, surface it rather than silently overriding.
 | [0008](0008-accept-f3-drainage-shortfall-strata-2-17.md) | Accept the `F3` drainage shortfall in strata 2 and 17 — Gate F's FAIL, dispositioned | Accepted — with a Phase-2 downstream revisit trigger |
 | [0009](0009-one-shipping-entry-point.md) | One shipping entry point, composing resume and monitoring (Phase 1) | Accepted |
 | [0010](0010-frozen-phase1-release-recipe.md) | The frozen Phase-1 release recipe, and the decision rule that adjudicates arms | Accepted |
+| [0011](0011-terramind-posemb-rederived-at-14x14.md) | TerraMind's position embedding is re-derived at 14x14, not bicubically resized | Accepted |
 
 ## Supersession
 
