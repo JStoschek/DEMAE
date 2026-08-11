@@ -248,17 +248,22 @@ class _URSHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def urs_server(script):
-    """A local stand-in for `urs.earthdata.nasa.gov` + the DAAC, yielding ``(base_url, handler)``."""
+    """A local stand-in for `urs.earthdata.nasa.gov` + the DAAC, yielding ``(base_url, handler)``.
+
+    The handler is a fresh subclass per test rather than `_URSHandler` itself: the suite runs
+    under `-n auto`, and its licence to do so (pyproject's `dev` group) is that no test writes
+    state another test can see. A class attribute set on the shared base would be exactly that.
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("N28E086.num", b"\x00" * script.NUM_BYTES)
-    _URSHandler.payload = buf.getvalue()
+    handler = type("_URSHandlerForTest", (_URSHandler,), {"payload": buf.getvalue()})
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _URSHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", _URSHandler
+        yield f"http://127.0.0.1:{server.server_port}", handler
     finally:
         server.shutdown()
         server.server_close()
@@ -328,6 +333,33 @@ def test_fetch_all_writes_a_manifest_of_verified_sizes(script, tmp_path, urs_ser
 
     written = json.loads((dest / "fetch-manifest.json").read_text())
     assert written == manifest
+
+
+def test_the_manifest_says_where_the_credentials_live_but_never_what_they_are(script, tmp_path, urs_server):
+    """#127: record "where the credentials live (a `.netrc` path, not the secret itself)"."""
+    base, handler = urs_server
+    netrc = _netrc_for(tmp_path, "127.0.0.1", handler.username, handler.password)
+    opener = script.build_opener(netrc_path=netrc, host="127.0.0.1")
+    dest = tmp_path / "num"
+
+    manifest = script.fetch_all(
+        ["N28E086"],
+        dest,
+        opener,
+        url_for=lambda cell: base + handler.protected,
+        credentials_from=netrc,
+    )
+
+    assert manifest["credentials_from"] == str(netrc)
+    assert manifest["earthdata_host"] == script.EARTHDATA_HOST
+    assert manifest["fetched_utc"].endswith("Z")
+    assert handler.password not in json.dumps(manifest), "the secret never enters the record"
+
+
+def test_a_recorded_credential_path_hides_the_home_directory(script, tmp_path):
+    """The manifest is read by whoever picks the work up next; `/Users/<someone>` is not for them."""
+    assert script.redact_home(Path.home() / ".netrc") == "~/.netrc"
+    assert script.redact_home(tmp_path / "netrc") == str(tmp_path / "netrc")
 
 
 def test_fetch_all_skips_what_is_already_verified_on_disk(script, tmp_path, urs_server):

@@ -5,11 +5,12 @@ Issue #127, under map #117; the checklist this implements is §13 of
 (Atlas cut, Andes kept for geographic diversity rather than volume).
 
 **The one step this script cannot do is the reason the ticket exists.** SRTMGL1N sits behind
-Earthdata Login: the distribution URL 302s to a URS OAuth `authorize` endpoint, and until a human
-has registered and clicked the LP DAAC consent screen *once*, every granule URL answers
-`401 HTTP Basic: Access denied` no matter what credentials are presented. Registering an account
-and accepting terms of service is not something an agent does on someone's behalf. Everything
-either side of it is here:
+Earthdata Login: the distribution URL 302s to a URS OAuth `authorize` endpoint, which answered
+`401 HTTP Basic: Access denied` to an unauthenticated probe on 2026-08-11 (P125 §4.1 recorded the
+302 itself). Past that point a human has to register and click the LP DAAC consent screen once —
+what the far side of the consent screen does with *valid* credentials is, by construction,
+unobservable from here. Registering an account and accepting terms of service is not something an
+agent does on someone's behalf. Everything either side of it is here:
 
     # before the login — anonymous, proves the draw exists and prices it
     python scripts/p127_fetch_srtm_voids.py check
@@ -24,9 +25,10 @@ and reports which of the three states the login is in: no credentials in `~/.net
 that URS rejects, or a working chain. It downloads nothing.
 
 `fetch` writes `data/srtm_voids/num/<CELL>.SRTMGL1N.num.zip` and a `fetch-manifest.json` beside
-them recording, per granule, the zip's size and SHA-256 and the member's name and size. That
-manifest is the artifact #127 asks to be recorded; the directory is under the repo's gitignored
-`data/*`, so nothing here is committed.
+them recording, per granule, the zip's size and SHA-256 and the member's name and size — plus the
+netrc *path* that authorised it (never the secret), the URS host, and when. That manifest is the
+artifact #127 asks to be recorded; the directory is under the repo's gitignored `data/*`, so
+nothing here is committed.
 
 **Verification is not a formality.** The failure this guards is not an error — an unauthorized
 request 302s into a login form, and `curl -o file.zip` writes the HTML page to disk under a `.zip`
@@ -37,7 +39,11 @@ granule that fails is deleted, not kept, so a re-run cannot mistake it for done.
 Scope: the fetch and its verification only. Extraction — the `num > 10 AND num < 201` predicate,
 8-connected labelling, and the offset-RLE mask list of P125 §13.4 — belongs to the module that
 builds `benchmark/`, which map #117 puts out of scope; #135 checks the realised size and stratum
-histogram once this lands.
+histogram once this lands. P125 §13.5's no-login fallback is **deliberately not implemented**: the
+Wayback capture of the retired v2.1 tree is 3-arc-second, recovering IoU 0.60 against 1-arc-second
+truth with 39% of void area missing and no large components at all. It is a resilience path for a
+login that stalls, not a substitute for one, and building it here would offer a degraded corpus a
+route into the benchmark that nothing downstream could tell apart.
 """
 
 from __future__ import annotations
@@ -71,6 +77,10 @@ NUM_BYTES = 3601 * 3601  # 12,967,201
 
 #: The draw, as #126 settled it. Grouped by massif because that is how the regions were chosen and
 #: how a partial fetch is read; order within a group is P125 §9's.
+#:
+#: "Cell" throughout this script is SRTM's own unit and the spec's — a **1° x 1°** granule, named
+#: for its south-west corner, as in P125 §13.2's `for CELL in ...`. It is *not* CONTEXT.md's
+#: **geocell** (a 10° block of the Copernicus corpus), and not a **tile** (a 224 px crop).
 DRAW = {
     # Himalaya — Everest and the Khumbu, the void-richest cells P125 measured.
     "himalaya-central": ("N28E086", "N28E085", "N29E085", "N28E087", "N27E088", "N28E088"),
@@ -107,6 +117,11 @@ Earthdata Login is required for SRTMGL1N, and the consent step needs a person:
 
 Then re-run this script.\
 """
+
+
+def redact_home(path: Path | str) -> str:
+    """``~/.netrc``, not ``/Users/someone/.netrc`` — these strings end up in committed records."""
+    return str(path).replace(str(Path.home()), "~")
 
 
 class MissingCredentials(RuntimeError):
@@ -201,7 +216,11 @@ class _HostOnlyPasswordMgr:
         self._login = login
         self._password = password
 
-    def add_password(self, *args, **kwargs):  # part of the manager interface; nothing to add
+    def add_password(self, *args, **kwargs):
+        """Required: `AbstractBasicAuthHandler.__init__` binds `self.add_password = passwd.add_password`,
+        so a manager without it raises `AttributeError` at handler construction. Nothing may be added
+        — this manager holds one host, fixed at construction, and a second one would widen who the
+        credentials are offered to."""
         raise NotImplementedError("this manager holds one host, fixed at construction")
 
     def find_user_password(self, realm, authuri):
@@ -276,11 +295,17 @@ def fetch_all(
     dest: Path,
     opener,
     url_for: Callable[[str], str] | None = None,
+    credentials_from: Path | None = None,
 ) -> dict:
     """Fetch every cell, skipping ones already verified on disk, and write the manifest.
 
     One failure does not abandon the rest — 24 granules across two continents, and a single flaky
     transfer should leave 23 on disk and a manifest naming the one to retry.
+
+    ``credentials_from`` is recorded in the manifest as a *path*, home directory redacted. #127
+    asks for "where the credentials live (a `.netrc` path, not the secret itself)", and a manifest
+    that says which file authorised a download is the difference between a reproducible fetch and
+    one nobody can repeat.
     """
     url_for = url_for or granule_url
     cells = list(cells)  # iterated twice: once to fetch, once to record what was requested
@@ -314,6 +339,9 @@ def fetch_all(
     manifest = {
         "collection": "SRTMGL1N.003",
         "cmr_collection_concept_id": CMR_COLLECTION,
+        "fetched_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "earthdata_host": EARTHDATA_HOST,
+        "credentials_from": redact_home(credentials_from) if credentials_from else None,
         "expected_member_bytes": NUM_BYTES,
         "requested": list(cells),
         "fetched": fetched,
@@ -344,10 +372,17 @@ def cmr_granules(bounding_box: str, page_size: int = 2000) -> dict[str, dict]:
     for item in payload.get("items", []):
         umm = item["umm"]
         urls = [r["URL"] for r in umm.get("RelatedUrls", []) if r.get("Type") == "GET DATA"]
-        sizes = umm.get("DataGranule", {}).get("ArchiveAndDistributionInformation", [])
+        # CMR reports a size per distributed file with its own unit. Take the entry whose unit is
+        # MB rather than trusting the ordering — a reordering upstream would silently mis-price
+        # the draw, and this number is the only pre-login estimate of what the fetch costs.
+        sizes = [
+            s
+            for s in umm.get("DataGranule", {}).get("ArchiveAndDistributionInformation", [])
+            if s.get("SizeUnit") == "MB" and s.get("Size") is not None
+        ]
         out[umm["GranuleUR"]] = {
             "url": urls[0] if urls else None,
-            "size_mb": sizes[-1].get("Size") if sizes else None,
+            "size_mb": sizes[-1]["Size"] if sizes else None,
         }
     return out
 
@@ -392,10 +427,9 @@ def check_auth(netrc_path: Path | None = None) -> dict:
     try:
         opener = build_opener(netrc_path=netrc_path)
     except MissingCredentials as exc:
-        # `~`, not the absolute path: this record is committed, and a home directory in it is
-        # noise that differs per machine while saying nothing the reader needs.
-        detail = str(exc).split("\n")[0].replace(str(Path.home()), "~")
-        return {"state": "no-credentials", "detail": detail, "ok": False}
+        # Redacted because this record is committed: a home directory in it is noise that differs
+        # per machine while saying nothing the reader needs.
+        return {"state": "no-credentials", "detail": redact_home(str(exc).split("\n")[0]), "ok": False}
 
     request = urllib.request.Request(granule_url(DRAW_CELLS[0]), headers={"Range": "bytes=0-0"})
     try:
@@ -447,7 +481,12 @@ def _cmd_fetch(args) -> int:
         return 2
 
     cells = args.cells or list(DRAW_CELLS)
-    manifest = fetch_all(cells, Path(args.dest), opener)
+    manifest = fetch_all(
+        cells,
+        Path(args.dest),
+        opener,
+        credentials_from=args.netrc or Path.home() / ".netrc",
+    )
     for cell in cells:
         record = manifest["granules"][cell]
         mark = "skip" if record.get("skipped") else ("ok" if record.get("verified") else "FAIL")
