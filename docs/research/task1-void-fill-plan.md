@@ -94,7 +94,12 @@ implicit default.
 - TerraMind: its global z-score, `(x - 670.665) / 951.272`
   (`v1_pretraining_mean/std["tok_dem@224"]` in terratorch), NaNs pre-filled,
   because the tokenizer does not normalize internally and TerraMesh trained it
-  NaN-free.
+  NaN-free. **Three different DEM constant pairs ship across IBM's artifacts** —
+  651.663/928.168 in the dataset loader and 435.726/560.326 in the v0.1
+  tokenizer, besides the v1 pair above ([`p138-terramind-corpus.md`](p138-terramind-corpus.md)).
+  The v1 pair is the one that matches the v1 checkpoint this plan benchmarks;
+  the build asserts it by name rather than by value, since a silent swap is a
+  wrong-diet arm that still runs.
 
 Each encoder at its best is the fair default. One ablation row: TerraMind fed
 per-tile-standardized input, to measure how much of its representation is
@@ -106,7 +111,11 @@ stats**, so no arm is scored in its own normalized space.
 ### 2.2 GSD: primary regime at 30 m, secondary at 10 m
 
 TerraMind's DEM pixels were GLO-30 bilinearly resampled to the 10 m Sentinel-2
-grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
+grid (TerraMesh §3.2 — the sources write "Copernicus DEM 30m" / "Copernicus
+WorldDEM-30", never "GLO-30", so quote them that way in the writeup); DEMAE's
+are native 30 m. The source is single and unblended — no FABDEM, no NASADEM, no
+DSM/DEM switch relative to DEMAE ([`p138-terramind-corpus.md`](p138-terramind-corpus.md)).
+Decisions:
 
 - **Primary regime (all arms): 224x224 at native 30 m.** The task is defined
   operationally on GLO-30, DEMAE's home turf and honestly labeled as such;
@@ -114,7 +123,12 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
   produce a 14x14 token grid, so the head is byte-identical. **Measured, and it
   co-registers patch-for-patch:** TerraMind's DEM tokenizer was trained at 256 px
   and its `pos_emb` is natively `[1, 768, 16, 16]`
-  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §6). The
+  ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §6),
+  now double-sourced by terratorch's `input_size=256` independently of that
+  checkpoint probe. It **strengthens ADR-0011**: the tokenizer was itself fed
+  random 256 px crops of a *larger* 264 px corpus tile, so cropping — not
+  resizing — is the native relationship between its inputs and its positional
+  grid ([`p138-terramind-corpus.md`](p138-terramind-corpus.md)). The
   next bullet is how that premise is made to hold without costing TerraMind
   anything; it settles [#133](https://github.com/JStoschek/DEMAE/issues/133) and
   supersedes the provisional text this bullet carried while #133 was open.
@@ -186,34 +200,68 @@ count suggests.**
 
 | | DEMAE | TerraMind DEM tokenizer |
 |---|---:|---:|
-| Tiles per epoch | 473,088 (231 steps x 2048) | ~9M |
-| Epochs | 400 | ~20 |
-| **Tile presentations** | **189.2M** | **~180M** |
-| Tile footprint | 224 px @ 30 m = 45.2 km² | 256 px @ 10 m = 6.55 km² |
-| **Ground area covered** | **21.4M km²** | **~59.0M km²** |
+| Tiles per epoch | 473,088 (231 steps x 2048) | 9,089,536 |
+| Epochs | 400 | 20 |
+| Effective batch size | 2048 | 2048 |
+| Optimizer steps | 92,400 | 88,765 (derived) |
+| **Tile presentations** | **189.2M** | **181.8M** |
+| Tile footprint | 224 px @ 30 m = 45.2 km² | 264 px @ 10 m = 6.97 km² |
+| **Ground area covered** | **21.4M km²** | **63.4M km²** |
+
+All figures on the TerraMind side are sourced in
+[`p138-terramind-corpus.md`](p138-terramind-corpus.md); they were provisional
+until it landed and are not any more.
 
 Two things follow, and both cut against the obvious reading. **Optimization
 compute is matched to within 5%** — this was never a compute-scale confound.
-And the data gap is **~2.8x in ground area, not the ~19x the tile counts imply**,
-because TerraMind's DEM tiles are resampled onto the 10 m Sentinel-2 grid and
-therefore cover 6.6x less ground each. Since TerraMesh's DEM modality *is*
-Copernicus GLO-30 bilinearly resampled (§2.2), that 2.8x is more ground of the
-**same product at the same true resolution** — not more information, and not a
-finer view of it.
+DEMAE sees **4.1% more** presentations, and the match is tighter than a
+presentation count alone would show: both runs used an effective batch of
+**2048**, so the step counts match to the same 4.1%. Read it as *matched sample
+exposure and step count* and nothing more — the objectives differ (masked
+autoencoder against an FSQ autoencoder with a diffusion decoder), no source
+gives FLOPs for either side, and so no FLOP claim is made.
 
-**Provisional, pending [#138](https://github.com/JStoschek/DEMAE/issues/138).**
-The ~9M tiles and ~20 epochs are carried from
-[`downstream-task-selection.md`](downstream-task-selection.md) and have not been
-checked against TerraMesh (arXiv 2504.11172). The ~2.8x area ratio is robust to
-drift in the epoch count; the matched-compute claim is not, and is the sentence
-to re-check when #138 lands. Within-corpus geographic overlap is unknown on both
-sides.
+And the data gap is **~3x in ground area, not the ~19x the tile counts imply**
+(the tile ratio is 19.2x exactly), because TerraMind's DEM tiles are resampled
+onto the 10 m Sentinel-2 grid and therefore cover 6.5x less ground each. Since
+TerraMesh's DEM modality *is* Copernicus GLO-30 bilinearly resampled (§2.2),
+that ~3x is more ground of the **same product at the same true resolution** —
+not more information, and not a finer view of it. TerraMesh singles DEM out for
+*bilinear* resampling where Sentinel-2's own bands get nearest, so the 3x
+upsampling is deliberate smoothing and demonstrably adds no high-frequency
+content: "not more information" is affirmatively supported, not merely
+unfalsified.
+
+**Where the ~3x comes from, and the one correction that applies to a single
+side.** 63.4M / 21.4M = **2.97x** on stated inputs. TerraMesh's own sources
+imply within-corpus redundancy that this does not price — MajorTOM's 10.68 km
+cells sit on a 10 km lattice (1.111x), and SSL4EO contributes four seasons per
+location, which for a static DEM are exact duplicates — putting unique ground
+nearer 55M km² and the ratio nearer **2.6x**. TerraMesh states **no**
+deduplication or minimum-separation policy. DEMAE's side needs no such
+correction: ADR-0001 grids each COG into a **non-overlapping** window lattice,
+so its 21.4M km² is already unique ground. The honest claim is therefore
+**2.6-3.0x**, and this plan prints **~3x** — the stated-inputs figure, which is
+the one that does not require trusting an estimate. The earlier "~2.8x" was
+right by accident: a footprint 6% too small (256 px is the tokenizer's *crop*;
+the corpus tile is 264 px) cancelling an omitted overlap correction.
+
+**The paper says 100 epochs, and a reader will check.** [TMind] §8.1 gives 100
+epochs for its tokenizers, but that figure is the S-2/S-1 tokenizers'. The
+per-modality training records shipped verbatim in terratorch's
+`tokenizer_register.py` show `epochs=20` for `terramind_v1_tokenizer_dem`
+(alongside `lulc` and `ndvi`) against `epochs=100` for `s2l2a`, `s1rtc` and
+`s1grd`; IBM's own DEM tokenizer model card agrees — "pre-trained for 20 epochs
+on nine million DEM images". Taking the paper at its word would have inflated
+TerraMind's budget 5x and destroyed a claim that is in fact correct. Cite the
+per-modality evidence wherever this number is stated, or it reads as a
+misreading of the paper.
 
 **The caveat is pre-registered, and it runs in both directions.** A data
 advantage to TerraMind is only ever cited as an explanation of a DEMAE *loss*,
 which makes it an escape hatch unless it is also priced as a discount on a DEMAE
 *win*. It is stated once, here, before any number exists: if DEMAE wins C1 on
-2.8x less ground of the same product at matched compute, that is a stronger
+~3x less ground of the same product at matched compute, that is a stronger
 result than a bare win, and if DEMAE loses, this is the one pre-registered
 alternative explanation. Reaching for it afterwards is not available.
 
@@ -758,11 +806,14 @@ A1 from truth cannot separate the arms either.
    same 14x14 token grid — and 1.18M trainable in every frozen-encoder arm
    against the UNet baseline's 17M, so the from-scratch bar is not read as
    handicapped by a totals-only column. Pretraining differs in data, not
-   compute: **~189M tile presentations against ~180M**, over **21.4M km²** of
-   GLO-30 against **~59.0M km²** of the same product resampled to 10 m. That
-   ~2.8x ground-area advantage to TerraMind is recorded here, before any result,
-   and is not available as a post-hoc explanation of a DEMAE loss that was not
-   also offered as a discount on a DEMAE win.
+   compute: **189.2M tile presentations against 181.8M** at the same effective
+   batch of 2048, over **21.4M km²** of GLO-30 against **63.4M km²** of the same
+   product resampled to 10 m. That **~3x** ground-area advantage to TerraMind is
+   recorded here, before any result, and is not available as a post-hoc
+   explanation of a DEMAE loss that was not also offered as a discount on a
+   DEMAE win. TerraMind's 20 DEM-tokenizer epochs are the per-modality figure
+   from terratorch and IBM's model card, **not** the 100 the TerraMind paper
+   states for its S-2/S-1 tokenizers ([`p138-terramind-corpus.md`](p138-terramind-corpus.md)).
 5. The tokenizer encoder was trained for reconstruction, not representation;
    A9 quantifies the bottleneck; conclusions are phrased as "under identical
    probes" not "TerraMind is worse."
@@ -971,8 +1022,10 @@ transplant protocol follows — mask extraction plus stratum-matched relocation
 onto void-free terrain — and the method behind CGIAR-CSI's SRTM v4 fill) ·
 SRTM v2.1 (3 arc-second, Wayback per-tile capture of
 `dds.cr.usgs.gov`; degraded fallback only) · TerraMind (arXiv 2504.11171; tokenizer model card, Apache-2.0) · TerraMesh
-(arXiv 2504.11172, 10 m DEM resampling) · terratorch v1.2.10 source (encoder
-extraction path, normalization constants) · PANGAEA (arXiv 2412.04204, frozen
+(arXiv 2504.11172, 10 m DEM resampling; 9,089,536 DEM tiles at 264 px) ·
+terratorch v1.2.10 source (encoder extraction path, normalization constants,
+`tokenizer_register.py`'s per-modality `epochs=20` for DEM) · Major TOM (arXiv
+2402.12095, the 10 km grid whose 10.68 km cells overlap) · PANGAEA (arXiv 2412.04204, frozen
 protocol + baseline bar) · MAE (arXiv 2111.06377) · GrounDiff (arXiv 2511.10391,
 residual formulation) · FathomDEM (ERL 2025, stratified DEM eval practice) ·
 Kornblith et al. (arXiv 1905.00414) for the CKA follow-up if features get

@@ -187,7 +187,12 @@ a **ViT-B/16 encoder** (768-d tokens, 12 layers, ~90M params, fixed 2D sin-cos
 positional embeddings interpolated at runtime), followed by a 1x1 conv
 (`quant_proj`) down to a **5-dimensional latent**, then **FSQ quantization** with
 levels [8,8,8,6,5] (codebook 15,360), then a ~196M-param conditional diffusion
-UNet decoder. Trained ~20 epochs on TerraMesh's ~9M DEM tiles at 256 px crops.
+UNet decoder. Trained 20 epochs on TerraMesh's 9,089,536 DEM tiles at 256 px
+crops (of 264 px tiles) — verified in
+[`p138-terramind-corpus.md`](p138-terramind-corpus.md). The 20 is the
+**per-modality** figure from terratorch's `tokenizer_register.py` and IBM's DEM
+tokenizer model card; the TerraMind paper's §8.1 states 100 epochs, which is its
+S-2/S-1 tokenizers'. Do not "correct" this to 100.
 Weights are Apache-2.0, so benchmarking and publishing results is unambiguously
 fine (attribute the model card and arXiv 2504.11171 / 2504.11172).
 
