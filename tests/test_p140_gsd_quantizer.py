@@ -753,6 +753,55 @@ class TestRecord:
             assert usage["n_codes_used"] < 0.05 * script.CODEBOOK_SIZE, name
             assert arm["saturated_fraction"] > 0.5, name
 
+    def test_the_encoder_only_claim_is_counted_not_quoted(self, record):
+        """#140 says "encoder-only: 90.2M of the 1.15 GB checkpoint". Counted, and matching #118.
+
+        The count is taken before anything installs a `pos_emb`; the control pass below swaps a
+        16x16 embedding for a 14x14 one, which is 46,080 parameters, and a count taken afterwards
+        would silently disagree with #118 §8 by exactly that.
+        """
+        assert record["quantizer"]["encoder_parameters"] == 90_172_416
+        assert record["quantizer"]["quant_proj_parameters"] == 3845
+        assert record["quantizer"]["decoder_parameters_unused"] == 196_140_560
+
+    def test_the_adr_0011_departure_is_measured_not_argued(self, record):
+        """The one ADR this run does not follow, and the second pass that prices it.
+
+        ADR-0011 Decision 2 replaces terratorch's bicubic 16->14 `pos_emb` resize with the
+        centre-anchored crop "on every frozen-encoder pass", and #134 measured the two feature
+        sets 0.9708 apart. These arms drive the checkpoint's own path instead, because
+        "off-distribution for this tokenizer" is a question about the tokenizer as released — so
+        every arm is encoded a second time under ADR-0011's embedding.
+
+        What must hold is not that the levels agree. They do not: the control sits ~0.10 bits
+        higher on every arm. What must hold is that the **differences** — the only thing this
+        record reads — survive the choice.
+        """
+        control = record["posemb_control"]
+        assert control["adr"] == "0011"
+        assert set(control["arms"]) == set(record["arms"])
+
+        # The embedding moves every arm's level, and by more than some of the differences read
+        # off them. That is the reason it is priced rather than assumed away.
+        assert control["max_abs_shift_in_residual_mean"] > 0.005
+
+        for name, arm in record["arms"].items():
+            ckpt = arm["code_usage"]["entropy_bits"]
+            assert control["arms"][name]["entropy_bits"] > ckpt, name
+
+        # Every conclusion §7 of the memo draws, re-derived under the other embedding.
+        diffs = control["entropy_difference"]
+        bandwidth = abs(diffs["native_30m_vs_bandwidth_matched_30m"])
+        assert bandwidth < abs(diffs["upsampled_10m_vs_bandwidth_matched_30m"]) / 10
+        assert bandwidth < abs(diffs["upsampled_10m_vs_terramesh_10m"]) / 10
+
+        # The native-vs-TerraMesh gap changes sign between the embeddings — which is the sharpest
+        # possible statement that it is indistinguishable from zero, since it is smaller than the
+        # influence of a choice neither arm is affected by differently. Both readings sit well
+        # inside the bootstrap interval measured on the checkpoint path.
+        gap = record["entropy_difference"]["native_30m_vs_terramesh_10m"]
+        assert gap["ci95"][0] < diffs["native_30m_vs_terramesh_10m"] < gap["ci95"][1]
+
     def test_the_mps_run_agrees_with_the_cpu_run(self, record):
         """Both devices committed, as #118 did — and here the agreement is not a formality.
 

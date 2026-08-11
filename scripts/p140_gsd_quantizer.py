@@ -35,6 +35,15 @@ a ninth of the area `native_30m` does — so any difference between those two ar
 bandwidth effect or an extent effect, and neither reference separates them. `bandwidth_matched_30m`
 holds the extent and moves only the bandwidth. It costs one extra forward pass and no new data.
 
+**One departure from ADR-0011, measured rather than argued.** Decision 2 replaces terratorch's
+bicubic 16->14 `pos_emb` resize with the centre-anchored crop "on every frozen-encoder pass", and
+#134 measured the two feature sets 0.9708 apart — material. The arms here drive the *checkpoint's*
+own path instead, because "off-distribution for this tokenizer" is a question about the tokenizer
+as released. Since that is a departure, every arm is encoded a second time under ADR-0011's
+embedding and the record carries `posemb_control`: how far the arm *differences* move between the
+two. They should not move at all, the embedding being common to all four arms — but that is what
+the second pass is for.
+
 **No threshold and no drop condition.** #140 rules those out by name, deliberately unlike #134:
 these statistics have no familiar scale, so any cutoff would be invented to look principled, and
 a cutoff would imply the instrument can settle whether the shift *costs* TerraMind anything. It
@@ -107,7 +116,6 @@ TERRAMIND_MODEL = p118.TERRAMIND_MODEL
 
 TARGET_PX = 224  # DEMAE's primary regime, and TerraMind's 14x14 token grid at patch 16
 TOKENS_PER_TILE = 196
-EMBED_DIM = 768
 LATENT_DIM = 5
 
 NATIVE_GSD_M = 30.0  # GLO-30, the product both sides of the benchmark use
@@ -521,7 +529,9 @@ def paired_difference(a: np.ndarray, b: np.ndarray) -> dict[str, Any]:
     return {"n": int(diff.size), "mean": mean, "sd": sd, "se": se, "ci95": [mean - half, mean + half]}
 
 
-def summarize_residual(per_token: np.ndarray, per_dim_abs: np.ndarray, code_space: np.ndarray) -> dict:
+def summarize_residual(
+    per_token: np.ndarray, per_dim_abs: np.ndarray, code_space: np.ndarray
+) -> dict[str, Any]:
     """The distribution, not just its mean — percentiles and the five per-dimension means."""
     p01, p50, p99 = np.percentile(per_token, [1, 50, 99])
     return {
@@ -768,9 +778,14 @@ class ArmAccumulator:
 
 
 def encode_arm(model, x: Tensor) -> Tensor:
-    """`[B, 1, 224, 224]` in TerraMind units -> the `[B, 5, 14, 14]` pre-quantization latent."""
+    """`[B, 1, 224, 224]` in TerraMind units -> the `[B, 5, 14, 14]` pre-quantization latent.
+
+    `prepare_input` is in the extraction snippet the selection memo's §3.4 documents, and #118
+    §5.1 verified it is the identity for this model (`undo_std=False`, `cls_emb=None`). Called
+    anyway rather than skipped, so this drives the documented path instead of a paraphrase of it.
+    """
     with torch.no_grad():
-        return model.quant_proj(model.encoder(x))
+        return model.quant_proj(model.encoder(model.prepare_input(x)))
 
 
 def _demae_batches(corpus: Path, rows: Sequence[dict], batch_size: int) -> Iterator[Tensor]:
@@ -818,28 +833,61 @@ def run(
     model = p118.build_tokenizer().to(device)
     quantizer = model.quantize
     levels = fsq_levels(quantizer)
-    if tuple(levels.tolist()) != list(CODEBOOK_LEVELS) and tuple(levels.tolist()) != CODEBOOK_LEVELS:
+    if tuple(levels.tolist()) != CODEBOOK_LEVELS:
         raise AssertionError(f"installed tokenizer quantizes onto {levels.tolist()}, not {CODEBOOK_LEVELS}")
 
     device_levels = levels.to(device)
-    accumulators = {name: ArmAccumulator(name) for name in ARMS}
-    code_matches = index_matches = True
 
-    def consume(name: str, x_metres: Tensor) -> None:
-        nonlocal code_matches, index_matches
-        latent = encode_arm(model, terramind_normalize_t(x_metres).to(device))
-        assignment = fsq_assign(latent, device_levels)
-        ok_code, ok_index = verify_against_quantizer(quantizer, latent, assignment)
-        code_matches &= ok_code
-        index_matches &= ok_index
-        accumulators[name].update(assignment, device_levels)
+    # Counted before anything installs a `pos_emb`, or the encoder total would come out 46,080
+    # short of #118's 90,172,416 — the difference between a 16x16 embedding and a 14x14 one.
+    parameters = {
+        "quantizer_parameters": sum(p.numel() for p in quantizer.parameters()),
+        "quant_proj_parameters": sum(p.numel() for p in model.quant_proj.parameters()),
+        # #140's "encoder-only: 90.2M of the 1.15 GB checkpoint", counted rather than quoted.
+        # `build_tokenizer` loads the whole tokenizer (`strict=True`), but nothing below runs the
+        # decoder, so this is what the diagnostic actually costs.
+        "encoder_parameters": sum(p.numel() for p in model.encoder.parameters()),
+        "decoder_parameters_unused": sum(p.numel() for p in model.decoder.parameters()),
+    }
 
-    for batch in _demae_batches(corpus, rows, batch_size):
-        for name, arm in demae_arms(batch).items():
-            consume(name, arm)
+    def measure(pos_emb: Tensor) -> tuple[dict[str, ArmAccumulator], bool, bool]:
+        """Every arm through the encoder once, with `pos_emb` installed."""
+        model.encoder.pos_emb = torch.nn.Parameter(pos_emb.to(device), requires_grad=False)
+        accumulators = {name: ArmAccumulator(name) for name in ARMS}
+        code_ok = index_ok = True
 
-    for batch in _terramesh_batches(tiles, batch_size):
-        consume("terramesh_10m", terramesh_arm(batch))
+        def consume(name: str, x_metres: Tensor) -> None:
+            nonlocal code_ok, index_ok
+            latent = encode_arm(model, terramind_normalize_t(x_metres).to(device))
+            assignment = fsq_assign(latent, device_levels)
+            ok_code, ok_index = verify_against_quantizer(quantizer, latent, assignment)
+            code_ok &= ok_code
+            index_ok &= ok_index
+            accumulators[name].update(assignment, device_levels)
+
+        for batch in _demae_batches(corpus, rows, batch_size):
+            for name, arm in demae_arms(batch).items():
+                consume(name, arm)
+        for batch in _terramesh_batches(tiles, batch_size):
+            consume("terramesh_10m", terramesh_arm(batch))
+        return accumulators, code_ok, index_ok
+
+    checkpoint_pos_emb = model.encoder.pos_emb.detach().cpu()
+    accumulators, code_matches, index_matches = measure(checkpoint_pos_emb)
+
+    # ADR-0011 Decision 2 replaces terratorch's bicubic 16->14 resize with the centre-anchored
+    # crop "on every frozen-encoder pass", and #134 measured the two feature sets 0.9708 apart —
+    # material. This run drives the *checkpoint's* own path, because "off-distribution for this
+    # tokenizer" is a question about the tokenizer as released. That is a departure from the ADR,
+    # so it is measured rather than argued: every arm is encoded a second time under ADR-0011's
+    # embedding, and the record carries how far the answer moves. It should move by nothing, since
+    # the embedding is common to all four arms and only their differences are read — but "should"
+    # is what the second pass is for.
+    control_accumulators, control_code_ok, control_index_ok = measure(
+        p134.posemb_variants(checkpoint_pos_emb)["centre"]
+    )
+    code_matches &= control_code_ok
+    index_matches &= control_index_ok
 
     import importlib.metadata as md
 
@@ -858,13 +906,57 @@ def run(
             "entropy_bits_bootstrap_mean": float(replicates[name].mean()),
         }
 
-    pairs = (
+    #: What the residual is compared across — the three arms drawn from one tile set, so the
+    #: comparison can be paired.
+    PAIRED_PAIRS = (
         ("native_30m", "bandwidth_matched_30m"),
         ("native_30m", "upsampled_10m"),
         ("upsampled_10m", "bandwidth_matched_30m"),
+    )
+    #: What the entropy is compared across — the three above plus the two that reach TerraMesh,
+    #: which is a different tile set and therefore resampled independently.
+    ENTROPY_PAIRS = PAIRED_PAIRS + (
         ("native_30m", "terramesh_10m"),
         ("upsampled_10m", "terramesh_10m"),
     )
+
+    control_arms = {name: acc.summary() for name, acc in control_accumulators.items()}
+    posemb_control = {
+        "adr": "0011",
+        "note": (
+            "ADR-0011 Decision 2 replaces terratorch's bicubic 16->14 pos_emb resize with the "
+            "centre-anchored crop on every frozen-encoder pass, and #134 measured the two feature "
+            "sets 0.9708 apart. The arms above drive the checkpoint's own path, because "
+            "'off-distribution for this tokenizer' is a question about the tokenizer as released. "
+            "This is the same run under ADR-0011's embedding, so the departure is measured rather "
+            "than argued."
+        ),
+        "arms": {
+            name: {
+                "residual_mean": arm["residual"]["mean"],
+                "entropy_bits": arm["code_usage"]["entropy_bits"],
+                "saturated_fraction": arm["saturated_fraction"],
+            }
+            for name, arm in control_arms.items()
+        },
+        "entropy_difference": {
+            f"{a}_vs_{b}": control_arms[b]["code_usage"]["entropy_bits"]
+            - control_arms[a]["code_usage"]["entropy_bits"]
+            for a, b in ENTROPY_PAIRS
+        },
+        # The only number that decides whether the departure matters: how far the *comparisons*
+        # move between the two embeddings. The levels are expected to move; the differences are not.
+        "max_abs_shift_in_entropy_difference": max(
+            abs(
+                (control_arms[b]["code_usage"]["entropy_bits"] - control_arms[a]["code_usage"]["entropy_bits"])
+                - (arms[b]["code_usage"]["entropy_bits"] - arms[a]["code_usage"]["entropy_bits"])
+            )
+            for a, b in ENTROPY_PAIRS
+        ),
+        "max_abs_shift_in_residual_mean": max(
+            abs(control_arms[name]["residual"]["mean"] - arms[name]["residual"]["mean"]) for name in ARMS
+        ),
+    }
 
     return {
         "issue": 140,
@@ -882,8 +974,10 @@ def run(
             "module": type(quantizer).__name__,
             "levels": levels.tolist(),
             "codebook_size": CODEBOOK_SIZE,
-            "parameters": sum(p.numel() for p in quantizer.parameters()),
-            "quant_proj_parameters": sum(p.numel() for p in model.quant_proj.parameters()),
+            "parameters": parameters["quantizer_parameters"],
+            "quant_proj_parameters": parameters["quant_proj_parameters"],
+            "encoder_parameters": parameters["encoder_parameters"],
+            "decoder_parameters_unused": parameters["decoder_parameters_unused"],
             "code_matches_module": code_matches,
             "index_matches_module": index_matches,
         },
@@ -914,16 +1008,15 @@ def run(
         # one number over pooled tokens, so its interval is resampled. Different machinery, same
         # purpose: neither statistic is reported without a spread.
         "paired_residual": {
-            f"{a}_vs_{b}": paired_difference(per_tile[a], per_tile[b])
-            for a, b in pairs
-            if a in DEMAE_ARMS and b in DEMAE_ARMS
+            f"{a}_vs_{b}": paired_difference(per_tile[a], per_tile[b]) for a, b in PAIRED_PAIRS
         },
         "entropy_difference": {
             f"{a}_vs_{b}": {"mean": float((replicates[b] - replicates[a]).mean())}
             | bootstrap_interval(replicates[b] - replicates[a])
             | {"point": arms[b]["code_usage"]["entropy_bits"] - arms[a]["code_usage"]["entropy_bits"]}
-            for a, b in pairs
+            for a, b in ENTROPY_PAIRS
         },
+        "posemb_control": posemb_control,
         # The limit, carried with the number rather than only in the prose around it.
         "reading_rule": (
             "#122's symmetry rule: this result is not available to explain a TerraMind loss "

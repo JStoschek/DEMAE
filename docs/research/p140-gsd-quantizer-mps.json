@@ -334,9 +334,46 @@
       "se": 0.0011832299808367795
     }
   },
+  "posemb_control": {
+    "adr": "0011",
+    "arms": {
+      "bandwidth_matched_30m": {
+        "entropy_bits": 7.232758414498999,
+        "residual_mean": 0.4729090929031372,
+        "saturated_fraction": 0.6716632653061224
+      },
+      "native_30m": {
+        "entropy_bits": 7.244526649971469,
+        "residual_mean": 0.47278305888175964,
+        "saturated_fraction": 0.6718673469387755
+      },
+      "terramesh_10m": {
+        "entropy_bits": 7.259721908032034,
+        "residual_mean": 0.4780292510986328,
+        "saturated_fraction": 0.682530612244898
+      },
+      "upsampled_10m": {
+        "entropy_bits": 6.901718329816793,
+        "residual_mean": 0.4829796254634857,
+        "saturated_fraction": 0.667156462585034
+      }
+    },
+    "entropy_difference": {
+      "native_30m_vs_bandwidth_matched_30m": -0.011768235472469968,
+      "native_30m_vs_terramesh_10m": 0.015195258060565209,
+      "native_30m_vs_upsampled_10m": -0.3428083201546759,
+      "upsampled_10m_vs_bandwidth_matched_30m": 0.3310400846822059,
+      "upsampled_10m_vs_terramesh_10m": 0.3580035782152411
+    },
+    "max_abs_shift_in_entropy_difference": 0.04322563891396314,
+    "max_abs_shift_in_residual_mean": 0.01044166088104248,
+    "note": "ADR-0011 Decision 2 replaces terratorch's bicubic 16->14 pos_emb resize with the centre-anchored crop on every frozen-encoder pass, and #134 measured the two feature sets 0.9708 apart. The arms above drive the checkpoint's own path, because 'off-distribution for this tokenizer' is a question about the tokenizer as released. This is the same run under ADR-0011's embedding, so the departure is measured rather than argued."
+  },
   "quantizer": {
     "code_matches_module": true,
     "codebook_size": 15360,
+    "decoder_parameters_unused": 196140560,
+    "encoder_parameters": 90172416,
     "index_matches_module": true,
     "levels": [
       8,
@@ -350,7 +387,7 @@
     "quant_proj_parameters": 3845
   },
   "reading_rule": "#122's symmetry rule: this result is not available to explain a TerraMind loss unless it is also priced as a discount on a TerraMind win.",
-  "runtime_seconds": 29.109905004501343,
+  "runtime_seconds": 47.04387807846069,
   "terramesh": {
     "bytes_fetched": 37748736,
     "elevation_range_metres": [

@@ -3,7 +3,8 @@
 Ticket [#140](https://github.com/JStoschek/DEMAE/issues/140) · map [#117](https://github.com/JStoschek/DEMAE/issues/117) · plan [`task1-void-fill-plan.md`](task1-void-fill-plan.md) §2.2 · arms A5, A9
 
 > **What this document is.** A record of an actual run, not a reading of a model card. Every
-> number below came out of forward passes over 1,200 real tiles on 2026-08-11, and the run is
+> number below came out of forward passes over 1,200 real tiles — twice over, under two position
+> embeddings (§6) — on 2026-08-11, and the run is
 > reproducible from the tree: [`scripts/p140_gsd_quantizer.py`](../../scripts/p140_gsd_quantizer.py)
 > writes [`p140-gsd-quantizer.json`](p140-gsd-quantizer.json) (CPU) and
 > [`p140-gsd-quantizer-mps.json`](p140-gsd-quantizer-mps.json) (MPS), and
@@ -252,12 +253,54 @@ against 1.93. That is a geography signature, not a GSD one, and it is the sort o
 scalar would have hidden. (The five marginals sum to 10.4 bits against a joint of 7.14, so the
 axes are strongly dependent; nothing here turns on that.)
 
-## 6. Cost, and where it runs
+## 6. The one ADR this run does not follow, and what it costs
+
+**[ADR-0011](../adr/0011-terramind-posemb-rederived-at-14x14.md) Decision 2** replaces
+terratorch's bicubic 16→14 `pos_emb` resize with the centre-anchored crop `pos_emb[:, :, 1:15, 1:15]`
+**"on every frozen-encoder pass (A5, A9 and the ablations hanging off them)"**, and #134 measured
+the two feature sets **0.9708** apart — material, which is why §2.2 carries an ablation row for
+it. **These arms drive the checkpoint's own path instead.** The reason is the question's framing:
+"is this input off-distribution for *this tokenizer*" is a question about the tokenizer as
+released, and TerraMesh's own tiles reach the encoder through the same resize.
+
+That is a departure from a standing ADR, so it is measured rather than argued. Every arm is
+encoded a second time under ADR-0011's embedding; `posemb_control` in the record carries the
+result.
+
+| | `native_30m` | `bandwidth_matched_30m` | `upsampled_10m` | `terramesh_10m` |
+|---|---:|---:|---:|---:|
+| Entropy, checkpoint `pos_emb` | 7.140 | 7.131 | 6.808 | 7.123 |
+| Entropy, ADR-0011 `pos_emb` | 7.245 | 7.233 | 6.902 | 7.260 |
+| Residual, checkpoint | 0.4660 | 0.4662 | 0.4749 | 0.4676 |
+| Residual, ADR-0011 | 0.4728 | 0.4729 | 0.4830 | 0.4780 |
+
+**The levels move and the conclusions do not.** ADR-0011's embedding raises every arm's entropy
+by ~0.10 bits and every arm's residual by ~0.007–0.010 — more than several of the differences
+this document reads. The **differences** move by at most **0.0434 bits**:
+
+| Comparison | Checkpoint | ADR-0011 |
+|---|---:|---:|
+| bandwidth (`native` → `bandwidth_matched`) | −0.0093 | −0.0117 |
+| extent (`upsampled` → `bandwidth_matched`) | +0.3230 | +0.3311 |
+| geography (`upsampled` → `terramesh`) | +0.3147 | +0.3581 |
+| everything (`native` → `terramesh`) | −0.0176 | **+0.0153** |
+
+Every reading in §1 and §4 survives: bandwidth stays an order of magnitude below extent and
+geography, and native 30 m stays indistinguishable from TerraMesh.
+
+**One thing sharpens rather than survives.** The `native` → `terramesh` gap **changes sign**
+between the two embeddings, −0.018 to +0.015. Both readings sit well inside the bootstrap
+interval measured on the checkpoint path ([−0.175, +0.136]), so nothing is contradicted — but the
+gap is smaller than the influence of a choice that affects neither arm preferentially, which is
+about as sharp a way as there is to say it is indistinguishable from zero. **The sign of that gap
+carries no information and must not be quoted as if it did.**
+
+## 7. Cost, and where it runs
 
 | | |
 |---|---|
-| Full run, CPU (1,200 forward passes + 1,000 bootstrap replicates) | **47 s** |
-| Full run, MPS | **29 s** |
+| Full run, CPU (2,400 forward passes + 1,000 bootstrap replicates) | **95 s** |
+| Full run, MPS | **47 s** |
 | TerraMesh fetch | 37.7 MB, once, cached |
 | Weights | the same 90.2 M encoder A5 and A9 already load |
 
@@ -270,7 +313,7 @@ residual, and pick the **same number of distinct codes** on all four arms. The s
 bit-stable across devices; it is stable three orders of magnitude below the smallest difference
 this document reads.
 
-## 7. What this changes
+## 8. What this changes
 
 - **§2.2's third bullet** stops saying "measured under #140" and states the figures: the shift is
   not visible in the quantizer, native 30 m is indistinguishable from TerraMesh's own tiles
@@ -283,7 +326,7 @@ this document reads.
   measurement that finds no shift is not a licence to drop the caveat — it is what stops the
   caveat being used, in either direction, as an unpriced explanation later.
 
-## 8. Sources
+## 9. Sources
 
 - The runs: [`p140-gsd-quantizer.json`](p140-gsd-quantizer.json) (CPU),
   [`p140-gsd-quantizer-mps.json`](p140-gsd-quantizer-mps.json) (MPS)
