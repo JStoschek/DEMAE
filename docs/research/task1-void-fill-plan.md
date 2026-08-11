@@ -219,11 +219,14 @@ Decisions:
   [#133](https://github.com/JStoschek/DEMAE/issues/133) spent a whole ticket
   killing. This is a real out-of-distribution condition and the writeup states it;
   it is simply not the one the plan used to claim.
-- **That caveat is pre-registered and explicitly symmetric**, under the rule
-  [#122](https://github.com/JStoschek/DEMAE/issues/122) fixed for the corpus-size
-  caveat: the GSD shift is **not available as a post-hoc explanation of a
-  TerraMind loss unless it is also priced as a discount on a TerraMind win.**
-  Deliberately **no threshold and no drop condition** are attached, unlike
+- **That caveat is pre-registered and explicitly symmetric** — *registered rules
+  **R9** and **R9b**, asserted in
+  [ADR-0013](../adr/0013-task1-pre-registration-register.md) and indexed at §6
+  item 8; what follows is the reasoning, not a separate commitment* — under the
+  rule [#122](https://github.com/JStoschek/DEMAE/issues/122) fixed for the
+  corpus-size caveat: the GSD shift is **not available as a post-hoc explanation
+  of a TerraMind loss unless it is also priced as a discount on a TerraMind
+  win.** Deliberately **no threshold and no drop condition** are attached, unlike
   [#134](https://github.com/JStoschek/DEMAE/issues/134)'s materiality check. #134
   could fix 0.99 because cosine has a familiar scale; the statistics below have
   none, so any threshold would be invented to look principled — and a threshold
@@ -405,7 +408,10 @@ TerraMind's budget 5x and destroyed a claim that is in fact correct. Cite the
 per-modality evidence wherever this number is stated, or it reads as a
 misreading of the paper.
 
-**The caveat is pre-registered, and it runs in both directions.** A data
+**The caveat is pre-registered, and it runs in both directions.** *(Registered
+rule **R2**, asserted in
+[ADR-0013](../adr/0013-task1-pre-registration-register.md); the per-modality
+citation requirement above is **R4**.)* A data
 advantage to TerraMind is only ever cited as an explanation of a DEMAE *loss*,
 which makes it an escape hatch unless it is also priced as a discount on a DEMAE
 *win*. It is stated once, here, before any number exists: if DEMAE wins C1 on
@@ -444,7 +450,9 @@ benchmark is the instrument for it. R4 runs in A2/A3/A4 at 20k.
   "Running both costs minutes" is true in GPU minutes and false in correctness
   risk.
 
-**Which DEMAE is the headline: R5, unconditionally.** C1 and C3 are evaluated on
+**Which DEMAE is the headline: R5, unconditionally.** *(Registered rule **R3**,
+asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md).)* C1 and
+C3 are evaluated on
 the R5 release encoder alone; R4 is a pre-registered secondary row at 20k only,
 and does not enter the label-efficiency sweep. If R4 beats R5 materially at void
 filling, that is reported prominently as a finding about init transfer — and
@@ -993,7 +1001,9 @@ synthetic pooled number, and carry C4's ordering claim rather than a metric
 delta.
 
 The set below is **pre-registered and graded**: five headline columns per cell,
-four appendix ones, and nothing else. The grading is measured rather than
+four appendix ones, and nothing else. *(Registered rule **R1**, asserted in
+[ADR-0013](../adr/0013-task1-pre-registration-register.md).)* The grading is
+measured rather than
 argued — [`p123-metric-discrimination.md`](p123-metric-discrimination.md) scored
 every candidate over 24,000 A1 instances for **separation** (spread across the
 A1 variants over the within-cell instance spread; below ~1.0 a metric cannot
@@ -1071,7 +1081,9 @@ A1 from truth cannot separate the arms either.
   **Printed as signed degrees to 3 dp, with the sign carried as a visual channel
   rather than left to be read off the digits, and against a threshold fixed here
   before any arm runs: a gap above +0.15° is a seam break; |gap| ≤ 0.15° is
-  not** ([#136](https://github.com/JStoschek/DEMAE/issues/136)). The scale is
+  not** ([#136](https://github.com/JStoschek/DEMAE/issues/136); *registered rule
+  **R7**, asserted in
+  [ADR-0013](../adr/0013-task1-pre-registration-register.md)*). The scale is
   the reason both halves are needed. It is wildly asymmetric — the break side
   sits an order of magnitude above the intact side, and the intact side is a
   cluster straddling zero — so a raw signed column reads as noise and a bare
@@ -1126,7 +1138,9 @@ A1 from truth cannot separate the arms either.
   and pools the buckets away entirely
   ([#136](https://github.com/JStoschek/DEMAE/issues/136)). **Population floor:** a
   (row, band) cell with fewer than 100 instances is reported as a count with no
-  metric rather than pooled into a neighbouring band. This binds hardest on the
+  metric rather than pooled into a neighbouring band *(registered rule **R8**,
+  asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.
+  This binds hardest on the
   real-void family, which takes whatever distribution SRTM gives it. **The
   synthetic rows clear it with room** — 5,000 test tiles × 2 families × 3 buckets
   is **30,000** instances, 1,250 per (row, band). **The real rows have now been
@@ -1151,7 +1165,9 @@ A1 from truth cannot separate the arms either.
   predates #126's reshaping and #135's counts — the total is **30,000 synthetic +
   9,978 real = ~40k**, which moves the two eval lines by ~25% and no conclusion.
 - **The printed table** *(pre-registered 2026-08-11 —
-  [#136](https://github.com/JStoschek/DEMAE/issues/136))*. Printed in full, the
+  [#136](https://github.com/JStoschek/DEMAE/issues/136); registered rule **R5**,
+  asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.
+  Printed in full, the
   grid is **1,430 headline numbers** — 11 arm rows (A1; A2, A3 and A4 each split
   R5/R4; A5; A6; A7; A9) × 26 cells (2 synthetic families × 3 buckets × 4 bands,
   plus the real family's two sub-rows in R4 alone) × 5 headline metrics — and
@@ -1203,7 +1219,9 @@ A1 from truth cannot separate the arms either.
 - **Statistics:** paired bootstrap over test tiles (10k resamples) on RMSE and
   slope RMSE; report 95% CIs and mark table cells where the CI excludes zero.
   **The marked pairs are four, pre-registered here, not all of them**
-  ([#136](https://github.com/JStoschek/DEMAE/issues/136)):
+  ([#136](https://github.com/JStoschek/DEMAE/issues/136); *registered rule
+  **R6**, asserted in
+  [ADR-0013](../adr/0013-task1-pre-registration-register.md)*):
   **A4-R5 vs A5** and **A4-R5 vs A6** (C1's two comparisons), **A3 vs A1**
   (C2), and **A4-R5 vs A7 at 20k** (C3's endpoint). Every other pair is computed
   into the parquet and simply left unmarked in print. This section used to
@@ -1278,14 +1296,52 @@ A1 from truth cannot separate the arms either.
    same prominence as wins; C3's low-label sweep is the pre-registered fallback
    claim.
 8. Pre-registration: this memo is committed before the first head trains;
-   success criteria C1-C4 are defined above the results, not after them. **So is
-   the reporting shape** ([#136](https://github.com/JStoschek/DEMAE/issues/136)):
-   which axes the headline table prints, which **four** arm pairs carry a
-   bootstrap CI mark, and the **+0.15°** threshold above which a seam gap counts
-   as a seam break. Each of those is a choice that would be worth nothing decided
-   after the numbers existed — a table shape picked to flatter a result, a pair
-   set chosen from whichever comparisons cleared zero, a threshold slid to put an
-   arm on the right side of it.
+   success criteria C1-C4 are defined above the results, not after them. **So are
+   eleven rules governing how the evidence may be used**, and this item is their
+   index — each is stated in full beside the topic it governs, and all eleven are
+   asserted together in
+   [ADR-0013](../adr/0013-task1-pre-registration-register.md), which this list
+   quotes rather than independently commits. A rule is on it when a *different*
+   choice, made after seeing the numbers, could change which conclusion the table
+   supports:
+
+   - **R1** — the metric set is **five headline columns and four appendix ones**,
+     nothing else, graded by measured separation (§5).
+   - **R2** — the pretraining-corpus caveat is symmetric (item 4 above).
+   - **R3** — **R5 is the headline unconditionally**; an R4 win is reported
+     prominently but never becomes C1's number (§0, §2.3).
+   - **R4** — TerraMind's **20** DEM-tokenizer epochs carry their per-modality
+     citation wherever stated, not the paper's 100 (item 4 above).
+   - **R5** — which axes the headline table prints: the size buckets pool, the
+     blob family is headline, and C4 prints as a rank block (§5, §9).
+   - **R6** — exactly **four** arm pairs carry a bootstrap CI mark, named in
+     advance, of the 55 computed (§5, §9).
+   - **R7** — a seam gap above **+0.15°** counts as a seam break (§5).
+   - **R8** — real-medium+ is unstratified unless the realised histogram clears
+     **100 per band** (§3.3, §5).
+   - **R9** — the GSD caveat is symmetric and is stated as a *bandwidth* shift,
+     not a resolution handicap (item 3 above).
+   - **R9b** — *a refusal:* the FSQ diagnostic carries **no threshold**, because
+     the statistic has no natural scale and a threshold would imply it settles
+     what the shift costs (§2.2).
+   - **R10** — C3's low-label sweep is the fallback claim, fixed here (item 7
+     above).
+   - **R11** — the bicubic-vs-re-derived ablation row, A5 at 20k, dropped iff the
+     materiality check returns **≥ 0.99**
+     ([ADR-0011](../adr/0011-terramind-posemb-rederived-at-14x14.md) D4-5; it
+     returned 0.9708, so the row stays).
+
+   Each is a choice that would be worth nothing decided after the numbers existed
+   — a table shape picked to flatter a result, a pair set chosen from whichever
+   comparisons cleared zero, a threshold slid to put an arm on the right side of
+   it. **Two have already fired against their own projections and held**: R8's
+   floor was fixed at ~96 projected instances and met a measured 438
+   ([#135](https://github.com/JStoschek/DEMAE/issues/135)), and R11 returned
+   0.9708 against a bar of 0.99 ([#134](https://github.com/JStoschek/DEMAE/issues/134)).
+   Neither outcome was available to argue with, which is the only property that
+   made either worth registering. The numeric entries are additionally committed
+   to `task1-prereg-bar.json`, which refuses to load if the phrase it was
+   registered in no longer appears above.
 
 ## 7. Compute budget
 
