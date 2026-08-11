@@ -49,10 +49,40 @@ defined before any number is seen:
   real-void rows within the same band — which would put C1 in question, since
   C1's comparison is made entirely on synthetic masks.
 
-If C2 partially fails (e.g., Diff-DEM wins on texture), that is reported, not
+If C2 partially fails (e.g., A7 wins on seam continuity while losing on metres),
+that is reported, not
 hidden; PANGAEA-style candor is part of the deliverable. C1 and C3 are the
 claims DEMAE's worth actually rests on, because they isolate the pretrained
 representation from decoder capacity.
+
+**This table is an internally controlled comparison, and there is nothing
+external to stand it beside. Goes in the writeup.** No public DEM void-filling
+benchmark exists that independent methods report against: published numbers in
+this task are each tied to a private tile set, a private mask set and a private
+scoring script. The field's most-cited evaluation, **Reuter et al. 2007**,
+publishes mean *rank* of RMSE and never metres; the most recent work,
+**Dfilled (2025)**, retrained its competitors rather than citing them. Every
+arm here sees the same tiles, masks, seeds and head, and every number was
+produced by one scoring function in this repository.
+
+**Both candidates for an external contact point were investigated, and neither
+yields a comparable number.** This is a checked claim, not a hedge:
+
+- **Diff-DEM.** Its committed `tif_metric.py` de-normalises to metres using the
+  ground-truth tile's own extrema, **void interior included** — the exact leak
+  §2.1 forbids for DEMAE — so their metres and ours are different quantities and
+  could never share a column
+  ([#124](https://github.com/JStoschek/DEMAE/issues/124)).
+- **GeomorPM.** Its CC BY 4.0 Figshare deposit releases *pretrained* weights
+  only; there is **no void-filling checkpoint**, its VF fine-tune config is
+  absent from the deposit, and its paper is paywalled. A cross-eval would mean
+  reproducing an unpublished recipe and then being unable to check the
+  reproduction ([#128](https://github.com/JStoschek/DEMAE/issues/128)).
+
+So the honest statement is the strong one — **incomparable, and we looked** —
+rather than "incomparable except at the transfer blocks". That sentence is
+available only because both were opened and read, and it is worth more than the
+two weak transfer rows it replaces.
 
 ## 1. Comparison arms
 
@@ -65,7 +95,6 @@ representation from decoder capacity.
 | A5 | TerraMind frozen + head | TerraMind DEM tokenizer ViT-B encoder, 768-d `feats` (pre-`quant_proj`), frozen | head only (identical to A4's) | same pre-filled input, TerraMind's own normalization (§2.1) |
 | A6 | ImageNet-MAE frozen + head | timm/MAE ViT-B frozen (ViT-S as the §2.3 appendix row), 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
 | A7 | UNet from scratch | none (UNet) | everything | voided tile + mask channel, residual over the A1 fill |
-| A8 | Diff-DEM released checkpoint | theirs | none | their protocol, their data (cross-eval, §3.4) |
 | A9 | TerraMind tokenizer pass-through (reference row) | full tokenizer: encode, FSQ, diffusion decode | none | A1-pre-filled tile through the full VQ pipeline; shows the 5-d bottleneck's cost |
 
 A4 vs A5 vs A6 is the heart of the benchmark: identical head, identical data,
@@ -365,7 +394,7 @@ the same as the corpus's: two runs from committed inputs reproduce the tables.
 
 A seeded `benchmark.masks` generator producing **two committed artifacts**: one
 mask list per eval tile, and a **train-time mask bank** of K = 50 draws per
-head-train tile (§3.5). Training masks are *not* drawn on the fly; the bank is
+head-train tile (§3.4). Training masks are *not* drawn on the fly; the bank is
 read by every arm, seed and hyperparameter config, so the mask sequence a run
 sees is a committed input rather than a reproduction of the generator's RNG.
 
@@ -384,9 +413,18 @@ sees is a committed input rather than a reproduction of the generator's RNG.
   does bind, just barely: it permits `d ≤ 159.86 px`, so the published top of
   160 overshot by **0.14 px**. The top is lowered to 158 rather than clamped,
   so no draw is ever silently trimmed and the two constraints are satisfiable
-  with margin. The two upper buckets still bracket Diff-DEM's published
-  protocol; the change is 1.2% of the large bucket's diameter range and no
-  measured quantity moves. One void per tile per eval instance; every eval tile
+  with margin; the change is 1.2% of the large bucket's diameter range and no
+  measured quantity moves. **The boundaries are set by the 40% area cap and the
+  equivalent-diameter geometry, and by nothing external.** This bullet used to
+  add that the two upper buckets "still bracket Diff-DEM's published protocol";
+  that clause is deleted with the A8 arm
+  ([#128](https://github.com/JStoschek/DEMAE/issues/128)) and is deliberately
+  *not* replaced by another competitor's protocol. Nothing about the parameter
+  changes — only its stated reason, which was resting on a comparability §0
+  now denies. Why the size axis is worth having at all is a terrain argument,
+  measured in [#119](https://github.com/JStoschek/DEMAE/issues/119) and
+  [#126](https://github.com/JStoschek/DEMAE/issues/126), not a comparability
+  one. One void per tile per eval instance; every eval tile
   appears once per bucket **for the two synthetic families (i) and (ii)**, so
   bucket scores are computed over identical tile sets.
 - **The large bucket is positionally cramped, and the table should not read it
@@ -534,21 +572,39 @@ corrects this section on four points, each recorded below.
   size- and tile-matched synthetic control** — that control was considered and
   deliberately not built, because the ordering claim is what this draw supports.
 
-### 3.4 Diff-DEM cross-eval (transfer test)
-
-Their released Norway 10 m dataset, their mask lists, their checkpoint. Two
-directions: Diff-DEM's model on its own data vs DEMAE arms on the same data
-(off-distribution for a GLO-30 model: different country, 3x finer GSD); and
-optionally their model on this benchmark's 30 m tiles (off-distribution for
-them, same caveat, stated symmetrically). This section is labeled *transfer*,
-not headline, in every table.
-
-### 3.5 Committed artifacts
+### 3.4 Committed artifacts
 
 `benchmark/` module in the repo's stage-per-module style: tile lists, the two
 mask artifacts, the mask generator's config hash, and a dataset card
-documenting all of the above plus the licenses (SRTM public domain, Diff-DEM's
-data per their repo terms).
+documenting all of the above plus the terms below.
+
+*(A "Diff-DEM cross-eval (transfer test)" section stood here until
+[#128](https://github.com/JStoschek/DEMAE/issues/128). It described the A8 arm,
+which the map ruled out of scope at charting; the section simply outlived the
+ruling. Both external cross-evals are now closed off — see §0.)*
+
+**Data terms, as the distributors state them.** This is a record of what the
+distributors publish, not legal advice, following the precedent
+[`p101-mae-checkpoint-licence.md`](p101-mae-checkpoint-licence.md) set for this
+repo. **Nothing here is a redistribution question**, because the module commits
+**tile lists and masks, never tiles** — a property worth stating rather than
+leaving as a happy accident, since it is what keeps the artifact freely
+shippable under all three sets of terms.
+
+- **Copernicus GLO-30** (every benchmark tile) — available "on a free basis for
+  the general public" under the ESA Copernicus Contributing Missions user
+  licence, which requires acceptance and carries an attribution requirement. It
+  is *not* a standard open licence such as CC BY. This is the primary data
+  behind every arm, and until [#128](https://github.com/JStoschek/DEMAE/issues/128)
+  the plan recorded no terms for it at all.
+- **SRTMGL1N v003** (the real-void family's mask shapes, §3.3) — LP DAAC states
+  the dataset "is openly shared, without restriction, in accordance with" NASA's
+  EOSDIS data use policy. The plan previously called this "public domain", which
+  is a legal conclusion the distributor does not make.
+- **The synthetic masks, the mask bank and the tile lists** — this repository's
+  own, under its licence.
+
+**The two mask artifacts.**
 
 - **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
   row per eval instance, 30,000 synthetic rows plus the real-void family (§5).
@@ -692,13 +748,16 @@ low-label regime, and C3 is where DEMAE must show it.
 ### 4.5 Order of operations
 
 1. Freeze tile lists, the eval mask list, and the train mask bank (CPU only,
-   local; the bank is the 33-minute line, §3.5).
+   local; the bank is the 33-minute line, §3.4).
 2. A1 baseline numbers + unit tests on norm inversion and mask bookkeeping.
 3. *(was: precompute frozen features — deleted, §4.1. There is no feature
    precompute step; the encoder runs inline.)*
 4. Tune head hyperparams on A6/val; freeze.
 5. Run A4, A5, A6, A7 at 20k; then the 1k/5k sweep; then A3; then A2/A9
-   (inference only); then A8 cross-eval; secondary 10 m regime last.
+   (inference only). **That is the whole run list** — the A8 cross-eval and the
+   secondary 10 m regime were both ruled out of scope and are no longer tail
+   items waiting for spare budget
+   ([#128](https://github.com/JStoschek/DEMAE/issues/128)).
 
 ## 5. Metrics and statistics
 
@@ -813,8 +872,10 @@ A1 from truth cannot separate the arms either.
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
   (seed variance vs data variance are different quantities).
 - **Efficiency footnote:** params trained, params total, and single-tile
-  inference time per arm (A8's diffusion sampler vs A3's single forward pass is
-  a real operational difference worth one honest row).
+  inference time per arm (A9's diffusion decode vs A3's single forward pass is
+  a real operational difference worth one honest row — the contrast used to be
+  drawn against A8's sampler, and A9 makes the identical point with an arm that
+  actually runs).
 
 ## 6. Fairness checklist (goes in the writeup verbatim)
 
@@ -850,7 +911,10 @@ A1 from truth cannot separate the arms either.
    A9 quantifies the bottleneck; conclusions are phrased as "under identical
    probes" not "TerraMind is worse."
 6. Geographic holdout only; the test geocells are the corpus's committed test
-   split; Diff-DEM data is labeled transfer, both directions.
+   split. **There is no transfer block and no external arm**: both candidates
+   the field offers were investigated and neither yields a comparable number
+   (§0). Every row in every table is an internal comparison, and the writeup
+   says so rather than leaving it to be inferred.
 7. Negative or null results (e.g., A7 ties A4 at 20k) are reported with the
    same prominence as wins; C3's low-label sweep is the pre-registered fallback
    claim.
@@ -996,7 +1060,7 @@ every table, so the corrected figures are the ones to print.
    table from the repo).
 2. The results table (arms x buckets x strata, CIs marked) and three figures:
    RMSE vs void size per arm; the label-efficiency curve (C3); a hillshade
-   panel grid (truth, voided, A1, A3, A5, A8) on two rugged and one flat tile.
+   panel grid (truth, voided, A1, A3, A5, A7) on two rugged and one flat tile.
    The hillshade panel is **load-bearing, not decorative**: §5 scores no
    perceptual metric, so this figure is the whole of the visual-quality
    evidence and is not to be cut for space.
@@ -1090,7 +1154,12 @@ every table, so the corrected figures are the ones to print.
 
 ## 10. Key sources
 
-Diff-DEM (github.com/kylelo/Diff-DEM; IEEE GRSL 2024) · SRTMGL1N
+Diff-DEM (github.com/kylelo/Diff-DEM; IEEE GRSL 2024 — **cited as evidence, not
+as an arm**: reading its committed `tif_metric.py` is what established that the
+table is externally incomparable, §0) · GeomorPM (doi:10.1080/13658816.2024.2414409;
+Figshare deposit doi:10.6084/m9.figshare.25756806.v1, CC BY 4.0 — the second
+candidate, closed off in [#128](https://github.com/JStoschek/DEMAE/issues/128))
+· SRTMGL1N
 (earthdata.nasa.gov, `.num` class raster; predicate and geometry measured in
 `p125-srtm-void-geometry.md`) · SRTM Collection User Guide V3 (Table 2, the
 `.NUM` fill values) · **Reuter, Nelson & Jarvis 2007** (*Int. J. Geogr. Inf.
