@@ -47,7 +47,12 @@ defined before any number is seen:
   Ordering is confound-free because every arm is scored on the identical
   instance set. C4 fails if an arm pair swaps rank between the synthetic and
   real-void rows within the same band — which would put C1 in question, since
-  C1's comparison is made entirely on synthetic masks.
+  C1's comparison is made entirely on synthetic masks. **The band is R4, and that
+  is measured rather than chosen**: real SRTM voids land 99.94% in the roughest
+  quartile ([#135](https://github.com/JStoschek/DEMAE/issues/135)), so C4 is
+  evaluable in R4 and nowhere else. That narrows the claim and states the
+  narrowing up front — and R4 is also where the arms have the most room to
+  separate, so it is the band in which a rank swap says the most about C1.
 
 If C2 partially fails (e.g., Diff-DEM wins on texture), that is reported, not
 hidden; PANGAEA-style candor is part of the deliverable. C1 and C3 are the
@@ -388,7 +393,11 @@ sees is a committed input rather than a reproduction of the generator's RNG.
   instance count suggests.
 - **The real-void family (iii) carries no bucket axis.** Two cells measured at
   true 1 arc-second returned 139 and 175 components in 16 to 48 px, 2 and 6 in
-  64 to 96, and **zero** in 128 to 160. Forcing 667-per-bucket would mean either
+  64 to 96, and **zero** in 128 to 160. The full 24-granule draw is steeper still
+  in its skew — **8,824 / 438 / 11** across the three sub-rows
+  ([#135](https://github.com/JStoschek/DEMAE/issues/135)) — so 128 to 160 is not
+  empty, just three orders of magnitude below the headline row.
+  Forcing 667-per-bucket would mean either
   fabricating large voids, which destroys the only thing the family contributes,
   or silently reweighting, which makes it non-comparable anyway. It is drawn at
   its natural size distribution and reported as its own rows instead (§3.3).
@@ -474,7 +483,16 @@ corrects this section on four points, each recorded below.
   So the stratum is computed from **GLO-30 at the void's own coordinates** —
   void-free there, on the same lattice below 50 degrees, and through the same
   code path that assigns strata to every other tile in the corpus. The SRTM
-  granule contributes the void's *shape* and nothing else.
+  granule contributes the void's *shape* and nothing else. The window is
+  **224 px centred on the component**, which is the ground the void actually came
+  from; p135 §3.3 shows the answer is indifferent to that choice. That code path
+  is checked rather than asserted: recomputing `slope_mean` through it reproduces
+  five committed catalog rows of `N28E086` to **0.0**, and every COG is asserted
+  to be 3600^2 at exactly 1/3600 degree with its pixel centres on whole
+  arc-second multiples before it is read. **Scoring the voids in place is not an
+  option, and the reason is the split, not the truth:** GLO-30 is complete at
+  those coordinates, but none of the 24 source cells falls in a committed test
+  geocell, so an in-place score would be a score on train-side ground.
 - **The size distribution is bimodal, and the ceiling is this benchmark's tile,
   not nature.** Within the 16 to 160 px window the plan scores, the draw is
   roughly **94% small, 5% medium, 1% large**. That window is not the whole
@@ -488,27 +506,47 @@ corrects this section on four points, each recorded below.
   The published size histogram therefore shows the excluded >160 px tail
   alongside the scored range, so a reader can see what the tile size cut.
 - **Reported as two size sub-rows plus a count.** Instance budget per §3.2's
-  eval-instance contract, split as drawn:
-  - **real-small** (16 to 48 px) — the headline row. Its honest comparison
-    partner is the *synthetic small bucket within the same ruggedness band*,
-    not the synthetic pooled number, and tables state that explicitly.
-  - **real-medium+** (64 to 96 px) — reported separately so the headline row
-    stays size-comparable to synthetic small.
-  - **128 to 160 px** — reported as an **instance count with no metric
-    attached**. At ~1% of the draw split across ruggedness bands this is single
-    digits per cell; publishing a mean over it would invite a significance the
+  eval-instance contract, split as drawn. Counts below are **measured** over
+  #127's 24 granules ([`p135-void-ruggedness.md`](p135-void-ruggedness.md)), not
+  projected — 9,978 scored components of 10,291 at `d ≥ 16 px`, after a 182-component
+  `d > 160` exclusion and 1.3% attrition on §3.2's placement tests:
+  - **real-small** (16 to 48 px) — the headline row, **8,824 instances**. Its
+    honest comparison partner is the *synthetic small bucket within the same
+    ruggedness band*, not the synthetic pooled number, and tables state that
+    explicitly.
+  - **real-medium+** (64 to 96 px) — **438 instances**, reported separately so the
+    headline row stays size-comparable to synthetic small.
+  - **128 to 160 px** — **11 instances**, reported as an **instance count with no
+    metric attached**. Publishing a mean over eleven would invite a significance the
     number cannot carry.
-- **Stratified by ruggedness, with a population floor.** Every sub-row is broken
-  out by the corpus's four collapsed ruggedness groups (§5). This is what makes
-  the family readable at all: p119 measured the classical baseline varying ~40x
-  across those bands against ~3x across size, so a pooled real-void number is a
-  statement about which terrain the voids happened to land on. **Any band with
-  fewer than 100 instances is reported as a count, not a metric.** Concentration
-  in the rugged bands (R3/R4) is *expected*, not a surprise — radar shadow is a
-  steep-terrain phenomenon — and a thin or empty R1 is a predicted outcome of
-  this design rather than a defect in it. The realised histogram is checked
-  against that expectation once the granules land, and this section amended if
-  it is badly wrong.
+  - **The sub-rows do not tile the 16 to 160 px range, and 7.1% of the draw falls
+    in the gaps** — 604 components at 48 to 64 px and 101 at 96 to 128 px. They are
+    **excluded, not silently dropped**: the boundaries exist to keep real-small
+    size-comparable to synthetic *small* (16 to 48) and real-medium+ to synthetic
+    *medium* (64 to 96), so widening them to cover the gaps would destroy the
+    comparability the split exists for. The published histogram states the excluded
+    count beside the scored ones.
+- **Not stratified by ruggedness after all — it is an R4 family, measured.** The
+  design was to break every sub-row out by §5's four ruggedness bands, on the
+  reasoning that p119 measured the classical baseline varying ~40x across them
+  against ~3x across size, so a pooled real-void number would be a statement
+  about which terrain the voids happened to land on. That reasoning stands and
+  the stratification is nonetheless vacuous, because **the realised histogram is
+  99.94% R4**: of 9,978 scored components, R4 holds **9,972**, R3 holds **3**,
+  and R1 and R2 hold **3** between them
+  ([`p135-void-ruggedness.md`](p135-void-ruggedness.md), all 24 granules, both
+  regions, every size sub-row). §5's **100-instance floor** therefore fires on
+  three bands of four, and what it produces is not a table with a thin band but a
+  **single-band table with a footnote** reading `R1 2, R2 1, R3 3`. This section
+  previously predicted "concentration in R3/R4" with "a thin or empty R1" as the
+  designed outcome; the prediction was right in direction and too narrow in
+  degree — R3 is as empty as R1 — and it is replaced here by the measurement
+  rather than left standing as an expectation in a pre-registered document.
+  Neither the window choice nor the predicate's open flag can account for it: the
+  corpus's own grid window and a 448 px window move **six of 9,978** components
+  between them, and excluding the arguable class values 11 and 25 moves **one**.
+  The consequence for the claims is that **C4 is an R4 claim** (§0), because R4 is
+  the only band with real instances to rank arms in.
 - **What the family is for.** It is not a fourth point of metric comparison
   against the bucketed synthetic families — with a 94%-small draw against
   bucket-balanced synthetics, a difference in metres would confound shape with
@@ -516,9 +554,19 @@ corrects this section on four points, each recorded below.
   on synthetic blobs still hold when the void shapes are real? Ordering is
   immune to the size confound because every arm sees the identical instances.
   Real voids are strikingly non-compact (perimeter ~2.0 to 2.2x that of an
-  equal-area disc) and concentrate in steep terrain and radar shadow; the
-  stratum-matched transplant preserves that difficulty rather than averaging it
-  away. **Do not upgrade C4 into a metric-delta claim without first adding a
+  equal-area disc) and concentrate in steep terrain and radar shadow. **The
+  transplant preserves the void's shape and its band, and not its native
+  ruggedness** — an earlier draft of this bullet claimed it "preserves that
+  difficulty rather than averaging it away", and that is measurably false at the
+  top of the range. The voids come from terrain with a median `slope_mean` of
+  **31.7 degrees**; the eligible test pool's R4 band runs **8.35 to 33.08 degrees**
+  with a median of **12.95**, and **34% of the voids are steeper than the
+  ruggedest tile in the whole pool** (p135 §5). Matching tighter than the band is
+  not available: 156 pool tiles sit at or above 25 degrees against 8,824
+  real-small instances, i.e. 57x reuse against 2.6x for the band as a whole. So
+  band matching is the only feasible rule, it is coarse at exactly the end of the
+  range this family lives at, and the writeup says so rather than claiming a
+  fidelity the draw does not have. **Do not upgrade C4 into a metric-delta claim without first adding a
   size- and tile-matched synthetic control** — that control was considered and
   deliberately not built, because the ordering claim is what this draw supports.
 
@@ -539,7 +587,10 @@ documenting all of the above plus the licenses (SRTM public domain, Diff-DEM's
 data per their repo terms).
 
 - **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
-  row per eval instance, 30,000 synthetic rows plus the real-void family (§5).
+  row per eval instance, 30,000 synthetic rows plus the real-void family's
+  **9,978** (§5), so ~40k rows. The real rows repeat `tile_id`: every one of them
+  needs an R4 host and there are ~1,250 in the test draw, so a host carries ~7
+  different real void shapes (§5's bootstrap resamples tiles for this reason).
 - **Train mask bank** (parquet: `tile_id, epoch, family, bucket, mask_rle,
   seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **740 MB** of RLE
   measured on the generator's own output. Generated once in **33 min** of one
@@ -676,8 +727,11 @@ carries no bucket axis (§3.2), so instead of one row per bucket it reports
 **two size sub-rows per arm — real-small (16 to 48 px) and real-medium+
 (64 to 96 px) — plus a bare instance count for 128 to 160 px** (§3.3). Both
 sub-rows are published with the size histogram, including its excluded >160 px
-tail, so the reader can see what distribution the number is over and what the
-224 px tile cut off. Comparisons drawn against this family are against the
+tail and the 705 components that fall in the gaps between sub-rows, so the
+reader can see what distribution the number is over and what the 224 px tile and
+the sub-row boundaries cut off. Both sub-rows are **R4 rows**: the realised
+histogram is 99.94% R4 (§3.3), so the family has one ruggedness column and a
+footnote, not four. Comparisons drawn against this family are against the
 synthetic **small** bucket within the same ruggedness band, never against a
 synthetic pooled number, and carry C4's ordering claim rather than a metric
 delta.
@@ -759,23 +813,29 @@ A1 from truth cannot separate the arms either.
   size bucket before dropping a ruggedness band. **Population floor:** a
   (row, band) cell with fewer than 100 instances is reported as a count with no
   metric rather than pooled into a neighbouring band. This binds hardest on the
-  real-void family, which takes whatever distribution SRTM gives it and is
-  expected to concentrate in R3/R4 (§3.3). **The synthetic rows clear it with
-  room** — 5,000 test tiles × 2 families × 3 buckets is **30,000** instances,
-  1,250 per (row, band). **The real-medium+ sub-row probably does not, and its
-  rule is therefore fixed here, before the counts exist.** p125 measured 2 and 6
-  components in 64–96 px on two 1-degree cells at true 1 arc-second; scaled by
-  [#127](https://github.com/JStoschek/DEMAE/issues/127)'s 24 granules that
-  projects to roughly **96 instances in total** — at the floor before
-  stratifying, and ~24 per band after. (real-small projects to ~3,800, which
-  clears comfortably.) So: **real-medium+ is reported unstratified — one pooled
-  number with its instance count — unless the realised histogram clears 100 per
-  band**, which [#135](https://github.com/JStoschek/DEMAE/issues/135) checks
-  against exactly this threshold. The projection rests on two cells and may be
-  wrong in either direction; what is pre-registered is the threshold, not the
-  outcome. One knock-on: §7's **32k eval instances is provisional**, since it
-  predates #126's reshaping of the family — at the natural distribution the
-  total is nearer 34k, which moves the two eval lines by ~6% and no conclusion.
+  real-void family, which takes whatever distribution SRTM gives it. **The
+  synthetic rows clear it with room** — 5,000 test tiles × 2 families × 3 buckets
+  is **30,000** instances, 1,250 per (row, band). **The real rows have now been
+  measured against it, and the rule fires on three bands of four**
+  ([#135](https://github.com/JStoschek/DEMAE/issues/135),
+  [`p135-void-ruggedness.md`](p135-void-ruggedness.md)): the realised histogram
+  is **99.94% R4** — R1 2, R2 1, R3 3, R4 9,972 — so every real sub-row is
+  reported in R4 with the other three bands as a footnoted count. The
+  pre-registered rule for real-medium+ (*unstratified unless the realised
+  histogram clears 100 per band*) is **satisfied and vacuous at the same time**:
+  438 instances, all of them in R4, so the stratified table and the pooled number
+  are the same number, and it is labelled R4 rather than presented as a pooled
+  one. Both projections behind that rule were low — real-small was projected at
+  ~3,800 and measured at **8,824**, real-medium+ at ~96 and measured at **438** —
+  because p125's per-cell yields came from two Cascades cells tamer than the draw
+  #126 settled on. What was pre-registered was the threshold, not the outcome,
+  and that is what it was for. **Bootstrap over tiles, not instances**: 8,824
+  real-small instances land on ~1,250 R4 test tiles, so ~7 instances share each
+  tile's terrain and a per-instance resample would overstate precision by up to
+  √7. §5's bootstrap already resamples test tiles, which is the correct cluster;
+  this is a note against changing it. One knock-on: §7's **32k eval instances**
+  predates #126's reshaping and #135's counts — the total is **30,000 synthetic +
+  9,978 real = ~40k**, which moves the two eval lines by ~25% and no conclusion.
 - **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
   pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
@@ -844,11 +904,11 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 | Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
 | Head training A4/A5/A6 | 4 cells x 3 seeds + 2 appendix cells x 1 seed, x 50 ep x 20k | 42.1 | 14 cell-seeds at the 3.01 min/cell-seed this line already prices |
 | Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
-| Inference over the eval instances | 38 passes x 32k | 3.6 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
+| Inference over the eval instances | 38 passes x **40k** | 4.5 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
 | A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
-| **GPU total** | | **147.3 min = 2.46 h** | **$0.99** at $0.4016/hr |
-| **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
-| Eval passes (CPU, local, single core) | **39** arm-seed passes x 32k instances | **1.6-4.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+| **GPU total** | | **148.2 min = 2.47 h** | **$0.99** at $0.4016/hr |
+| **A9 (TerraMind full tokenizer)** | **40k** instances | **unpriced** | diffusion decode; at 1 s/instance it is 11.1 GPU-h, 4.5x the whole table above. **§7 is not final until this is measured.** |
+| Eval passes (CPU, local, single core) | **39** arm-seed passes x **40k** instances | **2.0-5.2 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
 | Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)). **The 34.4M predates §2.3's rewrite** and is not re-derived here — see the note below the table |
 
 The 39 scored passes are 23 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
