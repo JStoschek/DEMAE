@@ -101,6 +101,18 @@ implicit default.
   the build asserts it by name rather than by value, since a silent swap is a
   wrong-diet arm that still runs.
 
+**Neither normalization is applied before the extractor** *(amended 2026-08-11 —
+[#137](https://github.com/JStoschek/DEMAE/issues/137),
+[ADR-0012](../adr/0012-frozen-feature-extractor-contract.md))*. The extractor
+takes **raw int16 metres plus a valid-pixel mask** (valid = land ∧ ¬void) and
+applies the arm's declared normalization itself, so the pretraining loader's
+per-tile-standardized output is not a thing it can be handed. p118 §7 measured
+why that matters: the TerraMind encoder accepts either normalization silently and
+returns a well-shaped, plausible `[1, 768, 14, 14]` from an input distribution it
+has never seen. The mask is also what makes "non-void pixels only" one code path
+rather than a convention — and Task 2 reuses it unchanged by passing a land-only
+mask.
+
 Each encoder at its best is the fair default. One ablation row: TerraMind fed
 per-tile-standardized input, to measure how much of its representation is
 absolute-altitude passthrough. The head sees each encoder's features as-is
@@ -544,10 +556,20 @@ data per their repo terms).
   seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **740 MB** of RLE
   measured on the generator's own output. Generated once in **33 min** of one
   CPU core, then read by every arm, seed and config.
+- **Extractor spec** (`extractor_spec.json`, [ADR-0012](../adr/0012-frozen-feature-extractor-contract.md),
+  [#137](https://github.com/JStoschek/DEMAE/issues/137)) — the frozen-feature
+  contract as a file rather than as prose: per-arm normalization, the emitted
+  layer list, the reference and compute dtypes, the token layout, the encoder
+  identity and checkpoint md5, and ADR-0011's `pos_emb` derivation. Committed for
+  the reason the whole family is: **what Task 2 re-reads is the file**, and an
+  extractor re-derived from a description keeps producing perfectly good features
+  of a slightly different kind, with nothing in the output saying so. It
+  re-checks itself at load and refuses rather than warns (§9.4).
 
-Both carry the same generator and the same config hash, so the determinism
-contract is one contract: two runs from committed inputs reproduce the tables,
-and the training masks are now inside that guarantee rather than beside it.
+The two mask artifacts carry the same generator and the same config hash, so the
+determinism contract is one contract: two runs from committed inputs reproduce
+the tables, and the training masks are now inside that guarantee rather than
+beside it.
 
 ## 4. Training setup
 
@@ -605,6 +627,16 @@ One head spec, frozen across arms; only the input channel width differs
   expensive to recompute, not the one that is the reverse.
 - The *eval* side is unchanged throughout — the committed mask list fixes each test
   instance's input exactly as it always did.
+- **The inline forward runs the §9.4 extractor contract, not an ad-hoc call**
+  *(amended 2026-08-11 — [#137](https://github.com/JStoschek/DEMAE/issues/137),
+  [ADR-0012](../adr/0012-frozen-feature-extractor-contract.md))*. The head reads
+  the contract's `output` field — each encoder's own final tensor, which for
+  DEMAE means post-`LayerNorm` and therefore *not* `intermediates[11]`. Two
+  consequences for this section. The extractor is handed **raw metres and a
+  valid-pixel mask**, so §2.1's normalization happens inside it and the A1 fill
+  happens before it. And the extractor emits twelve intermediates that no arm
+  here reads, because Task 2 does — which is why §9.4 makes the intermediates
+  path Task 1's to *test*, even though it is Task 2's to use.
 
 ### 4.2 DEMAE native fine-tune (A3)
 
@@ -987,18 +1019,60 @@ every table, so the corrected figures are the ones to print.
    document, is the **extractor**: the code path that turns a tile into frozen
    patch tokens, the per-arm normalization, the layer indices, and the dtype. If
    Task 1 fixes those, Task 2 re-runs them over its own clean tiles and the two
-   tasks' C1 claims are about the same features. **Two constraints on that
-   contract are now measured**
-   ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
-   the TerraMind arms take **raw metres under TerraMind's global affine**, never
-   the pretraining loader's per-tile-standardized output (§7 there) — which the
-   encoder accepts silently either way, so normalization is **per arm, declared
-   in the extractor config**, and the "how does one shared cache carry two
-   normalizations" problem this item used to defer simply stops existing once
-   there is no shared cache; and the extractor needs only `encoder` +
-   `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the 1.15 GB
-   checkpoint** — since the remaining 196M is the diffusion decoder that no
-   in-scope arm calls.
+   tasks' C1 claims are about the same features. The extractor needs only
+   `encoder` + `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the
+   1.15 GB checkpoint**
+   ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)) —
+   since the remaining 196M is the diffusion decoder that no in-scope arm calls.
+
+   **The contract's fields are now fixed, and it is a committed file**
+   *(amended 2026-08-11 — [#137](https://github.com/JStoschek/DEMAE/issues/137),
+   recorded as [ADR-0012](../adr/0012-frozen-feature-extractor-contract.md))*.
+   #121 named these fields and fixed none of their values; that is what this
+   amendment does. In brief, with the reasoning and the rejected alternatives in
+   the ADR:
+
+   - **Raw int16 metres + a valid-pixel mask in, never a pre-normalized
+     tensor.** The extractor applies its own declared normalization, so the
+     pretraining loader's per-tile-standardized output is not something it can be
+     handed. p118 §7's trap — TerraMind's encoder accepts either normalization
+     silently and returns a plausible `[1, 768, 14, 14]` both ways — stops being
+     expressible rather than being caught by a test. **Valid = land ∧ ¬void**, so
+     Task 1's non-void stats (§2.1) and Task 2's clean-tile stats are the same
+     code path.
+   - **Statistics are recomputed from that mask, never read from the
+     manifest** — one path, no branch that only one task exercises. Measured over
+     500 corpus tiles, recomputing reproduces the manifest's stored `mean`/`std`
+     to **3.6e-4 m** and **1.1e-7 relative**, and that equivalence ships as a
+     test rather than as a claim.
+   - **All twelve block outputs are emitted, plus a separate `output` field.**
+     The head and any linear probe read `output`; a UperNet reads
+     `intermediates` and picks its own indices. **DEMAE's `intermediates[11]` is
+     not its `output`** — `MaskedAutoencoder._transform` applies a final
+     `LayerNorm` that TerraMind's encoder has no counterpart for (p118 §5.3), so
+     the two are named fields rather than one shared index. Task 1 reads only
+     `output`, and therefore owes the intermediates path a test on shapes,
+     ordering and count; an unexercised path shipped with a contract's authority
+     is *the composition*'s failure with a document attached.
+   - **Canonical layout `(N, 196, D)`, row-major, CLS optional and DEMAE-family
+     only.** Row-major is not a coin flip: DEMAE tokenizes through timm's
+     `PatchEmbed` and TerraMind's `[N, 768, 14, 14]` flattens identically against
+     the grid its `pos_emb` is built on. CLS never enters a cross-encoder
+     comparison, because TerraMind structurally has none.
+   - **fp32 is the reference tensor; compute dtype is declared per task; storage
+     dtype is outside the contract.** Measured on the R5 release encoder over
+     12,544 tokens, fp32 against bf16 autocast agrees to mean per-token cosine
+     **0.999968** — against the ≥ 0.99 bar
+     [#134](https://github.com/JStoschek/DEMAE/issues/134) fixed for materiality,
+     and the 0.9708 that failed it. **Measured on the DEMAE family only:** the
+     TerraMind arm's figure does not exist yet and the build session measures it
+     on first run rather than inheriting this one.
+   - **`extractor_spec.json` is committed** and joins the family whose defining
+     property is that the committed file is what later phases re-read (§3.5). It
+     re-checks itself at load — encoder identity and checkpoint md5, TerraMind's
+     `670.665 / 951.272`, shape and layer count, and ADR-0011's `pos_emb`
+     derivation as a declared field — and its md5 goes in the benchmark's run
+     record, not in Phase 1's frozen four-field data fingerprint.
 
    **[`task2-landform-plan.md`](task2-landform-plan.md) is stale on this in
    three places** and is *not* amended here, because Task 2 is out of this map's
