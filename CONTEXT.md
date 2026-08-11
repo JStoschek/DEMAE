@@ -643,6 +643,24 @@ GitHub issue #1.
     line, each accuracy is reported against its own leave-one-COG-out no-skill baseline, and the
     headline series is the **delta against the epoch-0 baseline** — so the natural thing to read
     off a chart is movement rather than level.
+- **Extractor contract** — what a frozen encoder promises about turning a tile into patch
+  tokens, and the one thing Phase 2's two benchmarks share
+  ([ADR-0012](docs/adr/0012-frozen-feature-extractor-contract.md)). Task 1 was long believed
+  to hand Task 2 a *feature cache*; it never could, because every Task 1 arm encodes a
+  **voided** tile and Task 2 probes **clean** ones, so no clean-tile feature is ever computed.
+  What crosses the boundary is the contract, and its point is that both tasks' claims are about
+  **the same features** — which is only true if it is a *committed file* the second task
+  re-reads, not a description it re-implements. Fifth member of the family that rule names
+  (**selection list**, **split assignment**, **val panel**, **probe set**). It takes **raw
+  metres and a valid-pixel mask** and normalizes internally, because the alternative leaves a
+  silent failure expressible: an encoder fed the wrong normalization returns a well-shaped,
+  plausible tensor and raises nothing. Its emission is deliberately **wider than its first
+  consumer needs** — every block, not just the last — since the narrow version is the one under
+  which "reusable unchanged" quietly fails; the price is a path Task 1 must test without using,
+  and the standing rule is that the test is what makes it a feature rather than a
+  plausible-looking function (see **The composition**). Where the two encoders genuinely differ
+  they get **named fields, never a shared index**: DEMAE norms after its last block and
+  TerraMind does not, so "the last layer" and "block twelve" are two things.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
