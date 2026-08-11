@@ -15,7 +15,9 @@ defined before any number is seen:
 - **C1 (pretraining works):** DEMAE-frozen features beat ImageNet-MAE-frozen
   features and TerraMind-tokenizer-frozen features at void filling *under an
   identical trained head*, on the same tiles, same masks, same seeds. This is
-  the representation claim, and the fairest instrument for it.
+  the representation claim, and the fairest instrument for it. **"DEMAE" here
+  means the R5 ViT-B release encoder, fixed before results** — the R4
+  continual-init arm is a pre-registered secondary and never C1's number (§2.3).
 - **C2 (the model is useful):** fine-tuned DEMAE beats classical interpolation
   (the operational status quo) in metres, slope, and **seam continuity** on
   rugged terrain at every void size, and stays at least even on **flat terrain**,
@@ -33,7 +35,9 @@ defined before any number is seen:
   measures exactly that ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
 - **C3 (label efficiency):** DEMAE-frozen reaches a given RMSE with far fewer
   head-training tiles than the UNet-from-scratch baseline (the 1k / 5k / 20k
-  sweep). This is the foundation-model value proposition.
+  sweep). This is the foundation-model value proposition. As with C1, the curve
+  is **R5's**; R4 runs at 20k only and does not enter the sweep, so C3 is one
+  DEMAE curve rather than two (§2.3).
 - **C4 (the ranking survives real geometry):** the *ordering* of arms on real
   SRTM void shapes, **within a ruggedness band**, does not contradict the
   ordering on synthetic masks. This is deliberately an ordering claim and **not**
@@ -55,11 +59,11 @@ representation from decoder capacity.
 | # | Arm | Encoder | Trained part | Input convention |
 |---|-----|---------|--------------|------------------|
 | A1 | Bilinear/spline fill | none | none | classical `gdal_fillnodata`-class interpolation; also rasterio `fillnodata`, and a thin-plate-spline variant |
-| A2 | DEMAE zero-shot | DEMAE frozen (R1 ViT-S; R4 ViT-B if usable) | none | native MAE inpainting: void-touching patches dropped, decoder reconstructs, non-void pixels composited back |
-| A3 | DEMAE fine-tuned | DEMAE, all weights | encoder + decoder | native token dropping on void-shaped masks (§4.2) |
-| A4 | DEMAE frozen + head | DEMAE frozen | head only | voided tile pre-filled by A1 + void mask channel at the head (§2.4) |
+| A2 | DEMAE zero-shot | DEMAE frozen (R5 ViT-B; R4 ViT-B secondary) | none | native MAE inpainting: void-touching patches dropped, decoder reconstructs, non-void pixels composited back |
+| A3 | DEMAE fine-tuned | DEMAE, all weights (R5 ViT-B; R4 ViT-B secondary) | encoder + decoder | native token dropping on void-shaped masks (§4.2) |
+| A4 | DEMAE frozen + head | DEMAE frozen (R5 ViT-B; R4 ViT-B secondary; ViT-S as the §2.3 appendix row) | head only | voided tile pre-filled by A1 + void mask channel at the head (§2.4) |
 | A5 | TerraMind frozen + head | TerraMind DEM tokenizer ViT-B encoder, 768-d `feats` (pre-`quant_proj`), frozen | head only (identical to A4's) | same pre-filled input, TerraMind's own normalization (§2.1) |
-| A6 | ImageNet-MAE frozen + head | timm/MAE ViT-S (and ViT-B) frozen, 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
+| A6 | ImageNet-MAE frozen + head | timm/MAE ViT-B frozen (ViT-S as the §2.3 appendix row), 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
 | A7 | UNet from scratch | none (UNet) | everything | voided tile + mask channel, residual over the A1 fill |
 | A8 | Diff-DEM released checkpoint | theirs | none | their protocol, their data (cross-eval, §3.4) |
 | A9 | TerraMind tokenizer pass-through (reference row) | full tokenizer: encode, FSQ, diffusion decode | none | A1-pre-filled tile through the full VQ pipeline; shows the 5-d bottleneck's cost |
@@ -158,13 +162,105 @@ grid (TerraMesh §3.2); DEMAE's are native 30 m. Decisions:
   7.68 km windows, reopening the frozen Phase-0 tiling, strata and split. This is
   distinct from the out-of-scope secondary 10 m regime, which is about GSD, not grid.
 
-### 2.3 Capacity: report it, and bracket it
+### 2.3 Capacity and pretraining data: both near-matched
 
-ViT-S (22M) vs ViT-B (90M encoder) is a 4x gap. Mitigations: parameter counts
-printed in every table; if the R4 ViT-B continual-init DEMAE arm is usable, it
-runs in A2/A3/A4 so there is a same-capacity DEMAE-vs-TerraMind cell; A6 runs at
-both ViT-S and ViT-B for the same reason. If DEMAE-S beats TerraMind-B on frozen
-probes, the capacity gap strengthens the claim rather than weakening it.
+This section used to hedge a 4x capacity gap — "ViT-S (22M) vs ViT-B (90M)" —
+and spent itself on mitigations for it. That is not the comparison being made.
+Both sides of the primary regime are ViT-B/16 at 224 px on a 14x14 token grid,
+so capacity is reported here in one table and the section's real subject is what
+is left.
+
+| Encoder | Params | Source |
+|---|---|---|
+| DEMAE ViT-B — the Phase-1 release encoder | **85,254,144** | built from `Architecture(encoder_dim=768, encoder_depth=12)`; matches the 149-tensor export check in [`p88-r4-r5-readout.md`](p88-r4-r5-readout.md) §4 |
+| TerraMind DEM tokenizer ViT-B encoder | **90,172,416** | [`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) |
+| DEMAE ViT-S — appendix row only, below | 21,393,408 | same builder at 384-d |
+
+**A 5.8% difference**, at identical depth, patch size and token grid.
+TerraMind's extra 4.92M is *not* attributed to a module here: terratorch was not
+installed in any live worktree when this was written and the attribution did not
+justify a reinstall. It is reported, not explained.
+
+**The live asymmetry is pretraining data — and it is far smaller than a patch
+count suggests.**
+
+| | DEMAE | TerraMind DEM tokenizer |
+|---|---:|---:|
+| Tiles per epoch | 473,088 (231 steps x 2048) | ~9M |
+| Epochs | 400 | ~20 |
+| **Tile presentations** | **189.2M** | **~180M** |
+| Tile footprint | 224 px @ 30 m = 45.2 km² | 256 px @ 10 m = 6.55 km² |
+| **Ground area covered** | **21.4M km²** | **~59.0M km²** |
+
+Two things follow, and both cut against the obvious reading. **Optimization
+compute is matched to within 5%** — this was never a compute-scale confound.
+And the data gap is **~2.8x in ground area, not the ~19x the tile counts imply**,
+because TerraMind's DEM tiles are resampled onto the 10 m Sentinel-2 grid and
+therefore cover 6.6x less ground each. Since TerraMesh's DEM modality *is*
+Copernicus GLO-30 bilinearly resampled (§2.2), that 2.8x is more ground of the
+**same product at the same true resolution** — not more information, and not a
+finer view of it.
+
+**Provisional, pending [#138](https://github.com/JStoschek/DEMAE/issues/138).**
+The ~9M tiles and ~20 epochs are carried from
+[`downstream-task-selection.md`](downstream-task-selection.md) and have not been
+checked against TerraMesh (arXiv 2504.11172). The ~2.8x area ratio is robust to
+drift in the epoch count; the matched-compute claim is not, and is the sentence
+to re-check when #138 lands. Within-corpus geographic overlap is unknown on both
+sides.
+
+**The caveat is pre-registered, and it runs in both directions.** A data
+advantage to TerraMind is only ever cited as an explanation of a DEMAE *loss*,
+which makes it an escape hatch unless it is also priced as a discount on a DEMAE
+*win*. It is stated once, here, before any number exists: if DEMAE wins C1 on
+2.8x less ground of the same product at matched compute, that is a stronger
+result than a bare win, and if DEMAE loses, this is the one pre-registered
+alternative explanation. Reaching for it afterwards is not available.
+
+**ViT-S is one appendix row, not a capacity bracket.** A4-S and A6-S at 20k, one
+seed each, answering "did the extra 4x buy anything" under the frozen probe.
+No claim in §0 depends on it and it is not a co-primary: it is cut from A2/A3
+and from the label-efficiency sweep, and it has no TerraMind counterpart at all
+(no ViT-S DEM tokenizer is published), so the row is a DEMAE-vs-ImageNet-MAE
+capacity observation rather than a three-way. Its price is why it is one row:
+in GPU minutes ViT-S is ~$0.15, but at full seeds it would have been **16 of the
+48 scored eval passes** this plan carried before this section was rewritten — a
+third of §7's largest line — plus eight extra rows in a table whose
+combinatorics are already the binding constraint. Cut to two single-seed cells,
+it costs 2 passes and keeps the finding.
+
+**The R4 continual-init arm stays, on a completely different justification.**
+Its old one — "a same-capacity DEMAE-vs-TerraMind cell" — is gone, because R5 is
+already same-capacity. What replaces it is a result from Phase 1:
+[`p88-r4-r5-readout.md`](p88-r4-r5-readout.md) found that R4 and R5 are the one
+pair where DEMAE's two instruments genuinely oppose — R5 out-*represents* R4 at
+all 19 matched probe points, while R4 ends **0.56% better on masked-reconstruction
+val loss**. Void filling is the reconstruction-flavoured downstream task, so
+whether that disagreement transfers is a real, pre-registered question, and this
+benchmark is the instrument for it. R4 runs in A2/A3/A4 at 20k.
+
+- **Build precondition, not a detail.** R4 and R5 do **not** share a `pos_embed`
+  axis order — R5 is `sincos2d`, R4 is `sincos2d_rowfirst` (P102), a difference
+  measured as 6.7e-7 against 2.0 on the same tensor. `pos_embed` is registered
+  non-persistent and is absent from `state_dict()`, so a `strict=False` load
+  silently succeeds with the wrong embedding. Each arm's `pos_embed` is
+  materialized from **its own** run config, and the load is asserted strict.
+  "Running both costs minutes" is true in GPU minutes and false in correctness
+  risk.
+
+**Which DEMAE is the headline: R5, unconditionally.** C1 and C3 are evaluated on
+the R5 release encoder alone; R4 is a pre-registered secondary row at 20k only,
+and does not enter the label-efficiency sweep. If R4 beats R5 materially at void
+filling, that is reported prominently as a finding about init transfer — and
+explicitly as a challenge to Phase 1's probe-based release criterion — but it
+does not become C1's number. Letting the winner claim the headline would leave
+two DEMAE identities and a free choice made after seeing both, which is exactly
+the forking path pre-registration exists to close.
+
+**The plan names the encoder by property, never by file:** the Phase-1 release
+ViT-B encoder under the ADR-0010 recipe, with init provenance recorded. R5 is
+that encoder. This wording is unchanged by everything above and was written to
+survive R4-vs-R5 landing either way; it did.
 
 ### 2.4 The void-input convention for frozen encoders
 
@@ -427,7 +523,11 @@ One head spec, frozen across arms; only the input channel width differs
   tuned **once on A6 (the neutral encoder) using val only**, then frozen for
   every arm; tuning on the arm you hope wins is the classic thumb on the scale.
 - **Seeds:** 3 seeds per cell for A4/A5/A6/A7 at 20k; 2 seeds for the
-  label-efficiency subsets. Report mean ± std.
+  label-efficiency subsets. Report mean ± std. **One exception:** §2.3's ViT-S
+  appendix cells (A4-S, A6-S) run at 20k with a **single seed**, and are
+  reported as a single observation without a ± — they answer a capacity-scaling
+  aside that no claim in §0 rests on, and buying them error bars would cost more
+  eval passes than the primary comparison's entire label sweep.
 - **Features are *not* precomputed; masks are** *(amended 2026-08-10, §7 —
   [#120](https://github.com/JStoschek/DEMAE/issues/120); mask half amended 2026-08-11 —
   [#121](https://github.com/JStoschek/DEMAE/issues/121))*. The frozen encoder runs inline
@@ -445,7 +545,9 @@ One head spec, frozen across arms; only the input channel width differs
   is 0.037 ms and a large blob is 8.86 ms (30.9 ms worst case), because the blob family
   dilates a random walk to a target area. §7's table implies **34.4M training tile
   presentations**; drawn on the fly that is **19.1 CPU-hours**, against the program's
-  2.56 GPU-hours and the 2–5 h eval line §7 already calls its largest. Per epoch over
+  2.56 GPU-hours and the 1.6–4.1 h eval line §7 already calls its largest. (That 34.4M
+  was counted against §7's table *before* §2.3's rewrite cut the ViT-S cells to one seed
+  and took R4 out of the label sweep — it is an upper bound, not a current figure.) Per epoch over
   20k tiles it is **40 s** of one core against a **4.6 s** GPU step (head 1.0 s + inline
   ViT-B 3.58 s) — the loader running **8.7×** the GPU it feeds, and still at parity with
   eight workers. The bank collapses 34.4M draws to **1M**: 33 minutes once, 740 MB, and
@@ -458,7 +560,12 @@ One head spec, frozen across arms; only the input channel width differs
 
 ### 4.2 DEMAE native fine-tune (A3)
 
-- Init from the release checkpoint (R1; R4 arm if usable). Continue MAE
+- Init from the **R5 ViT-B release checkpoint** (§2.3's encoder-by-property
+  wording), with the **R4 continual-init checkpoint as the pre-registered
+  secondary**; §2.3's `pos_embed` axis-order precondition applies to both loads.
+  The old text here read "the release checkpoint (R1; R4 arm if usable)", which
+  was stale twice over — R1 is the **ViT-S** run, and R4 is no longer
+  conditional. Continue MAE
   training with the mask sampler swapped: instead of 75% random patches, drop
   the set of patches overlapping a synthetic void **read from §3.2's train mask
   bank** (16 to 158 px families, epoch `e` of 20), plus 25% random patches so
@@ -488,12 +595,19 @@ task-adaptation bought, which is a figure in itself.
 
 ### 4.4 UNet baseline (A7)
 
-Standard 4-down/4-up UNet (~17M params, comparable order to ViT-S+head),
-2-channel input (A1-filled tile, void mask), residual output, same loss, same
-schedule length, same seeds. Trained from scratch at each label-efficiency
-size. This is the PANGAEA bar: if A7 matches A4 at 20k tiles, the honest
-conclusion is that pretraining pays only in the low-label regime, and C3 is
-where DEMAE must show it.
+Standard 4-down/4-up UNet (~17M params), 2-channel input (A1-filled tile, void
+mask), residual output, same loss, same schedule length, same seeds. Trained
+from scratch at each label-efficiency size.
+
+This bullet used to justify the UNet's size as "comparable order to
+ViT-S+head", an anchor that goes with ViT-S's demotion in §2.3. The honest
+statement under a ViT-B primary is the stronger one: **A7 trains ~17M
+parameters against the 1.18M trainable in every frozen arm**, an order of
+magnitude more, so a totals-only column (17M against A4's 86.4M) reads the
+baseline as handicapped when it is the opposite. §6 item 4 prints both counts
+for this reason. This is the PANGAEA bar, and it is a hard one: if A7 matches
+A4 at 20k tiles, the honest conclusion is that pretraining pays only in the
+low-label regime, and C3 is where DEMAE must show it.
 
 ### 4.5 Order of operations
 
@@ -637,8 +751,18 @@ A1 from truth cannot separate the arms either.
 3. GSD stated per regime; primary regime is DEMAE-native and says so;
    TerraMind gets a retrained head in its own 10 m regime before any
    conclusion is drawn about it.
-4. Parameter counts in every table; ViT-B cells (R4, ImageNet-B) bracket the
-   capacity confound.
+4. Capacity and pretraining data are **reported rather than bracketed**, because
+   both are near-matched and there is nothing left to control. Parameter counts
+   in every table, **total and trainable**: DEMAE ViT-B **85.25M** against
+   TerraMind's DEM tokenizer encoder **90.17M** — same depth, same 16 px patch,
+   same 14x14 token grid — and 1.18M trainable in every frozen-encoder arm
+   against the UNet baseline's 17M, so the from-scratch bar is not read as
+   handicapped by a totals-only column. Pretraining differs in data, not
+   compute: **~189M tile presentations against ~180M**, over **21.4M km²** of
+   GLO-30 against **~59.0M km²** of the same product resampled to 10 m. That
+   ~2.8x ground-area advantage to TerraMind is recorded here, before any result,
+   and is not available as a post-hoc explanation of a DEMAE loss that was not
+   also offered as a discount on a DEMAE win.
 5. The tokenizer encoder was trained for reconstruction, not representation;
    A9 quantifies the bottleneck; conclusions are phrased as "under identical
    probes" not "TerraMind is worse."
@@ -667,20 +791,27 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 |---|---|---|---|
 | **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **46.1** | priciest single arm; UNet epoch is 15.4 s against the head's 1.0 |
 | Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
-| Head training A4/A5/A6 | 5 cells x 3 seeds x 50 ep x 20k | 45.1 | |
-| Label-efficiency sweep (1k, 5k; 2 seeds) | 5 cells x 2 seeds x 50 ep x 6k | 9.0 | |
-| Inference over the eval instances | 47 passes x 32k | 4.5 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
-| A3 fine-tune (ViT-B + ViT-S) | 20 ep x 20k | 3.1 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch |
-| **GPU total** | | **153.6 min = 2.56 h** | **$1.03** at $0.4016/hr |
+| Head training A4/A5/A6 | 4 cells x 3 seeds + 2 appendix cells x 1 seed, x 50 ep x 20k | 42.1 | 14 cell-seeds at the 3.01 min/cell-seed this line already prices |
+| Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
+| Inference over the eval instances | 38 passes x 32k | 3.6 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
+| A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
+| **GPU total** | | **147.3 min = 2.46 h** | **$0.99** at $0.4016/hr |
 | **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
-| Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **2-5 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
-| Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)) |
+| Eval passes (CPU, local, single core) | **39** arm-seed passes x 32k instances | **1.6-4.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+| Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)). **The 34.4M predates §2.3's rewrite** and is not re-derived here — see the note below the table |
 
-The 48 scored passes are 24 at 20k — A1, A2 and A3 at both capacities, A9, the five frozen
-cells at 3 seeds, A7 at 3 seeds — plus 24 for the label-efficiency sweep, which §6 item 7
-makes a headline claim and therefore scores rather than merely trains.
+The 39 scored passes are 23 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
+cells (A4-R5, A4-R4, A5, A6) at 3 seeds; the two ViT-S appendix cells at 1 seed; A7 at 3 seeds
+— plus 16 for the label-efficiency sweep (3 cells x 2 seeds x 2 sizes, plus A7), which §6
+item 7 makes a headline claim and therefore scores rather than merely trains.
 
-**The budget is not a constraint and should stop being treated as one.** At $1.03 of GPU
+**This was 48 passes before §2.3's rewrite**, and the 19% cut is the point worth reading: the
+GPU bill barely moved ($1.03 → $0.99) while the benchmark's largest line dropped by nine
+passes, *even though R4 was added*. ViT-S gave back more than R4 took. #117's standing note
+that attention and wall-clock are the real budget is what this line measures; the dollar column
+is not.
+
+**The budget is not a constraint and should stop being treated as one.** At $0.99 of GPU
 against a $25 target — the CPU hours are the project's own laptop, not rent — no line here justifies a spot-instance strategy or a resume design;
 #117's standing note that *attention and wall-clock are the real budget* is now measured
 rather than asserted. The one number that could still move the total is A9's.
@@ -702,6 +833,13 @@ was supposed to buy. Banking K = 50 draws per tile cuts 34.4M draws to 1M — **
 740 MB** — with per-epoch variation preserved exactly, because 50 committed masks per tile
 is what 50 on-the-fly epochs produce. Both decisions are the same trade read consistently:
 cache what is cheap to store and expensive to recompute, not the reverse.
+
+**Open, from the #121/#122 merge (2026-08-11):** the 34.4M presentation count above was
+derived from §7's table *as it stood before* §2.3's rewrite, which cut the ViT-S appendix
+cells to a single seed and took R4 out of the label-efficiency sweep. Every 34.4M / 19.1
+CPU-h / 1M / 33 min / 740 MB figure in this section is therefore an **upper bound** and
+wants re-deriving against the current cell counts. The bank-vs-on-the-fly conclusion is
+not in doubt — the margin is 7.5× — but the printed numbers are stale.
 
 §9.4's Task-2 reuse constraint is **not** merely unaffected by these two decisions, as the
 #120 amendment said — it was independently wrong, and #121 rewrote it. Task 1's encoder
