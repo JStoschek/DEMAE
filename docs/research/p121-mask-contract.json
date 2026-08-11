@@ -1,0 +1,278 @@
+{
+  "note": "P121 measurements. Generator is prototypes/p119_fill_headroom_proto.py, imported verbatim. Host: laptop, single core.",
+  "tile_px": 224,
+  "margin_px": 8,
+  "max_area_frac": 0.4,
+  "interior_px": 208,
+  "d_cap": 159.8575208072883,
+  "draw_cost_ms": {
+    "blob/small": {
+      "mean_ms": 0.626,
+      "median_ms": 0.5882,
+      "p95_ms": 1.0345,
+      "max_ms": 3.7306
+    },
+    "blob/medium": {
+      "mean_ms": 2.387,
+      "median_ms": 2.3657,
+      "p95_ms": 3.3778,
+      "max_ms": 4.0065
+    },
+    "blob/large": {
+      "mean_ms": 8.8608,
+      "median_ms": 7.7942,
+      "p95_ms": 16.1475,
+      "max_ms": 30.9297
+    },
+    "rect/small": {
+      "mean_ms": 0.0371,
+      "median_ms": 0.0369,
+      "p95_ms": 0.0382,
+      "max_ms": 0.0637
+    },
+    "rect/medium": {
+      "mean_ms": 0.0372,
+      "median_ms": 0.037,
+      "p95_ms": 0.0383,
+      "max_ms": 0.0588
+    },
+    "rect/large": {
+      "mean_ms": 0.0383,
+      "median_ms": 0.0377,
+      "p95_ms": 0.04,
+      "max_ms": 0.1785
+    }
+  },
+  "geometry": {
+    "blob/small": {
+      "achieved_d": [
+        16.16,
+        33.05,
+        47.91
+      ],
+      "area_frac": [
+        0.0041,
+        0.0184,
+        0.0359
+      ],
+      "bbox_max_side": [
+        17,
+        40.8,
+        76
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    },
+    "blob/medium": {
+      "achieved_d": [
+        64.02,
+        80.09,
+        95.99
+      ],
+      "area_frac": [
+        0.0642,
+        0.1017,
+        0.1442
+      ],
+      "bbox_max_side": [
+        71,
+        100.1,
+        174
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    },
+    "blob/large": {
+      "achieved_d": [
+        128.05,
+        143.9,
+        159.86
+      ],
+      "area_frac": [
+        0.2567,
+        0.3255,
+        0.4
+      ],
+      "bbox_max_side": [
+        138,
+        174.4,
+        204
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    },
+    "rect/small": {
+      "achieved_d": [
+        15.64,
+        31.4,
+        47.87
+      ],
+      "area_frac": [
+        0.0038,
+        0.0168,
+        0.0359
+      ],
+      "bbox_max_side": [
+        15,
+        33.0,
+        59
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    },
+    "rect/medium": {
+      "achieved_d": [
+        63.69,
+        79.6,
+        95.63
+      ],
+      "area_frac": [
+        0.0635,
+        0.1005,
+        0.1431
+      ],
+      "bbox_max_side": [
+        57,
+        84.2,
+        119
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    },
+    "rect/large": {
+      "achieved_d": [
+        128.05,
+        144.24,
+        159.61
+      ],
+      "area_frac": [
+        0.2567,
+        0.3269,
+        0.3988
+      ],
+      "bbox_max_side": [
+        119,
+        152.5,
+        195
+      ],
+      "n_bbox_over_interior": 0,
+      "n_over_area_cap": 0
+    }
+  },
+  "bucket_reading": {
+    "equiv_diameter": {
+      "area_px": 20106.2,
+      "area_frac": 0.4007,
+      "square_side_equivalent": 141.8,
+      "d_max_under_cap": 159.86
+    },
+    "square_side": {
+      "area_px": 25600.0,
+      "area_frac": 0.5102,
+      "side_max_under_cap": 141.67
+    }
+  },
+  "epoch_cost": {
+    "mean_draw_ms_all_cells": 1.9977,
+    "blob_mean_ms": 3.9579,
+    "rect_mean_ms": 0.0375,
+    "seconds_per_epoch_20k_1proc": 40.0,
+    "seconds_50_epochs_1proc": 1997.7,
+    "hours_50_epochs_1proc": 0.555
+  },
+  "blob_retries": {
+    "large": {
+      "draws": 300,
+      "walks": 358,
+      "walks_per_mask": 1.19
+    },
+    "medium": {
+      "draws": 300,
+      "walks": 300,
+      "walks_per_mask": 1.0
+    },
+    "small": {
+      "draws": 300,
+      "walks": 300,
+      "walks_per_mask": 1.0
+    },
+    "large_top_decile": {
+      "draws": 200,
+      "walks": 287,
+      "walks_per_mask": 1.44
+    },
+    "large_bottom_decile": {
+      "draws": 200,
+      "walks": 206,
+      "walks_per_mask": 1.03
+    }
+  },
+  "placement_freedom_top_decile": {
+    "positions_min": 150,
+    "positions_median": 950,
+    "positions_max": 2145,
+    "interior_positions_for_a_point": 43264
+  },
+  "rle_size": {
+    "blob/small": {
+      "runs_mean": 80.9,
+      "bytes_int32_mean": 323.6
+    },
+    "blob/medium": {
+      "runs_mean": 203.9,
+      "bytes_int32_mean": 815.8
+    },
+    "blob/large": {
+      "runs_mean": 359.0,
+      "bytes_int32_mean": 1436.1
+    },
+    "rect/small": {
+      "runs_mean": 58.2,
+      "bytes_int32_mean": 233.0
+    },
+    "rect/medium": {
+      "runs_mean": 144.9,
+      "bytes_int32_mean": 579.7
+    },
+    "rect/large": {
+      "runs_mean": 262.7,
+      "bytes_int32_mean": 1050.8
+    }
+  },
+  "bank": {
+    "mean_rle_bytes": 739.8,
+    "bank_20k_tiles_K50_MB": 739.8,
+    "bank_20k_tiles_K50_draws": 1000000
+  },
+  "training_draws": {
+    "lines": {
+      "A7 UNet 3 seeds + label sweep": 3600000,
+      "Head tuning on A6 (12 configs)": 12000000,
+      "Head training A4/A5/A6 (5 cells x 3 seeds)": 15000000,
+      "Label-efficiency sweep (5 cells x 2 seeds)": 3000000,
+      "A3 fine-tune (ViT-B + ViT-S)": 800000
+    },
+    "total_presentations": 34400000,
+    "mean_draw_ms": 1.9977,
+    "on_the_fly_cpu_hours_1proc": 19.09,
+    "bank_draws_once": 1000000,
+    "bank_cpu_minutes_1proc": 33.3,
+    "reduction_x": 34.4
+  },
+  "per_epoch_20k": {
+    "gpu_head_s": 1.0,
+    "gpu_inline_encoder_vitb_s": 3.58,
+    "cpu_masks_1proc_s": 40.0,
+    "cpu_masks_8proc_s": 5.0
+  },
+  "eval_instances": {
+    "synthetic": {
+      "tiles": 5000,
+      "families": 2,
+      "buckets": 3,
+      "instances": 30000
+    },
+    "per_row_per_band_synthetic": 1250,
+    "floor": 100
+  }
+}

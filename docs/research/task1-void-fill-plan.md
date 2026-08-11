@@ -201,30 +201,60 @@ the same as the corpus's: two runs from committed inputs reproduce the tables.
 
 ### 3.2 Synthetic void masks
 
-A seeded `benchmark.masks` generator, one committed mask list per eval tile
-(train-time masks are drawn on the fly from the same generator, seeded by
-`(tile_id, epoch)`).
+A seeded `benchmark.masks` generator producing **two committed artifacts**: one
+mask list per eval tile, and a **train-time mask bank** of K = 50 draws per
+head-train tile (§3.5). Training masks are *not* drawn on the fly; the bank is
+read by every arm, seed and hyperparameter config, so the mask sequence a run
+sees is a committed input rather than a reproduction of the generator's RNG.
 
 - **Geometry families:** (i) random-walk blobs dilated to target area, the
   standard proxy for radar-shadow voids; (ii) axis-aligned rectangles
   (sensor-dropout proxy); (iii) transplanted real SRTM void shapes (§3.3).
-- **Size buckets:** small 16 to 48 px, medium 64 to 96 px, large 128 to 160 px
-  (the two upper buckets match Diff-DEM's published protocol so numbers are
-  directly comparable). One void per tile per eval instance; every eval tile
+- **Size buckets, as equivalent diameter:** small 16 to 48 px, medium 64 to
+  96 px, large 128 to **158** px. The unit is `d = 2·√(area/π)`, and it is
+  stated because it is load-bearing: both families are area-matched through
+  `d`, so a blob and a rectangle in the same bucket cover the same pixel count
+  and the bucket axis means one thing. Read instead as a *side length* the
+  large bucket would demand 160² = 51% of a 224 px tile and collide with the
+  40% cap at 141 px — which is the contradiction
+  [p124](p124-voidfill-comparability.md) §9 reported and
+  [#121](https://github.com/JStoschek/DEMAE/issues/121) measured away. The cap
+  does bind, just barely: it permits `d ≤ 159.86 px`, so the published top of
+  160 overshot by **0.14 px**. The top is lowered to 158 rather than clamped,
+  so no draw is ever silently trimmed and the two constraints are satisfiable
+  with margin. The two upper buckets still bracket Diff-DEM's published
+  protocol; the change is 1.2% of the large bucket's diameter range and no
+  measured quantity moves. One void per tile per eval instance; every eval tile
   appears once per bucket **for the two synthetic families (i) and (ii)**, so
   bucket scores are computed over identical tile sets.
+- **The large bucket is positionally cramped, and the table should not read it
+  as free variation.** Measured over 300 draws per cell: in the large bucket's
+  top decile a blob's bounding box leaves a median of **950** legal placements
+  inside the 208 px interior (min 150), against **43,264** for a point — so the
+  biggest voids are close to centred, and instance-to-instance variation in
+  that bucket is terrain, not placement. Blob draws also retry **1.44×** there
+  against 1.00 in every other cell. Neither is fatal, and both are reasons the
+  large bucket carries less independent information per instance than its
+  instance count suggests.
 - **The real-void family (iii) carries no bucket axis.** Two cells measured at
   true 1 arc-second returned 139 and 175 components in 16 to 48 px, 2 and 6 in
   64 to 96, and **zero** in 128 to 160. Forcing 667-per-bucket would mean either
   fabricating large voids, which destroys the only thing the family contributes,
   or silently reweighting, which makes it non-comparable anyway. It is drawn at
   its natural size distribution and reported as its own rows instead (§3.3).
-  Note that the 128 to 160 px bucket is under separate pressure for the
-  *synthetic* families too — this section's interior-margin and 40%-area
-  constraints are jointly unsatisfiable above 141 px — so whether that bucket
-  survives at all is settled elsewhere, and this bullet does not assume it does.
+  The large bucket survives for the *synthetic* families — the pressure this
+  bullet used to hedge against was a units error, settled in the size-bucket
+  bullet above. **The real family's bands stay at 128 to 160 px** even though
+  the synthetic large bucket now tops at 158: those bands describe sizes real
+  voids *have*, measured on SRTM, and are not draw targets the 40% cap can
+  constrain — so renaming them to match a synthetic bucket would misdescribe
+  the histogram (§3.3, §5).
 - **Constraints:** voids fully interior (≥ 8 px from tile edge); void may not
   cover > 40% of the tile; the same mask list is reused verbatim by every arm.
+  All three are **checked, not assumed**: over 300 draws per (family, bucket)
+  cell the generator produced zero cap violations, zero interiority violations,
+  and a maximum bounding-box side of 204 px against the 208 px interior
+  ([#121](https://github.com/JStoschek/DEMAE/issues/121)).
 
 ### 3.3 Real SRTM void geometry
 
@@ -353,10 +383,21 @@ not headline, in every table.
 
 ### 3.5 Committed artifacts
 
-`benchmark/` module in the repo's stage-per-module style: tile lists, mask
-lists (parquet: `tile_id, family, bucket, mask_rle, seed`), the mask
-generator's config hash, and a dataset card documenting all of the above plus
-the licenses (SRTM public domain, Diff-DEM's data per their repo terms).
+`benchmark/` module in the repo's stage-per-module style: tile lists, the two
+mask artifacts, the mask generator's config hash, and a dataset card
+documenting all of the above plus the licenses (SRTM public domain, Diff-DEM's
+data per their repo terms).
+
+- **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
+  row per eval instance, 30,000 synthetic rows plus the real-void family (§5).
+- **Train mask bank** (parquet: `tile_id, epoch, family, bucket, mask_rle,
+  seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **740 MB** of RLE
+  measured on the generator's own output. Generated once in **33 min** of one
+  CPU core, then read by every arm, seed and config.
+
+Both carry the same generator and the same config hash, so the determinism
+contract is one contract: two runs from committed inputs reproduce the tables,
+and the training masks are now inside that guarantee rather than beside it.
 
 ## 4. Training setup
 
@@ -381,25 +422,45 @@ One head spec, frozen across arms; only the input channel width differs
   every arm; tuning on the arm you hope wins is the classic thumb on the scale.
 - **Seeds:** 3 seeds per cell for A4/A5/A6/A7 at 20k; 2 seeds for the
   label-efficiency subsets. Report mean ± std.
-- **Features are *not* precomputed** *(amended 2026-08-10, §7 —
-  [#120](https://github.com/JStoschek/DEMAE/issues/120))*. The frozen encoder runs inline
-  in the head step, and the void mask is redrawn every epoch per §3.2. The cache this
-  bullet used to specify — fp16 memmaps, 301 KB/tile, 5.6 GiB per encoder per 20k set —
-  was measured to save **$0.50** across the whole benchmark, because a frozen ViT-B
-  forward pass costs 0.179 ms. Against that it fixed the A1-filled input, and therefore
-  the mask, for all 50 epochs: the sentence this bullet used to end with ("precomputation
-  fixes the A1-filled input per (tile, mask), which is exactly the eval-time contract")
-  is true at eval time and is a **frozen training mask** at training time, which §3.2 does
-  not intend. The *eval* side is unchanged — the committed mask list fixes each test
-  instance's input exactly as before.
+- **Features are *not* precomputed; masks are** *(amended 2026-08-10, §7 —
+  [#120](https://github.com/JStoschek/DEMAE/issues/120); mask half amended 2026-08-11 —
+  [#121](https://github.com/JStoschek/DEMAE/issues/121))*. The frozen encoder runs inline
+  in the head step, and the void mask is read from §3.2's bank, epoch `e` of 50. The
+  feature cache this bullet used to specify — fp16 memmaps, 301 KB/tile, 5.6 GiB per
+  encoder per 20k set — was measured to save **$0.50** across the whole benchmark,
+  because a frozen ViT-B forward pass costs 0.179 ms. Against that it fixed the A1-filled
+  input, and therefore the mask, for all 50 epochs: the sentence this bullet used to end
+  with ("precomputation fixes the A1-filled input per (tile, mask), which is exactly the
+  eval-time contract") is true at eval time and is a **frozen training mask** at training
+  time, which §3.2 does not intend.
+- **What replaces the cache is a mask bank, not nothing, and it is 40× smaller.**
+  Deleting the feature cache made mask generation a per-epoch cost that nobody had
+  priced. Measured, a draw averages **2.00 ms** — but that mean spans 240×: a rectangle
+  is 0.037 ms and a large blob is 8.86 ms (30.9 ms worst case), because the blob family
+  dilates a random walk to a target area. §7's table implies **34.4M training tile
+  presentations**; drawn on the fly that is **19.1 CPU-hours**, against the program's
+  2.56 GPU-hours and the 2–5 h eval line §7 already calls its largest. Per epoch over
+  20k tiles it is **40 s** of one core against a **4.6 s** GPU step (head 1.0 s + inline
+  ViT-B 3.58 s) — the loader running **8.7×** the GPU it feeds, and still at parity with
+  eight workers. The bank collapses 34.4M draws to **1M**: 33 minutes once, 740 MB, and
+  per-epoch variation is preserved *exactly*, since 50 committed masks per tile is what
+  50 on-the-fly epochs would have produced. It is the same trade that killed the feature
+  cache, read the other way round — cache the artifact that is cheap to store and
+  expensive to recompute, not the one that is the reverse.
+- The *eval* side is unchanged throughout — the committed mask list fixes each test
+  instance's input exactly as it always did.
 
 ### 4.2 DEMAE native fine-tune (A3)
 
 - Init from the release checkpoint (R1; R4 arm if usable). Continue MAE
   training with the mask sampler swapped: instead of 75% random patches, drop
-  the set of patches overlapping a sampled synthetic void (16 to 160 px
-  families), plus 25% random patches so the encoder keeps seeing global
-  context and the effective mask ratio stays near pretraining's.
+  the set of patches overlapping a synthetic void **read from §3.2's train mask
+  bank** (16 to 158 px families, epoch `e` of 20), plus 25% random patches so
+  the encoder keeps seeing global context and the effective mask ratio stays
+  near pretraining's. A3 reads the same bank as the heads — its 20 epochs are
+  the bank's first 20 — so the void geometry A3 adapts to and the geometry the
+  frozen arms train against are the same draws, not merely the same
+  distribution.
 - **Loss:** masked MSE in per-tile-standardized space with `norm_pix` **off**
   (void filling needs absolute per-patch scale; norm-pix targets discard it).
   Eval always re-inverts to metres with non-void stats.
@@ -430,9 +491,11 @@ where DEMAE must show it.
 
 ### 4.5 Order of operations
 
-1. Freeze mask lists and tile lists (CPU only, local).
+1. Freeze tile lists, the eval mask list, and the train mask bank (CPU only,
+   local; the bank is the 33-minute line, §3.5).
 2. A1 baseline numbers + unit tests on norm inversion and mask bookkeeping.
-3. Precompute frozen features (one GPU-hour class).
+3. *(was: precompute frozen features — deleted, §4.1. There is no feature
+   precompute step; the encoder runs inline.)*
 4. Tune head hyperparams on A6/val; freeze.
 5. Run A4, A5, A6, A7 at 20k; then the 1k/5k sweep; then A3; then A2/A9
    (inference only); then A8 cross-eval; secondary 10 m regime last.
@@ -529,7 +592,22 @@ A1 from truth cannot separate the arms either.
   (row, band) cell with fewer than 100 instances is reported as a count with no
   metric rather than pooled into a neighbouring band. This binds hardest on the
   real-void family, which takes whatever distribution SRTM gives it and is
-  expected to concentrate in R3/R4 (§3.3).
+  expected to concentrate in R3/R4 (§3.3). **The synthetic rows clear it with
+  room** — 5,000 test tiles × 2 families × 3 buckets is **30,000** instances,
+  1,250 per (row, band). **The real-medium+ sub-row probably does not, and its
+  rule is therefore fixed here, before the counts exist.** p125 measured 2 and 6
+  components in 64–96 px on two 1-degree cells at true 1 arc-second; scaled by
+  [#127](https://github.com/JStoschek/DEMAE/issues/127)'s 24 granules that
+  projects to roughly **96 instances in total** — at the floor before
+  stratifying, and ~24 per band after. (real-small projects to ~3,800, which
+  clears comfortably.) So: **real-medium+ is reported unstratified — one pooled
+  number with its instance count — unless the realised histogram clears 100 per
+  band**, which [#135](https://github.com/JStoschek/DEMAE/issues/135) checks
+  against exactly this threshold. The projection rests on two cells and may be
+  wrong in either direction; what is pre-registered is the threshold, not the
+  outcome. One knock-on: §7's **32k eval instances is provisional**, since it
+  predates #126's reshaping of the family — at the natural distribution the
+  total is nearer 34k, which moves the two eval lines by ~6% and no conclusion.
 - **Statistics:** paired bootstrap over test tiles (10k resamples) for each arm
   pair on RMSE and slope RMSE; report 95% CIs and mark table cells where the
   CI excludes zero. Three-seed spread reported separately from bootstrap CI
@@ -576,7 +654,8 @@ price: this project rents an **RTX 5090** at a real **$0.4016/hr**, not a 4090 a
 §12). Every line is a measured primitive times a count, and the primitives are published so
 any new arm can be costed without a fresh run.
 
-Costed for the design §4.1 now specifies — **frozen encoder inline, no feature cache**:
+Costed for the design §4.1 now specifies — **frozen encoder inline, no feature cache,
+training masks read from the committed bank** ([#121](https://github.com/JStoschek/DEMAE/issues/121)):
 
 | Item | Count | 5090-min | Notes |
 |---|---|---|---|
@@ -589,6 +668,7 @@ Costed for the design §4.1 now specifies — **frozen encoder inline, no featur
 | **GPU total** | | **153.6 min = 2.56 h** | **$1.03** at $0.4016/hr |
 | **A9 (TerraMind full tokenizer)** | 32k instances | **unpriced** | diffusion decode; at 1 s/instance it is 8.9 GPU-h, 3.5x the whole table above. **§7 is not final until this is measured.** |
 | Eval passes (CPU, local, single core) | **48** arm-seed passes x 32k instances | **2-5 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+| Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)) |
 
 The 48 scored passes are 24 at 20k — A1, A2 and A3 at both capacities, A9, the five frozen
 cells at 3 seeds, A7 at 3 seeds — plus 24 for the label-efficiency sweep, which §6 item 7
@@ -603,10 +683,23 @@ rather than asserted. The one number that could still move the total is A9's.
 *cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
 and against that it costs 30.3 GiB, 7.9 TB of re-reads, and a design constraint §4.1 did
 not name: a cached feature fixes the A1-filled input, hence the mask, so head training
-would see **one void per tile for all 50 epochs**, contradicting §3.2's on-the-fly
-`(tile_id, epoch)` masks. Run the encoder inline and redraw the mask each epoch. §9.4's
-Task-2 reuse constraint is unaffected: it binds the frozen-feature *contract*, not whether
-features were written to disk.
+would see **one void per tile for all 50 epochs**, contradicting §3.2's per-epoch masks.
+Run the encoder inline.
+
+**Why a mask bank instead** ([#121](https://github.com/JStoschek/DEMAE/issues/121)):
+deleting the feature cache made mask generation a per-epoch cost, and it had never been
+priced. It is **2.00 ms/draw**, so the 34.4M presentations this table's own counts imply
+come to **19.1 CPU-h** — larger than the eval line above and 7.5× the whole GPU program.
+Per epoch over 20k tiles that is 40 s of one core against a 4.6 s GPU step, so on-the-fly
+masks make head training **loader-bound**, which is the exact property the deleted cache
+was supposed to buy. Banking K = 50 draws per tile cuts 34.4M draws to 1M — **33 min once,
+740 MB** — with per-epoch variation preserved exactly, because 50 committed masks per tile
+is what 50 on-the-fly epochs produce. Both decisions are the same trade read consistently:
+cache what is cheap to store and expensive to recompute, not the reverse.
+
+§9.4's Task-2 reuse constraint is **not** merely unaffected by these two decisions, as the
+#120 amendment said — it was independently wrong, and #121 rewrote it. Task 1's encoder
+never sees a clean tile, so Task 2 inherits an extractor contract, not an artifact.
 
 **§4.1's "~3M params" is wrong** — the head as specified there measures **1.08M** (384-d)
 and **1.18M** (768-d). Cost is barely affected, but §6 item 4 puts parameter counts in
@@ -663,9 +756,12 @@ every table, so the corrected figures are the ones to print.
   - NaN filling before the z-score is untested here and stands as written.
 - **Contiguous-mask shift sinks A2:** expected and framed as the zero-shot vs
   fine-tuned delta, not buried.
-- **Spot-instance reclaim:** heads checkpoint every epoch to the synced
-  directory like every other run in this repo; features are memmapped so
-  nothing long-running is unresumable.
+- **Spot-instance reclaim: not a risk this benchmark has.** Heads checkpoint
+  every epoch to the synced directory like every other run in this repo, but
+  §7's measured total is 2.56 GPU-hours with a 46-minute longest job, so there
+  is nothing long-running to lose. *(The clause that used to close this bullet —
+  "features are memmapped so nothing long-running is unresumable" — went with
+  the feature cache in §4.1.)*
 
 ## 9. Deliverables
 
@@ -680,16 +776,45 @@ every table, so the corrected figures are the ones to print.
 3. A short results memo in `docs/research/` answering C1, C2, C3 with numbers
    and C4 with a rank comparison, plus the fairness checklist and the TerraMind
    caveats.
-4. If C1 holds, the same frozen-feature cache feeds Task 2's probes unchanged,
-   which is why this ordering is efficient. **Two constraints on that contract
-   are now measured** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
+4. **What Task 2 inherits is the frozen-feature *extractor contract*, not a
+   feature cache** *(amended 2026-08-11 —
+   [#121](https://github.com/JStoschek/DEMAE/issues/121))*. This item used to
+   read "the same frozen-feature cache feeds Task 2's probes unchanged, which is
+   why this ordering is efficient." That was never true, and the
+   [#120](https://github.com/JStoschek/DEMAE/issues/120) decision to delete the
+   cache is not why. **Every Task 1 arm's encoder input is an A1-filled *voided*
+   tile; Task 2 probes *clean* tiles.** Task 1 therefore computes no clean-tile
+   feature at any point, so there was never an artifact for Task 2 to reuse —
+   with a cache or without one. The ordering is still the right one, but for the
+   reason below rather than for a shared file.
+
+   What genuinely transfers, and what Task 1 must therefore pin down and
+   document, is the **extractor**: the code path that turns a tile into frozen
+   patch tokens, the per-arm normalization, the layer indices, and the dtype. If
+   Task 1 fixes those, Task 2 re-runs them over its own clean tiles and the two
+   tasks' C1 claims are about the same features. **Two constraints on that
+   contract are now measured**
+   ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md)):
    the TerraMind arms take **raw metres under TerraMind's global affine**, never
-   the pretraining loader's per-tile-standardized output (§7 there) — so a cache
-   shared with the DEMAE arms has to distinguish the two normalizations somehow,
-   and how is a design call this ticket does not make; and the extractor needs
-   only `encoder` + `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the
-   1.15 GB checkpoint** — since the remaining 196M is the diffusion decoder that
-   no in-scope arm calls.
+   the pretraining loader's per-tile-standardized output (§7 there) — which the
+   encoder accepts silently either way, so normalization is **per arm, declared
+   in the extractor config**, and the "how does one shared cache carry two
+   normalizations" problem this item used to defer simply stops existing once
+   there is no shared cache; and the extractor needs only `encoder` +
+   `quant_proj` — **90.2M parameters, 361 MB fp32, 31.5% of the 1.15 GB
+   checkpoint** — since the remaining 196M is the diffusion decoder that no
+   in-scope arm calls.
+
+   **[`task2-landform-plan.md`](task2-landform-plan.md) is stale on this in
+   three places** and is *not* amended here, because Task 2 is out of this map's
+   scope ([#117](https://github.com/JStoschek/DEMAE/issues/117)) and gets its own
+   map: §3.3 ("the frozen feature caches from Task 1 are reused directly for the
+   clean tiles"), §4.2 (intermediate-layer features "cached once per encoder",
+   ~25 GB), and §4.4 step 3 ("Extend Task 1's feature caches with intermediate
+   layers"). Task 2's own caching decision is open and may well go the other way
+   — its UperNet probes read 4 layers per tile over 30 epochs, which is a very
+   different read pattern from Task 1's single inline forward. The point for
+   Task 2's map is only that it inherits an extractor, not a file.
 
 ## 10. Key sources
 
