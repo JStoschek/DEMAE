@@ -1,5 +1,5 @@
 {
- "checked_utc": "2026-08-11T15:20:54Z",
+ "checked_utc": "2026-08-11T16:21:54Z",
  "draw_cells": [
   "N28E086",
   "N28E085",
@@ -156,8 +156,8 @@
   ]
  },
  "auth": {
-  "state": "no-credentials",
-  "detail": "no `machine urs.earthdata.nasa.gov` entry in ~/.netrc",
-  "ok": false
+  "state": "ok",
+  "detail": "HTTP 206, redirect chain ended at d1nklfio7vscoe.cloudfront.net",
+  "ok": true
  }
 }

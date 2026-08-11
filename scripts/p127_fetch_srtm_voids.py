@@ -434,7 +434,15 @@ def check_auth(netrc_path: Path | None = None) -> dict:
     request = urllib.request.Request(granule_url(DRAW_CELLS[0]), headers={"Range": "bytes=0-0"})
     try:
         with opener.open(request, timeout=60) as response:
-            return {"state": "ok", "detail": f"HTTP {response.status} from {response.url.split('?')[0]}", "ok": True}
+            # Host only. The chain ends on a *signed* CloudFront/S3 URL whose path carries a
+            # per-session token, and this record is committed — the useful fact is which host
+            # served the bytes, not the signature that let it.
+            host = urllib.parse.urlsplit(response.url).hostname
+            return {
+                "state": "ok",
+                "detail": f"HTTP {response.status}, redirect chain ended at {host}",
+                "ok": True,
+            }
     except urllib.error.HTTPError as exc:
         state = "rejected" if exc.code in (401, 403) else "error"
         return {"state": state, "detail": f"HTTP {exc.code} {exc.reason}", "ok": False}
