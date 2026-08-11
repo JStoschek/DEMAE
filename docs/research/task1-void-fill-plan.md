@@ -162,7 +162,7 @@ absolute-altitude passthrough. The head sees each encoder's features as-is
 computed in metres after inverting DEMAE's per-tile transform with the non-void
 stats**, so no arm is scored in its own normalized space.
 
-### 2.2 GSD: primary regime at 30 m, secondary at 10 m
+### 2.2 GSD: one regime at 30 m, and what TerraMind's tokenizer was fed
 
 TerraMind's DEM pixels were GLO-30 bilinearly resampled to the 10 m Sentinel-2
 grid (TerraMesh §3.2 — the sources write "Copernicus DEM 30m" / "Copernicus
@@ -203,12 +203,70 @@ Decisions:
   This makes both encoders in-distribution at 224 px simultaneously: TerraMind sees
   indices 1-14, a subset of its trained 0-15, and DEMAE sees its own native 0-13.
   Neither is handicapped, so §2.2 no longer owes the reader a caveat here.
-  Distinct from the secondary regime below, which is about GSD, not grid.
-- **Secondary regime (A5 only): TerraMind-native check.** The same geographic
-  windows bilinearly resampled to 10 m, center-cropped to 224 px (covering
-  2.24 km instead of 6.72 km), TerraMind + head retrained. If TerraMind-at-10m
-  still loses A4 vs A5, the GSD objection is closed. Run this once, at the 20k
-  training size only.
+  This is about the token grid, not GSD; the GSD asymmetry is the separate,
+  still-live matter of the last three bullets, and #133 did not touch it.
+- **The GSD asymmetry is a bandwidth shift, not a resolution handicap.** State it
+  this way and no other. TerraMind's DEM tokenizer was trained on GLO-30
+  bilinearly upsampled 3x onto the 10 m grid (§2.1, [`p138-terramind-corpus.md`](p138-terramind-corpus.md)),
+  so its inputs carried real detail only up to the 30 m source — roughly a third
+  of that grid's pixel Nyquist — and each 16 px patch spanned 160 m of ground.
+  At this benchmark's native 30 m it sees full-bandwidth terrain across a 480 m
+  patch. **It is fed sharper inputs than it ever trained on, at 3x the ground span
+  per patch, not coarser ones.** The older phrasing — "evaluated below its native
+  10 m GSD" — reads as resolution starvation and is wrong on the mechanism, since
+  those 10 m pixels were upsampled 30 m of the same product DEMAE uses. It also
+  invites the "you crippled the baseline" objection that
+  [#133](https://github.com/JStoschek/DEMAE/issues/133) spent a whole ticket
+  killing. This is a real out-of-distribution condition and the writeup states it;
+  it is simply not the one the plan used to claim.
+- **That caveat is pre-registered and explicitly symmetric**, under the rule
+  [#122](https://github.com/JStoschek/DEMAE/issues/122) fixed for the corpus-size
+  caveat: the GSD shift is **not available as a post-hoc explanation of a
+  TerraMind loss unless it is also priced as a discount on a TerraMind win.**
+  Deliberately **no threshold and no drop condition** are attached, unlike
+  [#134](https://github.com/JStoschek/DEMAE/issues/134)'s materiality check. #134
+  could fix 0.99 because cosine has a familiar scale; the statistics below have
+  none, so any threshold would be invented to look principled — and a threshold
+  would imply this instrument can settle whether the shift *costs* TerraMind
+  anything, which it cannot. Refusing a statistic that would overstate what it
+  decides is the same call §5 makes against pooled mean signed error and §3.3
+  makes against upgrading C4 to a metric delta.
+- **The shift is measured, not asserted — as an input-side diagnostic on the
+  tokenizer's own quantizer.** TerraMind quantizes with **FSQ: `quant_proj`
+  (Conv2d 768->5, 3,845 params) to a 5-d latent, then a parameter-free rounding
+  onto a `8-8-8-6-5` grid, 15,360 codes** ([`p118-terramind-encoder-probe.md`](p118-terramind-encoder-probe.md) §5.2).
+  So the **distance from the pre-quantization latent to its assigned code**, and
+  the **code-usage entropy** over those 15,360 codes (against a 13.91-bit
+  ceiling), read directly on whether an input is off-distribution for *this*
+  tokenizer — with no target, no head and no training, and therefore comparable
+  across GSDs in a way metres are not. Native 30 m is measured against **two**
+  references, because each closes the other's hole: the same geographic windows
+  upsampled to 10 m and centre-cropped to 224 px, which fixes terrain and varies
+  bandwidth; and a sample of real TerraMesh DEM tiles, which fixes bandwidth and
+  varies geography. It is encoder-only — 90.2M of the 1.15 GB checkpoint, the
+  same parts A5 and A9 already load — so it costs no new regime, no retrained
+  head and no scope reopen. **Its limit is stated wherever it is reported:** it
+  measures whether 30 m inputs are off-distribution for the tokenizer, *never*
+  what that costs at void filling. Only a retrained head answers the second
+  question, and that is what the next bullet declines to build. Measured under
+  [#140](https://github.com/JStoschek/DEMAE/issues/140), before any arm runs.
+- **Not considered: a secondary 10 m TerraMind-native regime.** Ruled out of
+  scope at this map's charting, and reaffirmed here on evidence stronger than the
+  ruling had. It would be built by bilinearly resampling the same geographic
+  windows to 10 m and center-cropping to 224 px — 2.24 km instead of 6.72 km —
+  with TerraMind's head retrained, run once at 20k. It fails the test A8 and A10
+  failed: **it closes an objection, it does not carry a claim**
+  ([#128](https://github.com/JStoschek/DEMAE/issues/128)). Three costs the GPU
+  bill hides, none of them compute — one extra scored pass is ~$0.03 against §7's
+  $0.99. It would **add no information**, since those 10 m tiles would be GLO-30
+  upsampled, TerraMesh's own recipe, so the fill target inside the void would be a
+  smooth interpolant of the very 30 m posts the primary regime scores against, and
+  its metres would not be comparable to any other row in the table. It would put
+  **DEMAE** off its native regime in order to put TerraMind on its own. And it
+  would need a 10 m tile variant, masks redrawn at that geometry, and §3.4's mask
+  bank rebuilt for it — 740 MB and 33 minutes for the 30 m geometry alone. What
+  replaces it is the caveat and diagnostic above. Settles
+  [#139](https://github.com/JStoschek/DEMAE/issues/139).
 - **Ablation row (A5 only, 20k training size): bicubic vs re-derived `pos_emb`.**
   One row reporting A5's metrics under terratorch's default resize against the
   centre-anchored re-derivation, so the ADR-0011 intervention is evidenced in the
@@ -1048,9 +1106,18 @@ A1 from truth cannot separate the arms either.
    ability to separate arms. The free ride it grants a *smooth* fill was
    measured at −0.005 to −0.107° and is published beside the eroded-mask control
    rather than argued away ([`p123-metric-discrimination.md`](p123-metric-discrimination.md)).
-3. GSD stated per regime; primary regime is DEMAE-native and says so;
-   TerraMind gets a retrained head in its own 10 m regime before any
-   conclusion is drawn about it.
+3. There is **one regime, 224 px at native 30 m**, it is DEMAE's home turf, and
+   the writeup says so rather than leaving it to be inferred. TerraMind runs
+   out-of-distribution here, and the shift is **not** that it is starved of
+   resolution: its DEM tokenizer trained on the same Copernicus product
+   bilinearly upsampled 3x to 10 m, so it is fed **sharper** inputs than it ever
+   saw, across 3x the ground span per patch. That caveat is pre-registered and
+   symmetric — not available to explain a TerraMind loss unless also priced as a
+   discount on a TerraMind win — and it is **measured on the tokenizer's own FSQ
+   quantizer rather than asserted** (§2.2). No retrained 10 m head is run, and
+   the writeup does not promise one: that regime would close an objection
+   without carrying a claim, and its metres would not be comparable to any row
+   in the table (§2.2).
 4. Capacity and pretraining data are **reported rather than bracketed**, because
    both are near-matched and there is nothing left to control. Parameter counts
    in every table, **total and trainable**: DEMAE ViT-B **85.25M** against
