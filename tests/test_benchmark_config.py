@@ -394,11 +394,23 @@ def test_the_registry_carries_the_eleven_printed_rows():
     assert set(arms.PRINTED_ROWS) <= set(arms.ARMS)
 
 
-def test_the_vit_s_cells_are_registered_as_appendix_rather_than_printed():
+def test_the_vit_s_cell_is_registered_as_appendix_rather_than_printed():
     # §2.3 demoted ViT-S to an appendix aside no §0 claim rests on, and #136 fixed the printed
     # table's shape. An appendix cell that printed would widen a pre-registered table.
-    for name in ("A4-S", "A6-S"):
-        assert name in arms.ARMS and not arms.ARMS[name].printed
+    assert "A4-S" in arms.ARMS and not arms.ARMS["A4-S"].printed
+
+
+def test_the_imagenet_mae_vit_s_cell_is_absent_rather_than_disabled():
+    """A6-S was dropped in #147, on the checkpoint's provenance rather than its absence.
+
+    Absent for the same reason A8 and A10 are: a disabled entry puts a dropped arm back on a
+    surface someone reads. The plan amendment and its evidence are §2.3 and
+    `docs/research/p147-vit-s-mae-checkpoint.md`.
+    """
+    assert "A6-S" not in arms.ARMS
+    assert "imagenet-mae-vits" not in arms.ENCODERS
+    with pytest.raises(ValueError, match="unknown arm 'A6-S'"):
+        arms.get("A6-S")
 
 
 def test_the_ruled_out_cross_evals_are_not_in_the_registry_at_all():
