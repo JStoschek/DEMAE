@@ -212,6 +212,11 @@ src/pretrain/     # the Phase-1 MAE pretraining package (torch + timm live here)
   checkpoint.py   # §11's exact resume — weights, optimizer, five RNG streams, the config
   header.py       # `python -m pretrain` — the config + fingerprint header a run records
   launch.py       # `python -m pretrain.launch` — the one command a run is started with
+src/benchmark/    # Phase 2, Task 1 — the void-filling benchmark (torch-optional like dataset)
+  config.py       # the frozen BenchmarkConfig — every plan §3/§4 knob + the config hash
+  arms.py         # the arm registry — encoder, trainable part, input convention, diet
+  artifacts.py    # what a command resolved: every committed input, by content hash
+  launch.py       # `python -m benchmark.launch` — freeze | run | report, and nothing else
 notebooks/        # visualize_corpus.ipynb — the Phase-0 viz artifact
 docs/adr/         # architecture decision records
 Dockerfile        # pinned ETL environment for a rented vast.ai box
