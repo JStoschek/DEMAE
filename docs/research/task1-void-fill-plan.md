@@ -1134,6 +1134,35 @@ A1 from truth cannot separate the arms either.
   of C2 now that drainage is gone**, and what makes §4.2's cross-fade auditable
   rather than assumed.
 
+  **Drainage metrics stay out, and the family splits rather than falling
+  together** *(closed 2026-08-12 —
+  [#143](https://github.com/JStoschek/DEMAE/issues/143))*. The ruling at
+  charting was that a 224 px window has no upstream context. That is right
+  about **accumulation** and says nothing about **direction**, and the
+  imprecision is why the question stayed open. Taken apart: D8 accumulation
+  counts upstream pixels, and 224 px at 30 m is **6.72 km across**, so anywhere
+  but a local divide the count is bounded by the crop rather than by the
+  terrain — which holds *inside* the void exactly as it does at the tile edge,
+  so scoring only the void does not rescue it. D8 **direction** does not
+  inherit that objection at all: it reads a 3×3 neighbourhood and needs no
+  upstream context. It is excluded on the other criterion — it is **aspect**.
+  D8 direction is steepest descent quantized to eight neighbours; the aspect
+  column above is steepest descent, continuous, off the same ZT derivatives and
+  the same pixels. Adding it would re-import the redundancy the
+  24,000-instance grading exists to remove, against the one metric measured
+  **orthogonal** to the rest of the set (−0.07 vs RMSE, −0.02 vs NMAD).
+  **MERIT Hydro's precedent is real and inapplicable here**: basin-shape CSI —
+  §5's IoU under another name — needs the whole basin, and this benchmark's
+  unit of evaluation is a 6.72 km tile
+  ([#124](https://github.com/JStoschek/DEMAE/issues/124)). **Stated plainly:
+  the direction half rests on construction, not on a measured correlation** —
+  nobody has scored D8 direction against aspect on the p123 harness, and if
+  that is ever run and the two prove less redundant than they read, this
+  paragraph is what should be reopened. **R1 is unamended**: nothing enters or
+  leaves the metric set, only its stated reason changes, the same disposition
+  [#128](https://github.com/JStoschek/DEMAE/issues/128) gave §3.2's bucket
+  boundaries.
+
   **Printed as signed degrees to 3 dp, with the sign carried as a visual channel
   rather than left to be read off the digits, and against a threshold fixed here
   before any arm runs: a gap above +0.15° is a seam break; |gap| ≤ 0.15° is
