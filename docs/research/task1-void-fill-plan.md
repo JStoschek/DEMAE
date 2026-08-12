@@ -106,7 +106,7 @@ two weak transfer rows it replaces.
 | A3 | DEMAE fine-tuned | DEMAE, all weights (R5 ViT-B; R4 ViT-B secondary) | encoder + decoder | native token dropping on void-shaped masks (§4.2) |
 | A4 | DEMAE frozen + head | DEMAE frozen (R5 ViT-B; R4 ViT-B secondary; ViT-S as the §2.3 appendix row) | head only | voided tile pre-filled by A1 + void mask channel at the head (§2.4) |
 | A5 | TerraMind frozen + head | TerraMind DEM tokenizer ViT-B encoder, 768-d `feats` (pre-`quant_proj`), frozen | head only (identical to A4's) | same pre-filled input, TerraMind's own normalization (§2.1) |
-| A6 | ImageNet-MAE frozen + head | timm/MAE ViT-B frozen (ViT-S as the §2.3 appendix row), 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
+| A6 | ImageNet-MAE frozen + head | timm/MAE ViT-B frozen, 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
 | A7 | UNet from scratch | none (UNet) | everything | voided tile + mask channel, residual over the A1 fill |
 | A9 | TerraMind tokenizer pass-through (reference row) | full tokenizer: encode, FSQ, diffusion decode | none | A1-pre-filled tile through the full VQ pipeline; shows the 5-d bottleneck's cost |
 
@@ -419,17 +419,36 @@ which makes it an escape hatch unless it is also priced as a discount on a DEMAE
 result than a bare win, and if DEMAE loses, this is the one pre-registered
 alternative explanation. Reaching for it afterwards is not available.
 
-**ViT-S is one appendix row, not a capacity bracket.** A4-S and A6-S at 20k, one
-seed each, answering "did the extra 4x buy anything" under the frozen probe.
+**ViT-S is one appendix row, not a capacity bracket.** A4-S at 20k, one seed,
+asking whether DEMAE's extra 4x bought anything under the frozen probe.
 No claim in §0 depends on it and it is not a co-primary: it is cut from A2/A3
 and from the label-efficiency sweep, and it has no TerraMind counterpart at all
-(no ViT-S DEM tokenizer is published), so the row is a DEMAE-vs-ImageNet-MAE
-capacity observation rather than a three-way. Its price is why it is one row:
+(no ViT-S DEM tokenizer is published). Its price is why it is one row:
 in GPU minutes ViT-S is ~$0.15, but at full seeds it would have been **16 of the
 48 scored eval passes** this plan carried before this section was rewritten — a
 third of §7's largest line — plus eight extra rows in a table whose
-combinatorics are already the binding constraint. Cut to two single-seed cells,
-it costs 2 passes and keeps the finding.
+combinatorics are already the binding constraint. Cut to a single-seed cell,
+it costs 1 pass and keeps the finding.
+
+**A6-S is dropped, and not because the checkpoint is missing** *(amended
+2026-08-12 — [#147](https://github.com/JStoschek/DEMAE/issues/147); evidence in
+[`p147-vit-s-mae-checkpoint.md`](p147-vit-s-mae-checkpoint.md))*. This paragraph
+used to register a **pair** — A4-S and A6-S — making the row a
+DEMAE-vs-ImageNet-MAE capacity observation. The build found that
+`pretrain.config.Init` asserts "no ViT-S MAE checkpoint exists at any
+provenance", checked it, and found the assertion **too strong**: one exists,
+`vit-s_imagenet_mae.pth` from `lambert-x/medical_mae` (WACV 2023), Apache-2.0,
+with a timm-format mirror. So A6-S was runnable. It is dropped on a different
+ground. Its publisher states no epoch count, no confirmation of which ImageNet
+(the paper's Table 1 says "ImageNet (14M)", the mirror says `in1k`), and no
+quality number on any axis but a chest-X-ray fine-tune. A6's own init was chosen
+in [`p101`](p101-mae-checkpoint-licence.md) §6.1 *precisely* on the
+epochs-and-linear-probe axis, at a priced 2.9-point cost — so an A6-vs-A6-S
+delta would confound capacity with trainer, schedule and possibly corpus, which
+is not the capacity observation this paragraph asked for. A4-S stands: it is
+DEMAE's own ViT-S with a full training record. **The ViT-S appendix is one cell,
+not two.** Re-adding A6-S costs one config line if a later session wants it with
+the caveat printed; nothing here is hard to reverse.
 
 **The R4 continual-init arm stays, on a completely different justification.**
 Its old one — "a same-capacity DEMAE-vs-TerraMind cell" — is gone, because R5 is
@@ -857,10 +876,12 @@ One head spec, frozen across arms; only the input channel width differs
   every arm; tuning on the arm you hope wins is the classic thumb on the scale.
 - **Seeds:** 3 seeds per cell for A4/A5/A6/A7 at 20k; 2 seeds for the
   label-efficiency subsets. Report mean ± std. **One exception:** §2.3's ViT-S
-  appendix cells (A4-S, A6-S) run at 20k with a **single seed**, and are
-  reported as a single observation without a ± — they answer a capacity-scaling
-  aside that no claim in §0 rests on, and buying them error bars would cost more
-  eval passes than the primary comparison's entire label sweep.
+  appendix cell (A4-S) runs at 20k with a **single seed**, and is
+  reported as a single observation without a ± — it answers a capacity-scaling
+  aside that no claim in §0 rests on, and buying it error bars would cost more
+  eval passes than the primary comparison's entire label sweep. *(Was a pair
+  until [#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S —
+  §2.3.)*
 - **Features are *not* precomputed; masks are** *(amended 2026-08-10, §7 —
   [#120](https://github.com/JStoschek/DEMAE/issues/120); mask half amended 2026-08-11 —
   [#121](https://github.com/JStoschek/DEMAE/issues/121))*. The frozen encoder runs inline
@@ -1017,7 +1038,7 @@ low-label regime, and C3 is where DEMAE must show it.
    precompute step; the encoder runs inline.)*
 4. Tune head hyperparams on A6/val; freeze.
 5. Run the **four primary frozen cells at three seeds each — A4-R5, A4-R4, A5,
-   A6 — plus A7 at three seeds, and the two ViT-S appendix cells (A4-S, A6-S)
+   A6 — plus A7 at three seeds, and the ViT-S appendix cell (A4-S)
    at one seed**, all at 20k; then the 1k/5k sweep (R4 and ViT-S are both out of
    it); then A3; then A2/A9 (inference only). **That is the whole run list** —
    the A8 cross-eval and the secondary 10 m regime were both ruled out of scope
@@ -1025,8 +1046,8 @@ low-label regime, and C3 is where DEMAE must show it.
    ([#128](https://github.com/JStoschek/DEMAE/issues/128)). *(This step read
    "Run A4, A5, A6, A7 at 20k" until
    [#129](https://github.com/JStoschek/DEMAE/issues/129), which is the arm list
-   from before §2.3's rewrite split A4 by init and cut ViT-S to two single-seed
-   appendix cells; §7's 39-pass count has been on the current shape since
+   from before §2.3's rewrite split A4 by init and cut ViT-S to single-seed
+   appendix cells; §7's pass count has been on the current shape since
    [#122](https://github.com/JStoschek/DEMAE/issues/122) and the order of
    operations had not caught up. **§7's pass breakdown is the authority on cell
    and seed counts**; this step orders them and should be re-read against it
@@ -1351,7 +1372,7 @@ A1 from truth cannot separate the arms either.
   printed line giving the maximum spread observed across the headline table**.
   It is deliberately *not* a ± in every cell: only 5 of the 11 arm rows carry
   three seeds at all (A4-R5, A4-R4, A5, A6, A7 — A1/A2/A3/A9 are single-pass and
-  the two ViT-S appendix cells are single-seed per §2.3), so a per-cell ± would
+  the ViT-S appendix cell is single-seed per §2.3), so a per-cell ± would
   imply a seed structure most rows do not have, and reads as a CI besides. A
   spread large enough to threaten a claim earns a paragraph, not a decoration in
   396 cells.
@@ -1482,22 +1503,23 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 |---|---|---|---|
 | **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **46.1** | priciest single arm; UNet epoch is 15.4 s against the head's 1.0 |
 | Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
-| Head training A4/A5/A6 | 4 cells x 3 seeds + 2 appendix cells x 1 seed, x 50 ep x 20k | 42.1 | 14 cell-seeds at the 3.01 min/cell-seed this line already prices |
+| Head training A4/A5/A6 | 4 cells x 3 seeds + 1 appendix cell x 1 seed, x 50 ep x 20k | 39.1 | 13 cell-seeds at the 3.01 min/cell-seed this line already prices *(was 14 at 42.1 until [#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S)* |
 | Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
-| Inference over the eval instances | 38 passes x **40k** | 4.5 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it |
+| Inference over the eval instances | 37 passes x **40k** | 4.4 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it. 37 is the 38 scored passes below minus A1, which runs no encoder |
 | A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
-| **GPU total** | | **148.2 min = 2.47 h** | **$0.99** at $0.4016/hr |
+| **GPU total** | | **145.1 min = 2.42 h** | **$0.97** at $0.4016/hr *(was 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147))* |
 | **A9 (TerraMind full tokenizer)** | **40k** instances | **unpriced** | diffusion decode; at 1 s/instance it is 11.1 GPU-h, 4.5x the whole table above. **§7 is not final until this is measured.** |
-| Eval passes (CPU, local, single core) | **39** arm-seed passes x **40k** instances | **2.0-5.2 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+| Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
 | Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)). **The 34.4M predates §2.3's rewrite** and is not re-derived here — see the note below the table |
 
-The 39 scored passes are 23 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
-cells (A4-R5, A4-R4, A5, A6) at 3 seeds; the two ViT-S appendix cells at 1 seed; A7 at 3 seeds
+The 38 scored passes are 22 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
+cells (A4-R5, A4-R4, A5, A6) at 3 seeds; the ViT-S appendix cell at 1 seed; A7 at 3 seeds
 — plus 16 for the label-efficiency sweep (3 cells x 2 seeds x 2 sizes, plus A7), which §6
 item 7 makes a headline claim and therefore scores rather than merely trains.
 
-**This was 48 passes before §2.3's rewrite**, and the 19% cut is the point worth reading: the
-GPU bill barely moved ($1.03 → $0.99) while the benchmark's largest line dropped by nine
+**This was 48 passes before §2.3's rewrite** and 39 after it; [#147](https://github.com/JStoschek/DEMAE/issues/147)'s
+drop of A6-S takes it to 38. The 21% cut is the point worth reading: the
+GPU bill barely moved ($1.03 → $0.97) while the benchmark's largest line dropped by ten
 passes, *even though R4 was added*. ViT-S gave back more than R4 took. #117's standing note
 that attention and wall-clock are the real budget is what this line measures; the dollar column
 is not.
@@ -1527,7 +1549,9 @@ cache what is cheap to store and expensive to recompute, not the reverse.
 
 **Open, from the #121/#122 merge (2026-08-11):** the 34.4M presentation count above was
 derived from §7's table *as it stood before* §2.3's rewrite, which cut the ViT-S appendix
-cells to a single seed and took R4 out of the label-efficiency sweep. Every 34.4M / 19.1
+cells to a single seed and took R4 out of the label-efficiency sweep — and
+[#147](https://github.com/JStoschek/DEMAE/issues/147) has since dropped A6-S, so it is one
+cell-seed staler still. Every 34.4M / 19.1
 CPU-h / 1M / 33 min / 740 MB figure in this section is therefore an **upper bound** and
 wants re-deriving against the current cell counts. The bank-vs-on-the-fly conclusion is
 not in doubt — the margin is 7.5× — but the printed numbers are stale.

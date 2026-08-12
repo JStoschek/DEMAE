@@ -493,7 +493,9 @@ class Paths(_Frozen):
     #: is the whole reason these are fields rather than lookups inside a loader.
     terramind_checkpoint: str | None = None
     imagenet_mae_checkpoint: str | None = None
-    imagenet_mae_vits_checkpoint: str | None = None
+    # There is no `imagenet_mae_vits_checkpoint`: A6-S was dropped in #147. A ViT-S/16 ImageNet
+    # MAE does exist (`lambert-x/medical_mae`, Apache-2.0) — it is its *provenance* that failed,
+    # not its availability. See `benchmark.arms` and docs/research/p147-vit-s-mae-checkpoint.md.
 
     def __post_init__(self) -> None:
         # Every field here is a path, and :func:`parse_override` reads a value as JSON before

@@ -441,7 +441,17 @@ class Init(_Frozen):
 
     #: §8 — the main and release runs start from scratch: "elevation-only, from scratch,
     #: reproducible" is part of the project's positioning. `imagenet_mae` is R4's continual
-    #: arm (#86/#102), ViT-B only — no ViT-S MAE checkpoint exists at any provenance.
+    #: arm (#86/#102), and **ViT-B only** — every MAE reproduction this project will build on
+    #: publishes B/L/H and no ViT-S: the official release, OpenMMLab, and timm alike.
+    #:
+    #: *(Corrected 2026-08-12, [#147](https://github.com/JStoschek/DEMAE/issues/147).* This
+    #: read "no ViT-S MAE checkpoint exists at any provenance", which is false and was being
+    #: quoted downstream as if checked. One does exist — `vit-s_imagenet_mae.pth` from
+    #: `lambert-x/medical_mae`, Apache-2.0, timm-loadable — with no published epoch count, no
+    #: confirmation of which ImageNet, and no quality number outside chest X-rays. That is why
+    #: Task 1 dropped its ViT-S ImageNet-MAE arm, and it is the reason this arm stays at B:
+    #: *unusable provenance*, not *nonexistent*. Evidence in
+    #: [P147](../../docs/research/p147-vit-s-mae-checkpoint.md).)*
     #:
     #: **This is the flag §8 asks the two arms to differ by.** R4 and R5 run the same code path:
     #: `pretrain.init.initialize_from_config` is a no-op at `scratch` and the warm start at

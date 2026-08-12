@@ -11,14 +11,27 @@ silent: an encoder fed the wrong normalization returns a plausible tensor and ra
 Those are facts about an arm, so they live where the arm is named rather than inside the code
 that later loads a checkpoint.
 
-## Eleven printed rows and two appendix cells
+## Eleven printed rows and one appendix cell
 
 :data:`PRINTED_ROWS` is the table's shape, fixed by
 [#136](https://github.com/JStoschek/DEMAE/issues/136) and registered as **R5**. A2, A3 and A4
 each split R5/R4 — §4.2's release checkpoint and its pre-registered secondary — which is what
-takes §1's eight arms to eleven rows. §2.3's ViT-S cells (``A4-S``, ``A6-S``) are registered
-here too and carry ``printed=False``: they are a capacity-scaling aside no §0 claim rests on,
-run at one seed, reported without a ±, and they do not widen a pre-registered table.
+takes §1's eight arms to eleven rows. §2.3's ViT-S cell (``A4-S``) is registered here too and
+carries ``printed=False``: it is a capacity-scaling aside no §0 claim rests on, run at one
+seed, reported without a ±, and it does not widen a pre-registered table.
+
+## A6-S was registered here and is gone
+
+§2.3 registered a ViT-S *pair* until
+[#147](https://github.com/JStoschek/DEMAE/issues/147). The build checked
+``pretrain.config.Init``'s claim that no ViT-S ImageNet MAE checkpoint exists at any
+provenance, found the claim wrong — ``vit-s_imagenet_mae.pth`` from ``lambert-x/medical_mae``
+is real, Apache-2.0, and timm-loadable — and dropped the arm anyway, because that checkpoint
+publishes no epoch count, no confirmation of which ImageNet, and no quality number on the
+axis `p101` §6.1 used to choose A6's own ViT-B init. An A6-vs-A6-S delta would have
+confounded capacity with trainer and schedule. Absent rather than disabled, for the reason
+below; the evidence is `docs/research/p147-vit-s-mae-checkpoint.md`, and re-adding it is one
+encoder entry, one arm entry and one `Paths` field.
 
 ## A8 and A10 are absent rather than disabled
 
@@ -129,18 +142,6 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="imagenet_mae_checkpoint",
-    ),
-    "imagenet-mae-vits": Encoder(
-        name="imagenet-mae-vits",
-        family="imagenet-mae",
-        width=384,
-        pos_encoding="sincos2d_rowfirst",
-        checkpoint_field="imagenet_mae_vits_checkpoint",
-        # §2.3 registers A6-S as an appendix row, and `pretrain.config.Init` records that **no
-        # ViT-S MAE checkpoint exists at any provenance** — which is a fact about the world the
-        # plan's appendix row does not price. Registered so the gap is visible at resolution
-        # time (an unmounted checkpoint is named) rather than discovered by the build session
-        # that reaches for it; surface it as a plan amendment if it turns out to be real.
     ),
     "terramind-tokenizer": Encoder(
         name="terramind-tokenizer",
@@ -299,15 +300,6 @@ ARMS: Final[dict[str, Arm]] = dict(
             input_convention="a1_fill_plus_mask",
             normalization="per_tile",
             what="DEMAE ViT-S frozen + head — §2.3 appendix, one seed, no ±",
-            printed=False,
-        ),
-        _arm(
-            "A6-S",
-            encoder="imagenet-mae-vits",
-            trains="head",
-            input_convention="a1_fill_plus_mask",
-            normalization="per_tile",
-            what="ImageNet-MAE ViT-S frozen + head — §2.3 appendix, one seed, no ±",
             printed=False,
         ),
     ]
