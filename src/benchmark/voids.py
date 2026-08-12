@@ -40,7 +40,10 @@ reported separately so the headline stays size-comparable; 128-160 px is **an in
 with no metric attached**, because a mean over eleven instances invites a significance the
 number cannot carry. The two gaps between those rows hold 7.1% of a real draw and are
 **excluded, not silently dropped** — :func:`summarise` states their counts beside the scored
-ones, and widening the rows to cover them would destroy the comparability they exist for.
+ones, and widening the rows to cover them would destroy the comparability they exist for. That
+is why §3.3's two counts are two names here and never one: **scored components** is the 9,978
+that placed inside the 16-160 px window, **instances** is the 8,824 + 438 + 11 the published
+rows carry, and the gaps are the difference.
 
 Reading is injected throughout, so the tests drive this without a network or an Earthdata
 account — ``tests/test_p127_fetch_srtm_voids.py``'s rule for the fetch path it tests without
@@ -61,6 +64,7 @@ from dataset import config as dataset_config
 from dataset.geometry import (
     COLS_PER_DEGREE,
     ROWS_PER_DEGREE,
+    format_cog_stem,
     lat_band,
     pixel_spacing_m,
     window_center_lonlat,
@@ -116,10 +120,6 @@ class OffLattice(VoidError):
 
 class LatticeMismatch(VoidError):
     """A granule and a surface that do not stand in the 3601/3600 relation."""
-
-
-class NotAMetricRow(VoidError):
-    """A metric was asked of a size sub-row §3.3 publishes as a bare count."""
 
 
 # --- §3.3's predicate ---------------------------------------------------------
@@ -230,8 +230,8 @@ class SizeRow:
         return self.reporting == "metric"
 
     @property
-    def scored(self) -> bool:
-        """Is an instance in this row one the family ships? Gaps are counted, never scored."""
+    def published(self) -> bool:
+        """Is a component in this row one the family ships as an instance? The gaps are not."""
         return self.reporting != "excluded"
 
     def contains(self, eqdiam_px: float) -> bool:
@@ -276,22 +276,6 @@ def size_row_of(eqdiam_px: float, rows: Sequence[SizeRow]) -> SizeRow | None:
     return None
 
 
-def require_metric_row(row: SizeRow) -> SizeRow:
-    """``row`` back if it carries a metric, or a refusal naming what it carries instead.
-
-    §3.3 publishes 128-160 px as an instance count *with no metric attached* — eleven instances
-    cannot carry a mean, and the way that rule is broken is not by arguing with it but by a
-    later stage pooling every row it finds. This is the guard that stage calls.
-    """
-    if not row.carries_metric:
-        raise NotAMetricRow(
-            f"§3.3 publishes `{row.name}` ({row.lo_px:g}-{row.hi_px:g} px) as a bare "
-            f"{row.reporting}, not as a metric: a mean over a row this thin would invite a "
-            f"significance the number cannot carry. Use its instance count."
-        )
-    return row
-
-
 # --- The cell, and the premise the transplant rests on ------------------------
 
 
@@ -302,12 +286,7 @@ def cell_origin(cell: str) -> tuple[int, int]:
     return lat, lon
 
 
-def cog_stem(cell: str) -> str:
-    """``N28E086`` -> the Copernicus COG stem for the same 1-degree cell."""
-    return f"Copernicus_DSM_COG_10_{cell[0]}{cell[1:3]}_00_{cell[3]}{cell[4:7]}_00_DEM"
-
-
-def assert_same_lattice(cell: str, *, cols_per_degree: int = GLO_PX) -> None:
+def assert_same_lattice(cell: str) -> None:
     """Refuse a source cell where SRTM 1 arc-second and GLO-30 stop being the same lattice.
 
     Asserted rather than discovered, because the failure is silent: poleward of 50 degrees
@@ -323,10 +302,10 @@ def assert_same_lattice(cell: str, *, cols_per_degree: int = GLO_PX) -> None:
     inset = 0.5 / ROWS_PER_DEGREE
     for lat in (origin_lat + inset, origin_lat + 1 - inset):
         cols = COLS_PER_DEGREE[lat_band(lat)]
-        if cols != cols_per_degree:
+        if cols != GLO_PX:
             raise OffLattice(
                 f"{cell} reaches |lat| >= 50 (band {lat_band(lat)}), where GLO-30 samples "
-                f"{cols} columns per degree against SRTM 1 arc-second's {cols_per_degree}. "
+                f"{cols} columns per degree against SRTM 1 arc-second's {GLO_PX}. "
                 f"§3.3's transplant crops and pastes rather than interpolating, and the "
                 f"premise it rests on is that the two are the *same lattice* (P125 §10.1) — "
                 f"which holds only equatorward of 50 degrees. Poleward the premise fails "
@@ -383,8 +362,10 @@ def read_surface(cell: str, *, open_fn: Callable | None = None) -> np.ndarray:
 
         open_fn = rasterio.open
 
-    stem = cog_stem(cell)
     origin_lat, origin_lon = cell_origin(cell)
+    # The corpus's own stem builder, not a sixth copy of the f-string: a join key with several
+    # definitions is a join key waiting to drift (:func:`dataset.geometry.format_cog_stem`).
+    stem = format_cog_stem(origin_lon, origin_lat)
     step = 1.0 / GLO_PX
     with open_fn(f"/vsis3/copernicus-dem-30m/{stem}/{stem}.tif") as dataset:
         if (dataset.width, dataset.height) != (GLO_PX, GLO_PX):
@@ -498,11 +479,7 @@ class Component:
 
 
 def components(
-    cell: str,
-    mask: np.ndarray,
-    *,
-    masks: Masks | None = None,
-    min_eqdiam_px: float | None = None,
+    cell: str, mask: np.ndarray, *, masks: Masks | None = None
 ) -> tuple[Component, ...]:
     """Every connected void at or above the scored range's floor, with §3.2's tests evaluated.
 
@@ -517,8 +494,7 @@ def components(
     from scipy import ndimage
 
     masks = Masks() if masks is None else masks
-    rows = size_rows(masks)
-    floor = rows[0].lo_px if min_eqdiam_px is None else min_eqdiam_px
+    floor = size_rows(masks)[0].lo_px
 
     labelled, found = ndimage.label(mask, structure=_STRUCTURE)
     if found == 0:
@@ -584,13 +560,7 @@ def _window_origin(centroid: float, *, extent: int, tile: int) -> tuple[int, boo
     return origin, origin != wanted
 
 
-def band_for(
-    surface: np.ndarray,
-    component: Component,
-    bands: Bands,
-    *,
-    tile_px: int | None = None,
-) -> BandReading:
+def band_for(surface: np.ndarray, component: Component, bands: Bands) -> BandReading:
     """The void's ruggedness band, read off GLO-30 at the void's own coordinates.
 
     **There is no ``num`` parameter here, and that is the point.** #126's circularity was
@@ -606,7 +576,7 @@ def band_for(
     for every other window in the corpus. p135 §3.3 measured the answer indifferent to that
     choice: the corpus's own grid window and a 448 px window move six components of 9,978.
     """
-    tile = dataset_config.TILE_PX if tile_px is None else tile_px
+    tile = dataset_config.TILE_PX
     height, width = surface.shape
     origin_lat, origin_lon = cell_origin(component.cell)
 
@@ -639,12 +609,20 @@ def band_for(
 
 
 @dataclass(frozen=True)
-class ScoredVoid:
-    """One published instance: a real shape, and the band of the ground it will be pasted onto."""
+class Instance:
+    """One published instance: a real shape, and the band of the ground it will be pasted onto.
+
+    §3.3's word, deliberately: the sub-rows are published as *instances* ("real-small — the
+    headline row, 8,824 instances"), while "scored components" is that section's wider count,
+    the 9,978 that also carries the two excluded gap rows. Both live on :class:`CellCatalog`
+    under those names, because one module holding two meanings of "scored" is how a
+    pre-registered figure moves without anyone deciding to move it.
+    """
 
     component: Component
-    size_row: str
-    reporting: str
+    #: The row §3.3 publishes this instance under, and how it publishes it. Held as the row
+    #: rather than as its name and its reporting mode, so there is one home for both.
+    row: SizeRow
     reading: BandReading
 
     @property
@@ -652,12 +630,8 @@ class ScoredVoid:
         return self.component.cell
 
     @property
-    def label(self) -> int:
-        return self.component.label
-
-    @property
-    def area_px(self) -> int:
-        return self.component.area_px
+    def size_row(self) -> str:
+        return self.row.name
 
     @property
     def eqdiam_px(self) -> float:
@@ -700,10 +674,12 @@ class CellCatalog:
     predicate: Predicate
     bands: Bands
     rows: tuple[SizeRow, ...]
-    #: Instances in a *published* row: real-small, real-medium+, and the count-only band.
-    scored: tuple[ScoredVoid, ...]
-    #: Components in one of the two gap rows. Counted, never scored — §3.3 excludes them, and
-    #: excluding is not the same as dropping.
+    #: Instances in a *published* row: real-small, real-medium+, and the count-only band. Over
+    #: the 24 granules this is §3.3's 8,824 + 438 + 11.
+    instances: tuple[Instance, ...]
+    #: Components in one of the two gap rows. They pass every test the instances pass and are
+    #: excluded on their size alone, so §3.3 counts them among its **scored components** and
+    #: keeps them out of the published rows. Excluding is not dropping.
     gaps: tuple[Component, ...]
     #: Components at or above the floor but above the published top. Excluded by this
     #: benchmark's 224 px tile under §3.2's 40% cap, not by scarcity.
@@ -716,13 +692,20 @@ class CellCatalog:
     void_frac: float
 
     @property
-    def scored_instances(self) -> int:
-        return len(self.scored)
+    def scored_components(self) -> int:
+        """§3.3's registered count: everything in the 16-160 px window that placed.
+
+        The gaps are in here and out of :attr:`instances`, which is exactly how §3.3 counts —
+        *"9,978 scored components of 10,291 at d >= 16 px"* against *"real-small … 8,824
+        instances"*. The two numbers are different questions and this module answers both
+        under the section's own names rather than reusing one word for both.
+        """
+        return len(self.instances) + len(self.gaps)
 
     def instances_by_row(self) -> dict[str, int]:
-        """Every published row's instance count, including the gaps and including zeros."""
+        """Every published row's count, including the gap rows and including zeros."""
         counts = {row.name: 0 for row in self.rows}
-        for void in self.scored:
+        for void in self.instances:
             counts[void.size_row] += 1
         for component in self.gaps:
             row = size_row_of(component.eqdiam_px, self.rows)
@@ -766,20 +749,19 @@ def extract_cell(
     surface = np.asarray(read_surface_fn(cell))
     _assert_shared_lattice_shape(cell, num, surface)
 
-    scored: list[ScoredVoid] = []
+    instances: list[Instance] = []
     gaps: list[Component] = []
     for component in placeable:
         row = size_row_of(component.eqdiam_px, rows)
         if row is None:  # pragma: no cover - `inside` already bounds the range
             continue
-        if not row.scored:
+        if not row.published:
             gaps.append(component)
             continue
-        scored.append(
-            ScoredVoid(
+        instances.append(
+            Instance(
                 component=component,
-                size_row=row.name,
-                reporting=row.reporting,
+                row=row,
                 reading=band_for(surface, component, bands),
             )
         )
@@ -789,7 +771,7 @@ def extract_cell(
         predicate=predicate,
         bands=bands,
         rows=rows,
-        scored=tuple(scored),
+        instances=tuple(instances),
         gaps=tuple(gaps),
         excluded_above_top=above_top,
         failed_placement=len(inside) - len(placeable),
@@ -843,10 +825,12 @@ def summarise(catalogs: Iterable[CellCatalog]) -> dict:
 
     counts: dict[str, int] = {row.name: 0 for row in rows}
     per_row_bands = {row.name: [0] * bands.count for row in rows if row.carries_metric}
+    band_totals = [0] * bands.count
     for catalog in catalogs:
         for name, n in catalog.instances_by_row().items():
             counts[name] += n
-        for void in catalog.scored:
+        for void in catalog.instances:
+            band_totals[void.band] += 1
             if void.size_row in per_row_bands:
                 per_row_bands[void.size_row][void.band] += 1
 
@@ -856,11 +840,6 @@ def summarise(catalogs: Iterable[CellCatalog]) -> dict:
         if row.carries_metric:
             payload["bands"] = per_row_bands[row.name]
         published[row.name] = payload
-
-    band_totals = [0] * bands.count
-    for catalog in catalogs:
-        for void in catalog.scored:
-            band_totals[void.band] += 1
 
     return {
         "granules": len(catalogs),
@@ -882,15 +861,20 @@ def summarise(catalogs: Iterable[CellCatalog]) -> dict:
                 c.components_at_or_above_floor for c in catalogs
             ),
             "excluded_above_top": sum(c.excluded_above_top for c in catalogs),
-            "excluded_in_gaps": sum(len(c.gaps) for c in catalogs),
             "failed_placement": sum(c.failed_placement for c in catalogs),
-            "scored": sum(c.scored_instances for c in catalogs),
+            # §3.3's registered figure over the 24 granules: 9,978 of 10,291. Includes the two
+            # gap rows, which place like any other component and are excluded on size alone.
+            "scored_components": sum(c.scored_components for c in catalogs),
+            "excluded_in_gaps": sum(len(c.gaps) for c in catalogs),
+            # What the published rows actually carry: §3.3's 8,824 + 438 + 11.
+            "instances": sum(len(c.instances) for c in catalogs),
         },
         "cells": [
             {
                 "cell": c.cell,
                 "void_frac": round(c.void_frac, 5),
-                "scored": c.scored_instances,
+                "scored_components": c.scored_components,
+                "instances": len(c.instances),
             }
             for c in catalogs
         ],

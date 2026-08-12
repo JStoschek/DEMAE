@@ -46,6 +46,8 @@ import pytest
 from benchmark import voids
 from benchmark.config import Masks
 from dataset import config as dataset_config
+from dataset.geometry import pixel_spacing_m
+from dataset.metrics import slope_mean
 
 REPO = Path(__file__).resolve().parent.parent
 GRANULES = REPO / "data" / "srtm_voids" / "num"
@@ -114,6 +116,16 @@ def _readers(num: np.ndarray, surface: np.ndarray):
         return surface
 
     return read_num, read_surface, calls
+
+
+def _stack(diameters, *, col: int = 20, row: int = 20):
+    """Square blobs of the given equivalent diameters, stacked down one column of the cell."""
+    blobs = []
+    for diameter in diameters:
+        side = _square_of_diameter(diameter)
+        blobs.append((row, col, side, side))
+        row += side + 20
+    return blobs
 
 
 def _extract(num, surface, *, cell="N28E086", **kwargs):
@@ -251,7 +263,7 @@ def test_the_size_sub_rows_are_derived_from_the_mask_config_not_retyped():
     masks = Masks()
     rows = {row.name: row for row in voids.size_rows(masks)}
 
-    assert rows["real-small"].lo_px, rows["real-small"].hi_px == masks.small_px
+    assert (rows["real-small"].lo_px, rows["real-small"].hi_px) == masks.small_px
     assert (rows["real-medium+"].lo_px, rows["real-medium+"].hi_px) == masks.medium_px
     # 128-160, not 128-158: those bands describe sizes real voids *have*, and the 40% area cap
     # that lowered the synthetic large bucket is not a constraint on a measurement.
@@ -282,18 +294,14 @@ def test_the_sub_rows_do_not_tile_the_range_and_the_gaps_are_named():
     ]
 
 
-def test_the_128_160_row_carries_a_count_and_refuses_a_metric():
+def test_the_128_160_row_carries_a_count_and_not_a_metric():
     """§3.3: an instance count with no metric attached. Eleven instances cannot carry a mean."""
     rows = {row.name: row for row in voids.size_rows()}
 
     assert rows["real-small"].carries_metric
     assert not rows["count-only-128-160"].carries_metric
-    assert voids.require_metric_row(rows["real-small"]) is rows["real-small"]
-
-    with pytest.raises(voids.NotAMetricRow) as excinfo:
-        voids.require_metric_row(rows["count-only-128-160"])
-
-    assert "count" in str(excinfo.value)
+    assert rows["count-only-128-160"].published, "counted is not the same as excluded"
+    assert not rows["gap-48-64"].published
 
 
 def test_components_are_bucketed_into_the_size_sub_rows():
@@ -305,16 +313,12 @@ def test_components_are_bucketed_into_the_size_sub_rows():
         "gap-96-128": 110.0,
         "count-only-128-160": 140.0,
     }
-    blobs, row0 = [], 20
-    for diameter in wanted.values():
-        side = _square_of_diameter(diameter)
-        blobs.append((row0, 20, side, side))
-        row0 += side + 20
 
-    catalog, _ = _extract(_num(blobs=blobs), _surface(30.0))
+    catalog, _ = _extract(_num(blobs=_stack(wanted.values())), _surface(30.0))
 
     assert catalog.instances_by_row() == {name: 1 for name in wanted}
-    assert catalog.scored_instances == 3, "the two gap rows are counted, never scored"
+    assert len(catalog.instances) == 3, "the two gap rows are counted, never published"
+    assert catalog.scored_components == 5, "§3.3 counts the gaps among the scored components"
 
 
 def test_a_component_above_the_top_is_excluded_and_counted():
@@ -334,7 +338,7 @@ def test_a_component_that_cannot_be_placed_on_a_tile_is_counted_as_attrition():
     # its bounding box cannot.
     catalog, _ = _extract(_num(blobs=[(100, 40, 4, interior + 40)]), _surface(30.0))
 
-    assert catalog.scored == ()
+    assert catalog.instances == ()
     assert catalog.failed_placement == 1
 
 
@@ -350,10 +354,10 @@ def test_the_band_comes_from_glo30_at_the_voids_own_coordinates():
     flat, _ = _extract(num, _surface(0.0))
     steep, _ = _extract(num, _surface(30.0))
 
-    assert flat.scored[0].band == 0 and BANDS.label(flat.scored[0].band) == "R1"
-    assert steep.scored[0].band == 3 and BANDS.label(steep.scored[0].band) == "R4"
-    assert flat.scored[0].slope_mean == pytest.approx(0.0, abs=1e-6)
-    assert steep.scored[0].slope_mean == pytest.approx(30.0, abs=0.05)
+    assert flat.instances[0].band == 0 and BANDS.label(flat.instances[0].band) == "R1"
+    assert steep.instances[0].band == 3 and BANDS.label(steep.instances[0].band) == "R4"
+    assert flat.instances[0].slope_mean == pytest.approx(0.0, abs=1e-6)
+    assert steep.instances[0].slope_mean == pytest.approx(30.0, abs=0.05)
 
 
 def test_the_srtm_granule_contributes_the_shape_and_nothing_else():
@@ -374,14 +378,14 @@ def test_the_srtm_granule_contributes_the_shape_and_nothing_else():
     from_plain, _ = _extract(plain, surface)
     from_laced, _ = _extract(laced, surface)
 
-    assert from_plain.scored[0].slope_mean == from_laced.scored[0].slope_mean
-    assert from_plain.scored[0].band == from_laced.scored[0].band
+    assert from_plain.instances[0].slope_mean == from_laced.instances[0].slope_mean
+    assert from_plain.instances[0].band == from_laced.instances[0].band
 
     # And the same answer with no granule in the room at all.
-    direct = voids.band_for(surface, from_plain.scored[0].component, BANDS)
+    direct = voids.band_for(surface, from_plain.instances[0].component, BANDS)
     assert (direct.slope_mean, direct.band) == (
-        from_plain.scored[0].slope_mean,
-        from_plain.scored[0].band,
+        from_plain.instances[0].slope_mean,
+        from_plain.instances[0].band,
     )
 
 
@@ -391,7 +395,7 @@ def test_the_granule_is_read_once_and_the_surface_is_read_once():
 
     catalog, calls = _extract(_num(blobs=blobs), _surface(30.0))
 
-    assert len(catalog.scored) == 3
+    assert len(catalog.instances) == 3
     assert calls == [("num", "N28E086"), ("surface", "N28E086")]
 
 
@@ -399,19 +403,19 @@ def test_a_void_near_the_cell_edge_has_its_window_clamped_and_says_so():
     """A centred window would run off the cell; the shift is recorded rather than hidden."""
     catalog, _ = _extract(_num(blobs=[(2, 2, 20, 30)]), _surface(30.0))
 
-    scored = catalog.scored[0]
-    assert scored.clamped is True
-    assert (scored.window_row0, scored.window_col0) == (0, 0)
+    instance = catalog.instances[0]
+    assert instance.clamped is True
+    assert (instance.window_row0, instance.window_col0) == (0, 0)
 
 
-def test_the_scored_void_carries_the_coordinates_its_band_was_read_at():
+def test_an_instance_carries_the_coordinates_its_band_was_read_at():
     """C4 is answered on these rows, so a row has to say which ground it was scored against."""
     catalog, _ = _extract(_num(blobs=[(240, 240, 20, 30)]), _surface(30.0), cell="S33W070")
 
-    scored = catalog.scored[0]
-    assert -33.0 <= scored.lat <= -32.0
-    assert -70.0 <= scored.lon <= -69.0
-    assert scored.cell == "S33W070"
+    instance = catalog.instances[0]
+    assert -33.0 <= instance.lat <= -32.0
+    assert -70.0 <= instance.lon <= -69.0
+    assert instance.cell == "S33W070"
 
 
 # ---------------------------------------------------------------------------------------
@@ -420,11 +424,7 @@ def test_the_scored_void_carries_the_coordinates_its_band_was_read_at():
 
 
 def test_the_summary_states_the_excluded_counts_beside_the_scored_ones():
-    blobs, row0 = [], 20
-    for diameter in (30.0, 30.0, 55.0, 80.0, 140.0):
-        side = _square_of_diameter(diameter)
-        blobs.append((row0, 20, side, side))
-        row0 += side + 20
+    blobs = _stack([30.0, 30.0, 55.0, 80.0, 140.0])
     # The excluded tail, out of the stack's way: 200 px is a size real voids abundantly have
     # and this benchmark's 224 px tile cannot hold.
     big = _square_of_diameter(200.0)
@@ -436,7 +436,11 @@ def test_the_summary_states_the_excluded_counts_beside_the_scored_ones():
 
     assert summary["granules"] == 1
     assert summary["attrition"]["excluded_above_top"] == 1
-    assert summary["attrition"]["scored"] == 4
+    # §3.3's two counts, kept apart: the gap component is a scored component and not an
+    # instance, exactly as the section's own 9,978-versus-8,824+438+11 arithmetic has it.
+    assert summary["attrition"]["scored_components"] == 5
+    assert summary["attrition"]["excluded_in_gaps"] == 1
+    assert summary["attrition"]["instances"] == 4
     assert summary["rows"]["real-small"]["instances"] == 2
     assert summary["rows"]["gap-48-64"] == {"instances": 1, "reporting": "excluded"}
     assert summary["predicate"]["strict"] is False
@@ -560,6 +564,99 @@ def test_an_empty_eligible_pool_is_refused_rather_than_cut(tmp_path, corpus_fact
 
 
 # ---------------------------------------------------------------------------------------
+# The band is read through the corpus's own code path, against committed catalog rows
+# ---------------------------------------------------------------------------------------
+
+CORPUS = REPO / "data" / "corpus_500k"
+SOURCE_COG = "Copernicus_DSM_COG_10_N28_00_E086_00_DEM"
+
+# The manifest is committed and the 47 GB of shards are not, so the pixels are the guard, not
+# the catalog: a checkout with the manifest alone would fail this test rather than skip it.
+requires_corpus = pytest.mark.skipif(
+    not (CORPUS / "shards").is_dir(), reason="data/corpus_500k's shards are not on this box"
+)
+
+
+def _committed_rows(limit: int) -> list[dict]:
+    """The first ``limit`` committed catalog rows of `N28E086`, with their tile pixels."""
+    import pyarrow.parquet as pq
+
+    from dataset.shards import shard_path
+
+    table = pq.read_table(
+        CORPUS / "manifest.parquet",
+        columns=[
+            "source_cog", "win_row0", "win_col0", "lon", "lat", "slope_mean",
+            "shard_id", "row_index",
+        ],
+    )
+    column = {n: table.column(n).to_numpy(zero_copy_only=False) for n in table.column_names}
+    wanted = np.nonzero(column["source_cog"].astype(str) == SOURCE_COG)[0][:limit]
+    out = []
+    for i in wanted:
+        row = {n: column[n][i] for n in column}
+        path = shard_path(CORPUS / "shards", int(row["shard_id"]))
+        if not path.is_file():
+            pytest.skip(f"{path.name} is not on this box; the shards are gitignored")
+        shard = np.load(path, mmap_mode="r")
+        row["tile"] = np.asarray(shard[int(row["row_index"])], dtype=np.float32)
+        out.append(row)
+    return out
+
+
+@requires_corpus
+def test_the_band_is_read_through_the_corpus_own_scoring_call():
+    """§3.3: the stratum comes from GLO-30 "through the same code path that assigns strata to
+    every other tile in the corpus", and that path is *checked rather than asserted*.
+
+    Five committed catalog rows of `N28E086`, each one's materialized tile dropped into a cell
+    at the grid window the manifest records it at. What is asserted to **0.0** is that
+    :func:`benchmark.voids.band_for` reproduces the window's own centre coordinates and the
+    catalog's own `slope_mean` call on the identical pixels — i.e. that this module reaches the
+    corpus's number rather than a look-alike of it. The residual against the manifest's *stored*
+    value is the shard's int16 quantization and nothing else; it measures 0.010-0.044 deg over
+    these five rows, and it is reported rather than asserted, because a bound invented here
+    would be a number the plan never registered.
+    """
+    bands = voids.Bands(edges=(0.0, 5.0, 10.0, 20.0, 90.0))
+    tile_px = dataset_config.TILE_PX
+
+    for row in _committed_rows(5):
+        surface = np.zeros((voids.GLO_PX, voids.GLO_PX), dtype=np.float32)
+        r0, c0 = int(row["win_row0"]), int(row["win_col0"])
+        surface[r0 : r0 + tile_px, c0 : c0 + tile_px] = row["tile"]
+        # A void whose centred window is exactly this catalog row's grid window.
+        component = voids.Component(
+            cell="N28E086",
+            label=1,
+            area_px=400,
+            eqdiam_px=22.6,
+            row=r0 + tile_px / 2,
+            col=c0 + tile_px / 2,
+            bbox_h=20,
+            bbox_w=20,
+            fits_interior=True,
+            fits_area=True,
+        )
+
+        reading = voids.band_for(surface, component, bands)
+
+        assert (reading.window_row0, reading.window_col0) == (r0, c0)
+        assert reading.lon == pytest.approx(float(row["lon"]), abs=0.0)
+        assert reading.lat == pytest.approx(float(row["lat"]), abs=0.0)
+        expected = slope_mean(
+            row["tile"],
+            pixel_spacing_m(
+                float(row["lat"]),
+                rows_per_degree=voids.GLO_PX,
+                cols_per_degree=voids.GLO_PX,
+            ),
+        )
+        assert reading.slope_mean == pytest.approx(expected, abs=0.0)
+        assert abs(reading.slope_mean - float(row["slope_mean"])) < 0.1
+
+
+# ---------------------------------------------------------------------------------------
 # The real granules, when this box has them
 # ---------------------------------------------------------------------------------------
 
@@ -620,12 +717,12 @@ def test_the_promotion_reproduces_p135s_measured_count_for_a_cell():
     found = voids.components("N28E086", voids.PLAN_PREDICATE.mask(num, where="N28E086"))
 
     rows = voids.size_rows()
-    published = [
+    scored_components = [
         component
         for component in found
         if component.eqdiam_px <= rows[-1].hi_px and component.placeable
     ]
-    assert len(published) == expected == 221
+    assert len(scored_components) == expected == 221
 
 
 @requires_granules
