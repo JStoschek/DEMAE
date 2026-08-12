@@ -989,7 +989,7 @@ promise one "per bucket". §9 prints three figures and
 in the same amendment that pooled the size buckets off the page (**R5**) — so
 the promise was owed at a resolution the table no longer has. A fourth figure
 for a row carrying no claim also fails the test #136 applied to the rectangle
-family. The A2 and A3 rows print side by side across 4 bands × 5 metrics,
+family. The A2 and A3 rows print side by side across 4 bands × 6 columns,
 which is where the difference is read.
 
 ### 4.4 UNet baseline (A7)
@@ -1056,9 +1056,30 @@ synthetic **small** bucket within the same ruggedness band, never against a
 synthetic pooled number, and carry C4's ordering claim rather than a metric
 delta.
 
-The set below is **pre-registered and graded**: five headline columns per cell,
-four appendix ones, and nothing else. *(Registered rule **R1**, asserted in
-[ADR-0013](../adr/0013-task1-pre-registration-register.md).)* The grading is
+The set below is **pre-registered and graded**: **ten candidates were graded**,
+of which five are headline columns per cell and four are appendix ones, and
+nothing else enters the grading. The printed table is **six columns wide**: those
+five, **plus the seam gap**, which is a *derived* column — full-mask minus
+eroded-mask slope, free by construction from two numbers already computed — and
+was therefore never one of the ten. *(Registered rule **R1**, asserted in
+[ADR-0013](../adr/0013-task1-pre-registration-register.md).)*
+
+**Five graded plus one derived, settled 2026-08-12 —
+[#146](https://github.com/JStoschek/DEMAE/issues/146).** This section marked six
+things headline while R1 and this section's own printed-table arithmetic said
+five, and the register cannot gate a build on a count that contradicts itself.
+The five/six split is not a disagreement about *what to print*: it is the graded
+set being counted in one place and the printed set in another.
+[`p123-metric-discrimination.md`](p123-metric-discrimination.md) §3 grades
+exactly ten candidates and the seam gap is not among them — it cannot be, since
+it is the difference of two rows of that table — and both p123 and
+[#136](https://github.com/JStoschek/DEMAE/issues/136) state the outcome as "five
+headline columns **plus** the seam gap". No document ever decided the seam gap
+does not print; the arithmetic below simply multiplied by five and dropped the
+derived column. **The count was corrected, not the metric set**, and it was
+corrected while no arm had run — which is the only condition under which this
+was correctable at all. R1's roster is now six names, and §5, R1, R5 and every
+copy of the arithmetic were amended in one change. The grading is
 measured rather than
 argued — [`p123-metric-discrimination.md`](p123-metric-discrimination.md) scored
 every candidate over 24,000 A1 instances for **separation** (spread across the
@@ -1127,7 +1148,12 @@ A1 from truth cannot separate the arms either.
   −0.005 to −0.107° on the smooth interpolators, against 17% of the scored
   pixels on a small void. The eroded-mask slope is kept as an appendix
   contamination control; the rule itself is stated in §6.
-- **Seam continuity (headline): the full-minus-eroded slope gap.** Free, since
+- **Seam continuity (headline, and the sixth printed column): the
+  full-minus-eroded slope gap.** **Derived rather than graded** — it is the
+  difference of the full-mask and eroded-mask slope rows above, so it was never
+  one of the ten candidates p123 scored, which is why R1's roster reads five
+  graded plus this one ([#146](https://github.com/JStoschek/DEMAE/issues/146)).
+  Free, since
   both masks are already computed, and it sign-separates a fill that breaks at
   the void boundary (+1.33° on the flat-fill control) from every smooth
   interpolator (−0.005 to −0.107°). **This is what carries the operational half
@@ -1253,9 +1279,10 @@ A1 from truth cannot separate the arms either.
   [#136](https://github.com/JStoschek/DEMAE/issues/136); registered rule **R5**,
   asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.
   Printed in full, the
-  grid is **1,430 headline numbers** — 11 arm rows (A1; A2, A3 and A4 each split
+  grid is **1,716 headline numbers** — 11 arm rows (A1; A2, A3 and A4 each split
   R5/R4; A5; A6; A7; A9) × 26 cells (2 synthetic families × 3 buckets × 4 bands,
-  plus the real family's two sub-rows in R4 alone) × 5 headline metrics — and
+  plus the real family's two sub-rows in R4 alone) × 6 headline columns (the five
+  graded plus the derived seam gap) — and
   another 1,144 in the appendix set. Two axes come off the page:
 
   - **The size buckets are pooled**, one number per (arm, band). p119 measured
@@ -1274,9 +1301,13 @@ A1 from truth cannot separate the arms either.
     robustness statement in the memo. A family carrying no claim should not cost
     half the page width.
 
-  What prints is **330 numbers on one page**: 11 arms × 4 bands × 5 metrics for
-  the blob family, plus 11 arms × 2 sub-rows × 5 metrics for the real family in
-  R4. Parameter counts total and trainable ride along per §6 item 4.
+  What prints is **396 numbers on one page**: 11 arms × 4 bands × 6 columns for
+  the blob family, plus 11 arms × 2 sub-rows × 6 columns for the real family in
+  R4 — 66 (row, band) cells, six columns each. Parameter counts total and
+  trainable ride along per §6 item 4. The sixth column is the seam gap, printed
+  as signed degrees to 3 dp against R7's +0.15° bar; **its 66 cells are the same
+  66 the C4 rank block has, and the two are unrelated** — the coincidence is that
+  both are 11 arms × 6, and nothing should be read across them.
 
   **C4 gets its own block, and it prints ranks rather than metres.** Pooling the
   buckets would otherwise have deleted C4's comparator, since the real family is
@@ -1323,7 +1354,7 @@ A1 from truth cannot separate the arms either.
   the two ViT-S appendix cells are single-seed per §2.3), so a per-cell ± would
   imply a seed structure most rows do not have, and reads as a CI besides. A
   spread large enough to threaten a claim earns a paragraph, not a decoration in
-  330 cells.
+  396 cells.
 - **Efficiency footnote:** params trained, params total, and single-tile
   inference time per arm (A9's diffusion decode vs A3's single forward pass is
   a real operational difference worth one honest row — the contrast used to be
@@ -1390,7 +1421,8 @@ A1 from truth cannot separate the arms either.
    choice, made after seeing the numbers, could change which conclusion the table
    supports:
 
-   - **R1** — the metric set is **five headline columns and four appendix ones**,
+   - **R1** — ten candidates were graded; the metric set is **five headline
+     columns plus the derived seam gap — six printed — and four appendix ones**,
      nothing else, graded by measured separation (§5).
    - **R2** — the pretraining-corpus caveat is symmetric (item 4 above).
    - **R3** — **R5 is the headline unconditionally**; an R4 win is reported
@@ -1579,10 +1611,10 @@ every table, so the corrected figures are the ones to print.
 2. The results table and three figures. **The table's shape is pre-registered in
    §5 under "The printed table"** *(amended 2026-08-11 —
    [#136](https://github.com/JStoschek/DEMAE/issues/136))*; this item used to say
-   "arms x buckets x strata, CIs marked", which is 1,430 headline numbers with
+   "arms x buckets x strata, CIs marked", which is 1,716 headline numbers with
    CIs on 55 arm pairs and was never printable. What prints is **11 arms × 4
-   ruggedness bands × 5 metrics for the blob family, plus the real family's two
-   sub-rows in R4 — 330 numbers** — with the size buckets pooled, the rectangle
+   ruggedness bands × 6 columns for the blob family, plus the real family's two
+   sub-rows in R4 — 396 numbers** — with the size buckets pooled, the rectangle
    family in the parquet only, CI marks on **four pre-registered arm pairs**, and
    a separate **C4 rank block** of 66 cells. Then three figures:
 
