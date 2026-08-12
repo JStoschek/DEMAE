@@ -930,11 +930,67 @@ One head spec, frozen across arms; only the input channel width differs
 
 ### 4.3 Zero-shot (A2)
 
-No training. Mask = patches touching the void; the known caveat is that MAE was
-pretrained on *random* masks and contiguous block masks are a distribution
-shift, so zero-shot numbers are expected to be modest, improving under A3.
-Plotting zero-shot vs fine-tuned per bucket quantifies precisely what the
-task-adaptation bought, which is a figure in itself.
+No training. Mask = patches touching the void; the decoder reconstructs them
+and the non-void pixels are composited back.
+
+**MAE was pretrained on *random* masks and this benchmark scores *contiguous
+block* masks, which is a distribution shift.** That is a statement about the
+mechanism and not a prediction. The sentence it replaces — "zero-shot numbers
+are expected to be modest, improving under A3" — survived every possible
+outcome, which is precisely what disqualifies it: A2 far behind is "modest",
+A2 close is "modest", and A2 *ahead* of A3 went unaddressed. A falsifiable
+version would need a number, and this plan declines to invent one for the same
+reason §2.2 declines a threshold on the FSQ diagnostic (**R9b**) — no scale is
+available that was not chosen to look principled.
+
+**How the A2 row is read is pre-registered instead** *(registered rule
+**R12**, asserted in
+[ADR-0013](../adr/0013-task1-pre-registration-register.md) —
+[#142](https://github.com/JStoschek/DEMAE/issues/142))*. Three parts, and the
+first two apply to every outcome rather than to a tail:
+
+- **A2 carries no claim in §0, and it is insulated from C1 in both
+  directions.** A2 is decoder-driven with no trained head; C1 compares frozen
+  *features* under an identical head (A4 vs A5 vs A6). A zero-shot failure is
+  evidence that the *decoder* does not transfer to block masks, not that the
+  representation is weak — and a zero-shot success is not extra evidence for
+  C1 either. Insulating in one direction only is the escape-hatch shape §2.3's
+  corpus caveat was made symmetric to close
+  ([#122](https://github.com/JStoschek/DEMAE/issues/122)). This does not
+  retract §1's asymmetry finding, which is about A2/A3 *existing* for an MAE
+  and not for a tokenizer — a statement about capability, not about A2's
+  numbers.
+- **The A2→A3 difference is a joint quantity and is never attributed to task
+  adaptation alone.** A3 changes two things at once relative to A2: it adapts
+  to the task, and it adapts to the contiguous-mask distribution. The arm that
+  would separate them — DEMAE fine-tuned on *random* masks — does not exist and
+  is not proposed. So the clause this replaces, "quantifies precisely what the
+  task-adaptation bought", is not true of any outcome, good or bad. What the
+  difference measures is the cost of the distribution shift and the value of
+  task adaptation, summed, and it is reported in those words.
+- **The contingency: if A2 does not beat A1 in a majority of the four
+  ruggedness bands on RMSE, the row is reported as a negative result** — zero-shot
+  MAE inpainting does not transfer from random-mask pretraining to contiguous
+  voids — with the prominence §6 item 7 requires, rather than narrated as the
+  baseline half of a delta. The trigger is an **ordering against A1**, not a
+  threshold in metres, because the gap has no single scale: p119 measured A1
+  itself at 0.87 m in the flattest quartile against 38.6 m in the roughest, so
+  one number in metres would be four different bars
+  ([`p119-fill-headroom.md`](p119-fill-headroom.md)). A1 is the operational
+  status quo and is scored in every cell A2 is, so "is zero-shot usable at all
+  without training?" is answerable with no invented constant. Majority-of-bands
+  rather than the R4 band alone buys robustness by **replication**, which is
+  what keeps A2-vs-A1 out of §5's four marked bootstrap pairs (**R6**): A2 is
+  single-pass, and the pair is computed like the other 50 and left unmarked.
+
+**There is no zero-shot-vs-fine-tuned figure**, and this section used to
+promise one "per bucket". §9 prints three figures and
+[#136](https://github.com/JStoschek/DEMAE/issues/136) fixed that set at three,
+in the same amendment that pooled the size buckets off the page (**R5**) — so
+the promise was owed at a resolution the table no longer has. A fourth figure
+for a row carrying no claim also fails the test #136 applied to the rectangle
+family. The A2 and A3 rows print side by side across 4 bands × 5 metrics,
+which is where the difference is read.
 
 ### 4.4 UNet baseline (A7)
 
@@ -1297,8 +1353,8 @@ A1 from truth cannot separate the arms either.
    claim.
 8. Pre-registration: this memo is committed before the first head trains;
    success criteria C1-C4 are defined above the results, not after them. **So are
-   eleven rules governing how the evidence may be used**, and this item is their
-   index — each is stated in full beside the topic it governs, and all eleven are
+   twelve rules governing how the evidence may be used**, and this item is their
+   index — each is stated in full beside the topic it governs, and all twelve are
    asserted together in
    [ADR-0013](../adr/0013-task1-pre-registration-register.md), which this list
    quotes rather than independently commits. A rule is on it when a *different*
@@ -1330,6 +1386,11 @@ A1 from truth cannot separate the arms either.
      materiality check returns **≥ 0.99**
      ([ADR-0011](../adr/0011-terramind-posemb-rederived-at-14x14.md) D4-5; it
      returned 0.9708, so the row stays).
+   - **R12** — the A2 row carries **no C-claim** and is insulated from C1 in
+     *both* directions; the A2→A3 difference is a **joint** quantity (task
+     adaptation plus mask-distribution adaptation) and is never attributed to
+     task adaptation alone; and A2 is reported as a **negative result** if it
+     does not beat A1 in a majority of the four bands (§4.3).
 
    Each is a choice that would be worth nothing decided after the numbers existed
    — a table shape picked to flatter a result, a pair set chosen from whichever
@@ -1467,8 +1528,14 @@ every table, so the corrected figures are the ones to print.
     `[1, 768, 14, 14]` either way, with no error. The TerraMind arms therefore
     cannot consume the pretraining loader's output — see §9.4.
   - NaN filling before the z-score is untested here and stands as written.
-- **Contiguous-mask shift sinks A2:** expected and framed as the zero-shot vs
-  fine-tuned delta, not buried.
+- **Contiguous-mask shift sinks A2:** stated as a mechanism rather than a
+  prediction, and how the row is then read is pre-registered — no C-claim, C1
+  insulated in both directions, the A2→A3 difference reported as a *joint*
+  quantity, and a negative result if A2 does not beat A1 in a majority of the
+  four bands (§4.3, registered rule **R12**). This bullet used to read
+  "expected and framed as the zero-shot vs fine-tuned delta, not buried", which
+  named the framing the register now fixes without committing to it
+  ([#142](https://github.com/JStoschek/DEMAE/issues/142)).
 - **Spot-instance reclaim: not a risk this benchmark has.** Heads checkpoint
   every epoch to the synced directory like every other run in this repo, but
   §7's measured total is 2.56 GPU-hours with a 46-minute longest job, so there

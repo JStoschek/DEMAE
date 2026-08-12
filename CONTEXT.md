@@ -664,10 +664,11 @@ GitHub issue #1.
   plausible-looking function (see **The composition**). Where the two encoders genuinely differ
   they get **named fields, never a shared index**: DEMAE norms after its last block and
   TerraMind does not, so "the last layer" and "block twelve" are two things.
-- **Pre-registration register** — the eleven Task-1 rules governing **how the benchmark's
+- **Pre-registration register** — the twelve Task-1 rules governing **how the benchmark's
   evidence may be used**, asserted together in
   [ADR-0013](docs/adr/0013-task1-pre-registration-register.md) and indexed at plan §6 item 8
-  ([#141](https://github.com/JStoschek/DEMAE/issues/141)). Distinct from the **C-claims**
+  ([#141](https://github.com/JStoschek/DEMAE/issues/141); eleven at acceptance, twelfth added by
+  [#142](https://github.com/JStoschek/DEMAE/issues/142)). Distinct from the **C-claims**
   (what the benchmark must show, plan §0) and from a **contract** (what a component promises
   a caller): a registered rule constrains how results are *read, reported or compared*.
   Membership is the **tunability test** — a rule is in iff a different choice, made after
