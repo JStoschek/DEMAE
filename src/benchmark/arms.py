@@ -116,12 +116,10 @@ class Encoder:
     #: field for exactly this reason: TerraMind structurally has none, so a statistic pooled
     #: over it would compare one model's token to the other's absence.
     #:
-    #: §5's phrase is "DEMAE-family only", written when the contract had two encoders in view.
-    #: Read against the *reason* it gives — TerraMind's absence — ImageNet-MAE is on the DEMAE
-    #: side of the line: it is a ViT and structurally has one, so declaring ``None`` there would
-    #: be a false claim about the architecture rather than a conservative one. The clause that
-    #: does the work is unchanged and is about **comparison**: CLS never enters a cross-encoder
-    #: statistic, whichever encoders happen to have one.
+    #: §5 says "DEMAE-family only", written when the contract had two encoders in view;
+    #: ImageNet-MAE is a ViT and structurally has one. ADR-0012's own amendment note under
+    #: Decision 5 settles that (#156) — this field is what it settles *to*, and the ADR is where
+    #: the reasoning lives, so the decision has one home.
     has_cls: bool = True
     #: Whether this encoder's own final tensor is its last block's output put through a norm.
     #: DEMAE norms after block twelve and TerraMind does not (ADR-0012 §3), which is the whole
@@ -375,6 +373,23 @@ ARMS: Final[dict[str, Arm]] = dict(
 PRINTED_ROWS: Final[tuple[str, ...]] = tuple(
     name for name, arm in ARMS.items() if arm.printed
 )
+
+
+def normalization_for(encoder_name: str) -> str:
+    """§2.1's declared diet for an encoder, read off the arms that eat it.
+
+    Here rather than in :mod:`benchmark.extract` because it is a question about this table:
+    ``normalization`` is an *arm* field, since §2.1's whole point is that each model is fed its
+    native diet. Two arms on one encoder disagreeing about the diet is a contradiction, and one
+    the contract should surface rather than pick a side of.
+    """
+    diets = {arm.normalization for arm in ARMS.values() if arm.encoder == encoder_name}
+    if len(diets) != 1:
+        raise ValueError(
+            f"the arms reading {encoder_name} declare {sorted(diets)} — §2.1 feeds each model "
+            f"one native diet, and a contract cannot declare two"
+        )
+    return diets.pop()
 
 
 def get(name: str) -> Arm:

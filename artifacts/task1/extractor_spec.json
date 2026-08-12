@@ -18,7 +18,6 @@
     "demae-r4": {
       "checkpoint_format": "timm",
       "checkpoint_md5": "59e8346c4b08e1ab4fedd44f0802e12b",
-      "checkpoint_md5_source": "published",
       "depth": 12,
       "family": "demae",
       "has_cls": true,
@@ -33,7 +32,6 @@
     "demae-r5": {
       "checkpoint_format": "timm",
       "checkpoint_md5": "3ec5ebc72fa28c43fe88f67692d9b41a",
-      "checkpoint_md5_source": "published",
       "depth": 12,
       "family": "demae",
       "has_cls": true,
@@ -48,7 +46,6 @@
     "demae-vits": {
       "checkpoint_format": "timm",
       "checkpoint_md5": null,
-      "checkpoint_md5_source": null,
       "depth": 12,
       "family": "demae",
       "has_cls": true,
@@ -63,7 +60,6 @@
     "imagenet-mae": {
       "checkpoint_format": "mmselfsup_rgb",
       "checkpoint_md5": null,
-      "checkpoint_md5_source": null,
       "depth": 12,
       "family": "imagenet-mae",
       "has_cls": true,
@@ -76,6 +72,7 @@
       "width": 768
     }
   },
+  "grid_px": 14,
   "img_px": 224,
   "layers": 12,
   "layout": "(N, 196, D) patch tokens, row-major; CLS an optional side field",
@@ -97,6 +94,5 @@
   "reference_dtype": "fp32",
   "statistics": "recomputed from the passed valid mask; never read from the manifest",
   "tokens": 196,
-  "valid_mask": "land_and_not_void",
-  "width_grid": 14
+  "valid_mask": "land_and_not_void"
 }

@@ -151,6 +151,32 @@ def _stub_checkpoint(path, *, depth=LAYERS, pos_embed="col_row", width=WIDTH):
     return path
 
 
+def _publish(monkeypatch, path, encoder=ENCODER):
+    """Pin a checkpoint's md5 in the registry — the reviewed line a real box would commit.
+
+    Since #156 an unpinned encoder **refuses**: a box does not get to certify its own weights by
+    having mounted them, and the committed contract carries only md5s the registry publishes. So
+    a test that wants to actually load something has to publish first, which is the workflow and
+    not a way around it — `test_an_unpinned_encoder_refuses_rather_than_running_against_whatever_is_there`
+    is the other half.
+    """
+    monkeypatch.setitem(
+        arms.ENCODERS,
+        encoder,
+        replace(
+            arms.ENCODERS[encoder],
+            checkpoint_md5=hashlib.md5(Path(path).read_bytes()).hexdigest(),
+        ),
+    )
+    return path
+
+
+@pytest.fixture
+def publish(monkeypatch):
+    """:func:`_publish` bound to this test's monkeypatch. Returns the path, so it composes."""
+    return lambda path, encoder=ENCODER: _publish(monkeypatch, path, encoder)
+
+
 def _extractor(tmp_path, checkpoint):
     cfg = _config(tmp_path, checkpoint)
     return Extractor(build_spec(cfg), cfg)
@@ -231,21 +257,22 @@ def test_the_specs_md5_is_in_the_run_record(tmp_path, vits_checkpoint):
     assert load_spec(written).md5() == record["artifacts"]["extractor_spec"]["md5"]
 
 
-def test_the_committed_contract_in_this_repository_loads_and_re_checks():
-    """The one Task 2 will actually open, checked the way Task 2 will open it.
+def test_the_committed_contract_in_this_repository_is_what_this_code_writes():
+    """The contract family's defining property, on the file Task 2 will actually open.
 
-    Not asserted byte-for-byte against what `freeze` writes *here*, and deliberately: the two
-    unreleased encoders are pinned by whatever a box mounts, so the committed bytes are a fact
-    about the box that froze them. What has to hold on every box is that the file still describes
-    this code — which is exactly what `load_spec` refuses on.
+    Byte-for-byte, which is only a fair thing to ask because `build_spec` is a function of the
+    code and not of what the box has mounted — so this fails when the committed artifact goes
+    stale against the registry, and never merely because of where it was frozen.
     """
-    committed = load_spec(REPO / "artifacts" / "task1" / SPEC_FILENAME)
-    assert committed.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5
-    assert committed.encoders["demae-r4"].checkpoint_md5 == arms.DEMAE_R4_MD5
-    # Neither unreleased encoder is mounted anywhere yet, so neither is pinned — and an unpinned
+    committed = REPO / "artifacts" / "task1" / SPEC_FILENAME
+    assert committed.read_text() == build_spec().to_json()
+    spec = load_spec(committed)
+    assert spec.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5
+    assert spec.encoders["demae-r4"].checkpoint_md5 == arms.DEMAE_R4_MD5
+    # Neither unreleased encoder has a published md5, so neither is pinned — and an unpinned
     # entry refuses at extraction rather than running against whatever sits at the path.
-    assert committed.encoders["demae-vits"].checkpoint_md5 is None
-    assert committed.encoders["imagenet-mae"].checkpoint_md5 is None
+    assert spec.encoders["demae-vits"].checkpoint_md5 is None
+    assert spec.encoders["imagenet-mae"].checkpoint_md5 is None
 
 
 def test_the_specs_md5_is_not_in_phase_ones_frozen_four_field_fingerprint():
@@ -283,7 +310,10 @@ def _loaded(tmp_path, vits_checkpoint, **moved) -> ExtractorSpec:
         ({"valid_mask": "land"}, "valid = land"),
         ({"statistics": "read from the manifest"}, "recomputes statistics from the passed mask"),
         ({"img_px": 256}, "declares a 256/16 tile"),
-        ({"width_grid": 16}, "is not 196 tokens"),
+        ({"grid_px": 16}, "is not 196 tokens"),
+        # The clause Task 2 re-reads most directly: a `(D, 14, 14)` spec would load clean and
+        # every consumer would unpack the tensors the other way round.
+        ({"layout": "(N, D, 14, 14) channels-first"}, "canonical layout is"),
     ],
 )
 def test_a_contract_that_no_longer_states_the_adrs_decision_is_refused(
@@ -320,8 +350,8 @@ def test_an_arm_the_registry_does_not_have_is_refused(tmp_path, vits_checkpoint)
         ({"width": 384}, "drifted from the registry"),
         ({"output_is_normed": False}, "drifted from the registry"),
         ({"normalization": "terramind_v1"}, "a 'terramind_v1' diet"),
-        ({"checkpoint_md5_source": None}, "an md5 nobody can source"),
-        ({"checkpoint_md5_source": "guessed"}, "neither published nor observed"),
+        ({"checkpoint_md5": "0" * 32}, "the registry publishes"),
+        ({"checkpoint_md5": None}, "the registry publishes"),
     ],
 )
 def test_an_encoder_entry_that_has_drifted_from_the_registry_is_refused(
@@ -542,13 +572,24 @@ def test_recomputed_statistics_reproduce_the_manifest_within_the_measured_bound(
 
 @pytest.fixture(scope="module")
 def features(tmp_path_factory, vits_checkpoint):
-    """One forward pass at the fp32 reference, shared by the claims Decision 4 enumerates."""
+    """One forward pass at the fp32 reference, shared by the claims Decision 4 enumerates.
+
+    Module-scoped, so it publishes the md5 through its own ``MonkeyPatch`` context rather than
+    the function-scoped ``publish`` fixture, which pytest will not hand to it. The context is
+    closed **before** the fixture returns: a module-scoped patch of a module-level registry
+    would stay live for every test that ran afterwards, and two of them are precisely about the
+    registry *not* publishing this md5. Closing it is safe because the extractor caches the
+    model it loaded, so nothing re-reads the registry after this line.
+    """
     rng = np.random.default_rng(1)
     raw = rng.normal(900.0, 150.0, size=(2, dataset_config.TILE_PX, dataset_config.TILE_PX))
     raw = raw.astype(np.int16)
     valid = land_mask(raw)
-    extractor = _extractor(tmp_path_factory.mktemp("features"), vits_checkpoint)
-    return extractor, raw, valid, extractor.extract(raw, valid, arm=ARM)
+    with pytest.MonkeyPatch.context() as mp:
+        _publish(mp, vits_checkpoint)
+        extractor = _extractor(tmp_path_factory.mktemp("features"), vits_checkpoint)
+        out = extractor.extract(raw, valid, arm=ARM)
+    return extractor, raw, valid, out
 
 
 def test_the_extractor_emits_every_block_in_order(features):
@@ -607,6 +648,28 @@ def test_layer_twelve_is_not_the_output_and_the_relation_is_the_declared_one(fea
     assert torch.allclose(out.output, normed, atol=1e-6)
 
 
+def test_the_note_states_the_relation_on_both_sides_not_just_the_demae_one(tmp_path, vits_checkpoint):
+    """ADR-0012 Decision 4 says "on both sides", and the un-normed side has no encoder yet.
+
+    Its *note* is still a clause of the contract this ticket writes, and an unexercised branch
+    inside a committed contract is the failure this whole seam exists to avoid — so the string
+    is asserted directly, against the registry entry #12 will wire up.
+    """
+    from benchmark.extract import _encoder_note
+
+    normed = _encoder_note(arms.ENCODERS["demae-r5"])
+    assert "**not** `intermediates[11]`" in normed
+
+    # TerraMind: p118 §5.3 measured twelve intermediates with no separate post-norm entry, the
+    # last bit-identical to `encoder(x)`. Same two fields, and on this side they are one tensor.
+    un_normed = _encoder_note(arms.ENCODERS["terramind"])
+    assert "bit-identical to `intermediates[11]`" in un_normed
+    assert arms.ENCODERS["terramind"].output_is_normed is False
+    # And the note never reaches the committed file while the encoder is #12's, which is why the
+    # string is checked here rather than read out of `extractor_spec.json`.
+    assert "terramind" not in build_spec(_config(tmp_path, vits_checkpoint)).encoders
+
+
 def test_the_canonical_layout_is_patch_tokens_with_cls_as_a_side_field(features):
     _, raw, _, out = features
     assert out.output.shape == (len(raw), 196, WIDTH)  # ADR-0012 §5
@@ -616,7 +679,7 @@ def test_the_canonical_layout_is_patch_tokens_with_cls_as_a_side_field(features)
     assert out.output.shape[1] == 196
 
 
-def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_checkpoint, tile):
+def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_checkpoint, tile, publish):
     """ADR-0012 §6: the compute dtype is a declared field; what comes back is the reference.
 
     A task moving its compute dtype re-checks it under #134's 0.99 materiality bar rather than
@@ -625,25 +688,25 @@ def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_
     import torch
 
     raw, valid = tile
-    cfg = _config(tmp_path, vits_checkpoint)
+    cfg = _config(tmp_path, publish(vits_checkpoint))
     cfg = cfg.replace(extract=cfg.extract.replace(compute_dtype="bf16"))
     out = Extractor(build_spec(cfg), cfg).extract(raw, valid, arm=ARM)
     assert out.output.dtype == torch.float32
     assert all(block.dtype == torch.float32 for block in out.intermediates)
 
 
-def test_a_single_tile_and_a_batch_are_the_same_call(tmp_path, vits_checkpoint, tile):
+def test_a_single_tile_and_a_batch_are_the_same_call(tmp_path, vits_checkpoint, tile, publish):
     import torch
 
     raw, valid = tile
-    extractor = _extractor(tmp_path, vits_checkpoint)
+    extractor = _extractor(tmp_path, publish(vits_checkpoint))
     one = extractor.extract(raw, valid, arm=ARM)
     batched = extractor.extract(raw[None], valid[None], arm=ARM)
     assert one.output.shape == batched.output.shape == (1, 196, WIDTH)
     assert torch.allclose(one.output, batched.output)
 
 
-def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoint, tile):
+def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoint, tile, publish):
     """The composition, pinned bit-identical to the library call it replaces.
 
     Unrolled rather than routed through ``get_intermediate_layers`` so that ``output`` is the
@@ -656,7 +719,7 @@ def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoi
     from benchmark.extract import _forward_blocks
 
     raw, valid = tile
-    extractor = _extractor(tmp_path, vits_checkpoint)
+    extractor = _extractor(tmp_path, publish(vits_checkpoint))
     model = extractor.encoder(ARM)
     x = normalize(raw[None], valid[None], normalization="per_tile")
     tensor = torch.from_numpy(x).unsqueeze(1)
@@ -667,13 +730,13 @@ def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoi
 # --- ADR-0012 §7.1: encoder identity, checked against the model actually loaded -
 
 
-def test_a_wrong_checkpoint_md5_is_refused(tmp_path, vits_checkpoint):
+def test_a_wrong_checkpoint_md5_is_refused(tmp_path, vits_checkpoint, publish):
     """An encoder handed the wrong checkpoint returns a plausible tensor and raises nothing.
 
     So the md5 the spec was frozen against is checked before the file is read at all — which is
     also why a 340 MB swap costs a hash rather than a forward pass to detect.
     """
-    cfg = _config(tmp_path, vits_checkpoint)
+    cfg = _config(tmp_path, publish(vits_checkpoint))
     spec = build_spec(cfg)
     swapped = tmp_path / "swapped.pt"
     swapped.write_bytes(vits_checkpoint.read_bytes() + b"\n")
@@ -694,7 +757,7 @@ def test_freeze_refuses_to_pin_a_checkpoint_that_is_not_the_published_one(tmp_pa
         build_spec(cfg)
 
 
-def test_a_declared_layer_count_that_does_not_match_the_model_loaded_is_refused(tmp_path):
+def test_a_declared_layer_count_that_does_not_match_the_model_loaded_is_refused(tmp_path, publish):
     """Off the checkpoint's own keys, before a model is built.
 
     A strict load would refuse too, but it would name two dozen missing tensors rather than the
@@ -703,10 +766,10 @@ def test_a_declared_layer_count_that_does_not_match_the_model_loaded_is_refused(
     """
     stub = _stub_checkpoint(tmp_path / "eleven.pt", depth=11)
     with pytest.raises(ValueError, match="has 11 transformer blocks"):
-        _extractor(tmp_path, stub).encoder(ARM)
+        _extractor(tmp_path, publish(stub)).encoder(ARM)
 
 
-def test_a_pos_embed_under_the_wrong_axis_order_is_refused_and_the_message_says_which(tmp_path):
+def test_a_pos_embed_under_the_wrong_axis_order_is_refused_and_the_message_says_which(tmp_path, publish):
     """§2.3's R4-versus-R5 precondition, enforced rather than remembered.
 
     Every name and every shape matches under either order, so a `strict=True` load succeeds and
@@ -715,58 +778,75 @@ def test_a_pos_embed_under_the_wrong_axis_order_is_refused_and_the_message_says_
     """
     stub = _stub_checkpoint(tmp_path / "transposed.pt", pos_embed="row_col")
     with pytest.raises(ValueError, match="not sin-cos under the declared 'sincos2d'"):
-        _extractor(tmp_path, stub).encoder(ARM)
+        _extractor(tmp_path, publish(stub)).encoder(ARM)
 
 
-def test_a_pos_embed_that_is_not_sin_cos_at_all_is_refused(tmp_path):
+def test_a_pos_embed_that_is_not_sin_cos_at_all_is_refused(tmp_path, publish):
     import torch
 
     stub = _stub_checkpoint(
         tmp_path / "learned.pt", pos_embed=torch.zeros(1, 1 + 196, WIDTH)
     )
     with pytest.raises(ValueError, match="not sin-cos under the declared"):
-        _extractor(tmp_path, stub).encoder(ARM)
+        _extractor(tmp_path, publish(stub)).encoder(ARM)
 
 
-def test_a_pos_embed_of_the_wrong_shape_is_refused(tmp_path):
+def test_a_pos_embed_of_the_wrong_shape_is_refused(tmp_path, publish):
     stub = _stub_checkpoint(tmp_path / "wide.pt", pos_embed="col_row", width=768)
     with pytest.raises(ValueError, match=r"`pos_embed` is \(1, 197, 768\)"):
-        _extractor(tmp_path, stub).encoder(ARM)
+        _extractor(tmp_path, publish(stub)).encoder(ARM)
 
 
-def test_a_checkpoint_with_no_pos_embed_is_refused(tmp_path):
+def test_a_checkpoint_with_no_pos_embed_is_refused(tmp_path, publish):
     stub = _stub_checkpoint(tmp_path / "bare.pt", pos_embed=None)
     with pytest.raises(ValueError, match="no `pos_embed`"):
-        _extractor(tmp_path, stub).encoder(ARM)
+        _extractor(tmp_path, publish(stub)).encoder(ARM)
 
 
-def test_an_unmounted_encoder_names_the_path_knob(tmp_path, vits_checkpoint):
-    cfg = _config(tmp_path, vits_checkpoint)
+def test_an_unmounted_encoder_names_the_path_knob(tmp_path, vits_checkpoint, publish):
+    cfg = _config(tmp_path, publish(vits_checkpoint))
     spec = build_spec(cfg)
     with pytest.raises(FileNotFoundError, match="paths.demae_vits_checkpoint"):
         Extractor(spec, _config(tmp_path, None)).encoder(ARM)
 
 
-def test_an_unpinned_md5_refuses_rather_than_running_against_whatever_is_there(tmp_path, vits_checkpoint):
-    """A spec frozen on a box that had no ViT-S pins no md5 for it, and that is a refusal.
+def test_an_unpinned_encoder_refuses_rather_than_running_against_whatever_is_there(
+    tmp_path, vits_checkpoint
+):
+    """This plan publishes no ViT-S md5, so nothing distinguishes the file at the path.
 
-    Nothing distinguishes the file at the path from any other, which is the exact condition
-    §7.1 exists to make impossible — so the answer is "re-freeze here", not "trust it".
+    That is the exact condition §7.1 exists to make impossible, and the answer is to *publish*
+    one — a reviewed line in the registry — not to let a box certify its own weights by having
+    mounted them.
     """
+    with pytest.raises(ValueError, match="publishes no md5 for demae-vits"):
+        _extractor(tmp_path, vits_checkpoint).encoder(ARM)
+
+
+def test_the_committed_bytes_do_not_move_with_what_a_box_has_mounted(tmp_path, vits_checkpoint):
+    """The property that lets the spec's md5 mean *which contract*, not *whose freeze*.
+
+    An md5 recorded because a box happened to have the file would put environment inside the one
+    committed artifact that must not carry any — and would hand the next box a `FileExistsError`
+    against a contract that had not changed. So `build_spec` is a function of the code, and
+    mounting an encoder moves nothing in the file.
+    """
+    mounted = build_spec(_config(tmp_path, vits_checkpoint))
+    unmounted = build_spec(_config(tmp_path, None))
+    assert mounted == unmounted
+    assert mounted.encoders[ENCODER].checkpoint_md5 is None  # unpinned either way
+    assert mounted.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5  # published either way
+
+
+def test_a_spec_pinning_an_md5_the_registry_does_not_publish_is_refused(tmp_path, vits_checkpoint):
     cfg = _config(tmp_path, vits_checkpoint)
-    spec = build_spec(_config(tmp_path, None))  # frozen with the encoder unmounted
-    assert spec.encoders[ENCODER].checkpoint_md5 is None
-    with pytest.raises(ValueError, match="pins no md5 for demae-vits"):
-        Extractor(spec, cfg).encoder(ARM)
-
-
-def test_an_observed_md5_says_it_was_observed(tmp_path, vits_checkpoint):
-    # "3ec5eb… because a box had it" and "3ec5eb… because the release says so" are different
-    # claims, and only one of them survives someone mounting the wrong file.
-    spec = build_spec(_config(tmp_path, vits_checkpoint))
-    assert spec.encoders[ENCODER].checkpoint_md5_source == "observed"
-    assert spec.encoders["demae-r5"].checkpoint_md5_source == "published"
-    assert spec.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5
+    body = build_spec(cfg).to_dict()
+    body["encoders"][ENCODER]["checkpoint_md5"] = hashlib.md5(
+        vits_checkpoint.read_bytes()
+    ).hexdigest()
+    (tmp_path / SPEC_FILENAME).write_text(json.dumps(body))
+    with pytest.raises(ValueError, match="the registry publishes None"):
+        load_spec(tmp_path / SPEC_FILENAME)
 
 
 # --- The two published md5s this ticket settled --------------------------------
@@ -855,7 +935,7 @@ def imagenet_mae_entry():
 
 
 def test_the_imagenet_mae_arm_reads_the_published_file_through_section_eights_collapse(
-    tmp_path, mmselfsup_checkpoint
+    tmp_path, mmselfsup_checkpoint, monkeypatch
 ):
     """A6, end to end, against a file laid out the way the published ImageNet MAE is.
 
@@ -874,12 +954,38 @@ def test_the_imagenet_mae_arm_reads_the_published_file_through_section_eights_co
         ),
         extract=base.extract.replace(compute_dtype="fp32"),
     )
+    # A6's md5 is unpublished, and an unpinned encoder refuses. Publishing one is a registry
+    # line, so that is what this does — the same act a box mounting the real file would commit.
+    monkeypatch.setitem(
+        arms.ENCODERS,
+        "imagenet-mae",
+        replace(
+            arms.ENCODERS["imagenet-mae"],
+            checkpoint_md5=hashlib.md5(mmselfsup_checkpoint.read_bytes()).hexdigest(),
+        ),
+    )
     rng = np.random.default_rng(2)
     raw = rng.normal(700.0, 120.0, size=(1, 224, 224)).astype(np.int16)
     out = Extractor(build_spec(cfg), cfg).extract(raw, land_mask(raw), arm="A6")
     assert out.output.shape == (1, 196, 768)
     assert len(out.intermediates) == LAYERS
     assert out.cls is not None
+
+
+def test_the_imagenet_mae_arm_refuses_until_its_md5_is_published(tmp_path, mmselfsup_checkpoint):
+    """The state this repository is actually in, asserted rather than left implicit."""
+    base = BenchmarkConfig()
+    cfg = base.replace(
+        arm="A6",
+        paths=base.paths.replace(
+            artifacts_dir=str(tmp_path),
+            demae_r5_checkpoint=None,
+            demae_r4_checkpoint=None,
+            imagenet_mae_checkpoint=str(mmselfsup_checkpoint),
+        ),
+    )
+    with pytest.raises(ValueError, match="publishes no md5 for imagenet-mae"):
+        Extractor(build_spec(cfg), cfg).encoder("A6")
 
 
 def test_the_summed_collapse_is_the_one_section_eight_specifies(

@@ -227,12 +227,17 @@ class EncoderSpec:
     checkpoint_format: str
     #: The published architecture, as a consumer types it into ``timm.create_model``.
     timm_model: str
-    #: The authoritative file's md5. ``None`` means *unpinned*, and extraction refuses rather
-    #: than running against whatever happens to sit at the path.
+    #: The authoritative file's md5, quoted from the registry. ``None`` means **unpinned** — this
+    #: plan publishes no md5 for this encoder yet — and extraction refuses rather than running
+    #: against whatever happens to sit at the path.
+    #:
+    #: Deliberately *not* "whatever this box had at freeze time". An observed md5 would make the
+    #: committed file's bytes a fact about the box that froze it, and the spec's md5 goes into
+    #: every run record — a hash that identified the freezing box as much as the contract is the
+    #: recipe/environment line (:mod:`benchmark.config`) crossed in the one artifact that must
+    #: not cross it. Pinning a new encoder is therefore a **registry change**: one reviewed line
+    #: in :data:`benchmark.arms.ENCODERS`, which is what "authoritative" ought to cost.
     checkpoint_md5: str | None
-    #: ``published`` (declared by the registry), ``observed`` (what this box mounted when the
-    #: spec was frozen) or ``None``. An md5 nobody can source is worse than none.
-    checkpoint_md5_source: str | None
     #: Whether ``output`` is ``intermediates[-1]`` put through a final norm. **The field-level
     #: note ADR-0012 §3 asks for**, so nobody discovers DEMAE's final norm by reading tensors.
     output_is_normed: bool
@@ -277,7 +282,9 @@ class ExtractorSpec:
     #: ADR-0012 §3/§5's shape, at the top level because it is one number for every encoder.
     layers: int
     tokens: int
-    width_grid: int
+    #: The patch grid's side, 14 — :func:`pretrain.model.sincos2d_pos_embed`'s ``grid_px``, and
+    #: named after it. Not to be read as a *width*: :attr:`EncoderSpec.width` is ``D``.
+    grid_px: int
     img_px: int
     patch_px: int
     #: ADR-0012 §6 — fp32 is the reference tensor, always. The *compute* dtype is a per-run
@@ -362,13 +369,21 @@ class ExtractorSpec:
                 f"{SPEC_FILENAME} declares a {self.img_px}/{self.patch_px} tile; the corpus is "
                 f"{dataset_config.TILE_PX}/{dataset_config.PATCH_PX}"
             )
-        if self.width_grid**2 != self.tokens:
+        if self.grid_px**2 != self.tokens:
             raise ValueError(
-                f"{SPEC_FILENAME}'s {self.width_grid}x{self.width_grid} grid is not "
+                f"{SPEC_FILENAME}'s {self.grid_px}x{self.grid_px} grid is not "
                 f"{self.tokens} tokens"
             )
         if self.reference_dtype != "fp32":
             raise ValueError(f"{ADR} §6: fp32 is the reference tensor, not {self.reference_dtype!r}")
+        # The clause Task 2 re-reads most directly, and therefore the one least worth emitting
+        # unchecked: a spec declaring a `(D, 14, 14)` layout would load clean and every consumer
+        # would unpack the tensors the other way round.
+        if self.layout != CANONICAL_LAYOUT:
+            raise ValueError(
+                f"{ADR} §5's canonical layout is {CANONICAL_LAYOUT!r}; this spec says "
+                f"{self.layout!r}"
+            )
         if self.valid_mask != VALID_MASK:
             raise ValueError(f"{ADR} §1: valid = land ∧ ¬void, not {self.valid_mask!r}")
         if self.statistics != STATISTICS:
@@ -415,20 +430,17 @@ class ExtractorSpec:
                     f"{SPEC_FILENAME}'s {name} declares {entry.depth} blocks against the "
                     f"contract's {self.layers}"
                 )
-            if entry.normalization != _normalization_for(name):
+            if entry.normalization != arms.normalization_for(name):
                 raise ValueError(
                     f"{SPEC_FILENAME} feeds {name} a {entry.normalization!r} diet; the arms "
-                    f"reading it declare {_normalization_for(name)!r} (§2.1)"
+                    f"reading it declare {arms.normalization_for(name)!r} (§2.1)"
                 )
-            if (entry.checkpoint_md5 is None) != (entry.checkpoint_md5_source is None):
+            # The md5 is the registry's or it is nothing — see `EncoderSpec.checkpoint_md5` on
+            # why a spec is never allowed to pin one a box observed for itself.
+            if entry.checkpoint_md5 != registered.checkpoint_md5:
                 raise ValueError(
-                    f"{SPEC_FILENAME}'s {name} has md5 {entry.checkpoint_md5!r} sourced "
-                    f"{entry.checkpoint_md5_source!r}; an md5 nobody can source is worse than none"
-                )
-            if entry.checkpoint_md5_source not in (None, "published", "observed"):
-                raise ValueError(
-                    f"{SPEC_FILENAME}'s {name} md5 source {entry.checkpoint_md5_source!r} is "
-                    f"neither published nor observed"
+                    f"{SPEC_FILENAME} pins {name} at {entry.checkpoint_md5!r}; the registry "
+                    f"publishes {registered.checkpoint_md5!r}"
                 )
         return self
 
@@ -464,16 +476,16 @@ class ExtractorSpec:
 
 
 def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
-    """The contract, assembled from the registry and this box's mounted checkpoints.
+    """The contract, assembled from the registry. **Its content is a function of the code.**
 
-    The md5 of each encoder is **published** where this plan pins one (:data:`arms.DEMAE_R5_MD5`
-    and its R4 sibling) and **observed** where it does not — recorded with its source either way,
-    because "3ec5eb… because a box had it" and "3ec5eb… because the release says so" are
-    different claims and only one of them survives someone mounting the wrong file.
+    Nothing a box happens to have mounted reaches these bytes, which is what lets the committed
+    file be byte-identical everywhere and lets its md5 mean *which contract* rather than *whose
+    freeze* — see :attr:`EncoderSpec.checkpoint_md5`.
 
-    A published md5 that the mounted file does not match is refused here rather than at load: a
-    `freeze` that pinned the wrong checkpoint would hand Task 2 a contract naming weights nobody
-    ran, and the moment to catch that is while the file is being written.
+    A mounted file *is* read, and for one thing only: a published md5 that the file at the
+    configured path does not match is refused here rather than at load. A `freeze` that pinned
+    the wrong checkpoint would hand Task 2 a contract naming weights nobody ran, and the moment
+    to catch that is while the file is being written.
     """
     cfg = BenchmarkConfig() if cfg is None else cfg
     from .artifacts import file_md5
@@ -483,15 +495,12 @@ def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
         if encoder.checkpoint_format not in READABLE_FORMATS:
             continue  # named in `pending` instead — see the module docstring on #12
         path = getattr(cfg.paths, encoder.checkpoint_field)
-        observed = file_md5(path)
-        md5, source = encoder.checkpoint_md5, "published"
-        if md5 is None:
-            md5, source = observed, (None if observed is None else "observed")
-        elif observed is not None and observed != md5:
+        observed = None if encoder.checkpoint_md5 is None else file_md5(path)
+        if observed is not None and observed != encoder.checkpoint_md5:
             raise ValueError(
                 f"paths.{encoder.checkpoint_field} is {path}, whose md5 is {observed}; the "
-                f"{name} encoder this plan benchmarks is {md5}. Freezing this would commit a "
-                f"contract naming weights nobody ran ({ADR} §7.1)."
+                f"{name} encoder this plan benchmarks is {encoder.checkpoint_md5}. Freezing "
+                f"this would commit a contract naming weights nobody ran ({ADR} §7.1)."
             )
         entries[name] = EncoderSpec(
             name=name,
@@ -499,20 +508,18 @@ def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
             width=encoder.width,
             depth=encoder.depth,
             pos_encoding=encoder.pos_encoding,
-            normalization=_normalization_for(name),
+            normalization=arms.normalization_for(name),
             checkpoint_format=encoder.checkpoint_format,
             timm_model=encoder.timm_model,
-            checkpoint_md5=md5,
-            checkpoint_md5_source=source,
+            checkpoint_md5=encoder.checkpoint_md5,
             output_is_normed=encoder.output_is_normed,
             has_cls=encoder.has_cls,
             note=_encoder_note(encoder),
         )
-    grid = dataset_config.TILE_PX // dataset_config.PATCH_PX
     return ExtractorSpec(
         layers=cfg.extract.layers,
         tokens=cfg.extract.tokens,
-        width_grid=grid,
+        grid_px=dataset_config.TILE_PX // dataset_config.PATCH_PX,
         img_px=dataset_config.TILE_PX,
         patch_px=dataset_config.PATCH_PX,
         reference_dtype=cfg.extract.reference_dtype,
@@ -524,31 +531,12 @@ def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
     ).check()
 
 
-def _normalization_for(encoder_name: str) -> str:
-    """§2.1's declared diet for an encoder, read off the arms that eat it.
-
-    Off the arm table rather than typed a second time here: `normalization` is an *arm* field
-    because §2.1's whole point is that each model is fed its native diet, and two arms on one
-    encoder disagreeing about the diet is a contradiction this should surface rather than pick
-    a side of.
-    """
-    diets = {
-        arm.normalization for arm in arms.ARMS.values() if arm.encoder == encoder_name
-    }
-    if len(diets) != 1:
-        raise ValueError(
-            f"the arms reading {encoder_name} declare {sorted(diets)} — §2.1 feeds each model "
-            f"one native diet, and a contract cannot declare two"
-        )
-    return diets.pop()
-
-
 def spec_path(cfg: BenchmarkConfig) -> Path:
     """Where this config's committed contract lives."""
     return Path(cfg.paths.artifacts_dir) / SPEC_FILENAME
 
 
-def write_spec(cfg: BenchmarkConfig | None = None, *, path: Path | str | None = None) -> Path:
+def write_spec(cfg: BenchmarkConfig | None = None) -> Path:
     """Write `extractor_spec.json`, idempotently, refusing to overwrite a moved one (§3.4).
 
     Re-running `freeze` after a code change must not silently re-draw an input a half-finished
@@ -556,9 +544,13 @@ def write_spec(cfg: BenchmarkConfig | None = None, *, path: Path | str | None = 
     naming both md5s. Deleting it is the deliberate act that says the contract really did change
     — and since the spec's md5 is in every run record, the tables produced under the old one
     stay attributable.
+
+    The refusal only ever fires on a *code* change, because :func:`build_spec`'s output does not
+    depend on the box. That is the point of the split: mounting a checkpoint never puts a build
+    session in the position of being told to delete a committed artifact that is still correct.
     """
     cfg = BenchmarkConfig() if cfg is None else cfg
-    target = Path(path) if path is not None else spec_path(cfg)
+    target = spec_path(cfg)
     body = build_spec(cfg).to_json()
     if target.is_file():
         existing = target.read_text()
@@ -708,6 +700,11 @@ class Extractor:
     Holds the committed spec and materializes an encoder the first time an arm asks for one, so
     a build session that resolves the contract pays nothing until it actually scores something,
     and a box mounting one checkpoint of three is not blocked by the other two.
+
+    Built as ``Extractor(load_spec(spec_path(cfg)), cfg)`` — two calls rather than a classmethod
+    wrapping them, because :func:`load_spec` is the call this module is *about* and hiding it
+    behind a constructor makes the re-check look like an implementation detail of building an
+    object rather than the thing the committed file exists to do.
     """
 
     def __init__(
@@ -721,14 +718,6 @@ class Extractor:
         self.config = BenchmarkConfig() if cfg is None else cfg
         self.device = device
         self._models: dict[str, Any] = {}
-
-    @classmethod
-    def load(
-        cls, cfg: BenchmarkConfig | None = None, *, path: Path | str | None = None, device: str = "cpu"
-    ) -> Extractor:
-        """Read the committed contract off this box and bind it to a config's checkpoints."""
-        cfg = BenchmarkConfig() if cfg is None else cfg
-        return cls(load_spec(spec_path(cfg) if path is None else path), cfg, device=device)
 
     # --- the encoder, and §7.1's four refusals
 
@@ -761,9 +750,10 @@ class Extractor:
             )
         if entry.checkpoint_md5 is None:
             raise ValueError(
-                f"{SPEC_FILENAME} pins no md5 for {entry.name}, so nothing distinguishes the "
-                f"file at {path} from any other. Re-run `freeze` on a box that mounts it, which "
-                f"records the md5 it froze against ({ADR} §7.1)."
+                f"this plan publishes no md5 for {entry.name}, so nothing distinguishes the file "
+                f"at {path} from any other. Pin it in `benchmark.arms.ENCODERS` and re-freeze — "
+                f"an encoder's identity is a reviewed line, not something a box certifies for "
+                f"itself by having mounted it ({ADR} §7.1)."
             )
         from .artifacts import file_md5
 
@@ -771,7 +761,7 @@ class Extractor:
         if observed != entry.checkpoint_md5:
             raise ValueError(
                 f"{path} has md5 {observed}; {SPEC_FILENAME} declares {entry.name} as "
-                f"{entry.checkpoint_md5} ({entry.checkpoint_md5_source}). An encoder handed the "
+                f"{entry.checkpoint_md5}. An encoder handed the "
                 f"wrong checkpoint returns a plausible tensor and raises nothing, so this "
                 f"refuses ({ADR} §7.1)."
             )
@@ -818,7 +808,7 @@ class Extractor:
                 f"{SPEC_FILENAME}'s `pending` block"
             )
         reference = sincos2d_pos_embed(
-            entry.width, self.spec.width_grid, axis_order=AXIS_ORDERS[entry.pos_encoding]
+            entry.width, self.spec.grid_px, axis_order=AXIS_ORDERS[entry.pos_encoding]
         )
         if not torch.allclose(pos_embed.float(), reference.float(), atol=1e-5):
             other = {v: k for k, v in AXIS_ORDERS.items()}
@@ -829,7 +819,7 @@ class Extractor:
                     if torch.allclose(
                         pos_embed.float(),
                         sincos2d_pos_embed(
-                            entry.width, self.spec.width_grid, axis_order=order
+                            entry.width, self.spec.grid_px, axis_order=order
                         ).float(),
                         atol=1e-5,
                     )
@@ -929,10 +919,16 @@ def _forward_blocks(model, x):
 def _timm_state_from_mmselfsup(state, entry: EncoderSpec) -> dict:
     """The published ImageNet MAE, as the single-channel timm encoder A6 reads.
 
-    §8's patch-embed collapse and P102's key map, both **imported from**
-    :mod:`pretrain.init` rather than restated: R4 warm-started through exactly this translation,
-    every row of that map is a checked claim in P102 §3, and a second copy here would be a
-    second place for `backbone.ln1` to be mistaken for a block's.
+    The two things worth not having twice — P102's key map and §8's patch-embed collapse — are
+    **imported from** :mod:`pretrain.init`: R4 warm-started through exactly this translation,
+    every row of that map is a checked claim in P102 §3, and a second copy would be a second
+    place for `backbone.ln1` to be mistaken for a block's.
+
+    The two guards around them *are* restated, and the honest reason is that their originals in
+    :func:`pretrain.init.load_mmselfsup_mae_encoder` are written against a
+    :class:`~pretrain.model.MaskedAutoencoder` — they check a live model's parameters, and there
+    is no live model here, only a state dict on its way into timm. The wording is deliberately
+    the same so a reader who has seen one recognizes the other.
 
     ``sum`` and not ``mean``: for an input identical in every channel — which is what a
     grayscale image replicated to RGB is — the summed kernel reproduces the original
