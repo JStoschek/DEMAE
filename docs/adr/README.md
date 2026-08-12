@@ -21,7 +21,7 @@ existing ADR, surface it rather than silently overriding.
 | [0010](0010-frozen-phase1-release-recipe.md) | The frozen Phase-1 release recipe, and the decision rule that adjudicates arms | Accepted |
 | [0011](0011-terramind-posemb-rederived-at-14x14.md) | TerraMind's position embedding is re-derived at 14x14, not bicubically resized | Accepted |
 | [0012](0012-frozen-feature-extractor-contract.md) | The frozen-feature extractor contract: raw metres in, all twelve blocks out, committed as a file | Accepted |
-| [0013](0013-task1-pre-registration-register.md) | The Task-1 pre-registration register — eleven evidence-use rules, asserted here and anchored in plan §6 | Accepted |
+| [0013](0013-task1-pre-registration-register.md) | The Task-1 pre-registration register — twelve evidence-use rules, asserted here and anchored in plan §6 | Accepted |
 
 ## Supersession
 

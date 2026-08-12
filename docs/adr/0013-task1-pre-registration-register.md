@@ -1,10 +1,18 @@
-# ADR 0013 — The Task-1 pre-registration is a register of eleven rules, asserted here and anchored in §6
+# ADR 0013 — The Task-1 pre-registration is a register of twelve rules, asserted here and anchored in §6
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
+- **Amended by:** Task 1 map, 2026-08-12 ([issue #142](https://github.com/JStoschek/DEMAE/issues/142)) — **R12** added, the
+  first entry admitted by the tunability test after this ADR was written: A2's row carries no C-claim, is insulated
+  from C1 in both directions, its difference against A3 is a joint quantity, and a contingency fires if A2 does not
+  beat A1 in a majority of bands. No existing entry changes. The **register, the §6 index and the counts read
+  twelve**; [Context](#context) and [Alternatives considered](#alternatives-considered) keep their as-accepted
+  figures, because those are measurements taken at `46d90ca` and arguments made against them, and editing them
+  would rewrite the reasoning rather than amend the record. This is the Consequences section's procedure working
+  as specified — one register row and one marked site, with the tunability test deciding admission.
 - **Context ticket:** "Decide whether the pre-registration gets its own ADR, now that it carries seven rules" ([issue #141](https://github.com/JStoschek/DEMAE/issues/141)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
-- **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the eleven rules' own source tickets, cited per row in [The register](#the-register)
-- **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9
+- **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the twelve rules' own source tickets, cited per row in [The register](#the-register)
+- **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9 *(2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142) adds §4.3, R12's home, and §8's risk bullet as a marked site)*
 - **Depends on:** [ADR-0011](0011-terramind-posemb-rederived-at-14x14.md) — its Decisions 4–5 are register entry **R11**, asserted there and pointed at from here, never restated
 
 ## Context
@@ -45,7 +53,8 @@ the 10 m regime and called it "the third time a parameter has outlived its gover
 A twelfth copy of the rules would extend that list, not close it.
 
 **The set is also larger than #141 could count, which is the defect in its clearest form.** The
-ticket lists seven. The register below holds eleven. The four it missed are §5's metric set — the
+ticket lists seven. The register below held eleven at acceptance *(twelve since
+[#142](https://github.com/JStoschek/DEMAE/issues/142))*. The four it missed are §5's metric set — the
 whole of #123's 24,000-instance grading — §5's 100-per-band floor (the ticket cites
 [#135](https://github.com/JStoschek/DEMAE/issues/135) as its worked example without counting the
 rule that example fired), §6 item 7's C3 fallback claim, and ADR-0011's own pre-registered ablation
@@ -58,7 +67,7 @@ existed and fired at 0.9708. The precedent #141 asks whether to set was set at A
 **1. The pre-registration is one ADR for the collection, not one per rule and not prose.** All three
 of this repo's ADR criteria pass, and the first passes at its strongest: "hard to reverse" is not a
 side effect of a pre-registered rule but its definition — a rule revisable after the numbers exist is
-worth nothing. Eleven ADRs would multiply the drift surface elevenfold to record a set whose entire
+worth nothing. Twelve ADRs would multiply the drift surface twelvefold to record a set whose entire
 content is that it *is* a set.
 
 **2. This ADR asserts the rules; the plan sections mark and point.** Each site in §0, §2.2, §2.3,
@@ -72,7 +81,7 @@ writeup verbatim, so it has an external reader this ADR does not. It is the one 
 and it is deliberate because it ships.
 
 **4. §6 item 8 becomes the register's index, and the rules stay beside their topics.** A bare list of
-eleven at item 8 would strip the context that makes each legible — the GSD caveat means something next
+all of them at item 8 would strip the context that makes each legible — the GSD caveat means something next
 to the GSD discussion and little in a list. But the index is what repairs the defect #141 exposed:
 the set becomes **countable**.
 
@@ -80,9 +89,20 @@ the set becomes **countable**.
 are read, reported or compared; and (b) a different choice, made after seeing the numbers, could
 change which conclusion the table supports. "Fixed before the numbers existed" does **not**
 discriminate — this map is plan-only, so it is true of every decision in it. The tunability test
-admits all eleven and correctly excludes the 224 px regime (ADR-0011 Decision 1), which is a setup
+admits all twelve and correctly excludes the 224 px regime (ADR-0011 Decision 1), which is a setup
 decision, not an evidence-use one. The plan already reaches for this test without naming it: §6 item
 8's "worth nothing decided after the numbers existed" *is* this test.
+
+*(Amended 2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142).* The test was turned on the map's own
+fog and returned **R12**, so it has now done prospective work rather than only classifying rules that already
+existed. Two properties of that first application are worth recording, because they are what a future ticket will
+copy. **The test found the rule where no claim pointed at one**: A2 is named by none of C1–C4, which is exactly why
+its 60 printed numbers had no fixed reading — absence of a claim is a *reason to check*, not an exemption.
+And **it separated the tunable half from the untunable one**: the tail risk #142 was chartered on — a large
+A2–A3 gap being reframed after the fact — turned out to be the smaller half, because §4.3's "quantifies precisely
+what the task-adaptation bought" is unsupportable at *every* outcome, the A2→A3 difference confounding task
+adaptation with mask-distribution adaptation and no proposed arm separating them. A test that only guards tails
+would have missed it.)
 
 **6. C1–C4 stay in §0 and do not enter the register.** They are the one part of this complex that is
 **not** duplicated — stated once, in the writeup's own "what this benchmark must show". Pulling them
@@ -111,7 +131,7 @@ machine-checkable form, and inventing one would be the same error #139 refused.
 
 ## The register
 
-Eleven rules. **R11 is asserted in ADR-0011 and pointed at here**, per the header's `Depends on`.
+Twelve rules. **R11 is asserted in ADR-0011 and pointed at here**, per the header's `Depends on`.
 
 | # | Rule | Home | In bar file | Source |
 |---|---|---|---|---|
@@ -127,6 +147,7 @@ Eleven rules. **R11 is asserted in ADR-0011 and pointed at here**, per the heade
 | R9b | **Refusal:** the FSQ diagnostic carries no threshold — the statistic has no natural scale, and one would imply it decides more than it can | §2.2 | ❌ by design | [#139](https://github.com/JStoschek/DEMAE/issues/139), [#140](https://github.com/JStoschek/DEMAE/issues/140) |
 | R10 | C3's low-label sweep is the pre-registered fallback claim; nulls reported with the prominence of wins | §6.7 | ❌ discursive | plan §6 |
 | R11 | Bicubic-vs-re-derived ablation row, A5 at 20k, dropped iff #134 returns ≥ 0.99 | **[ADR-0011](0011-terramind-posemb-rederived-at-14x14.md) D4–5** | ✅ `0.99` | [#134](https://github.com/JStoschek/DEMAE/issues/134) |
+| R12 | A2 carries no C-claim and is insulated from C1 both ways; the A2→A3 difference is joint, never "what task adaptation bought"; negative result if A2 loses to A1 in a majority of bands | §4.3, §6.8 | ❌ discursive | [#142](https://github.com/JStoschek/DEMAE/issues/142) |
 
 R8 and R11 have **already fired**, and both are the argument for the whole arrangement. R8's floor was
 fixed at ~96 projected instances and met a measured 438 — 4.6× its projection — and still produced the
@@ -144,11 +165,15 @@ with, which is the only property that made either worth registering.
 - **§6 is load-bearing in a new way.** It was already "goes in the writeup verbatim"; it is now also
   the anchor a committed file validates against, so editing its registered phrases breaks the build
   session's loader. That is the intended coupling, and it is stated here so it is not discovered.
-- **Four discursive rules stay unmechanised**, R9b irreducibly so. The register makes them countable
+- **Five discursive rules stay unmechanised** *(four until [#142](https://github.com/JStoschek/DEMAE/issues/142)
+  added R12)*, R9b irreducibly so. The register makes them countable
   and attributable; it does not make them enforceable, and claiming otherwise would be the error #139
-  refused.
+  refused. R12 joins them deliberately rather than by omission: its trigger is an *ordering* against A1, so there
+  is no constant for `task1-prereg-bar.json` to hold, which is the same reason its template R10 is discursive.
 - **This ADR asserts nothing new.** Every rule in it was already decided by a closed ticket. If it is
-  ever found to have changed a rule's content rather than its home, that is a defect in this ADR.
+  ever found to have changed a rule's content rather than its home, that is a defect in this ADR. *(R12 arrived
+  with the 2026-08-12 amendment on the same terms — decided by [#142](https://github.com/JStoschek/DEMAE/issues/142),
+  stated in full at §4.3, asserted here.)*
 
 ## Alternatives considered
 
