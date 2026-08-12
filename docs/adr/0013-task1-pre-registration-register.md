@@ -10,6 +10,17 @@
   figures, because those are measurements taken at `46d90ca` and arguments made against them, and editing them
   would rewrite the reasoning rather than amend the record. This is the Consequences section's procedure working
   as specified — one register row and one marked site, with the tunability test deciding admission.
+- **Amended by:** Task 1 build map, 2026-08-12 ([issue #146](https://github.com/JStoschek/DEMAE/issues/146)) — **R1's
+  count corrected and R5 given the printed width**. R1 read "five headline columns, four appendix, nothing else" while
+  plan §5 marked *six* things headline; the reading that reconciles them is that the five are the survivors of the ten
+  candidates [`p123`](../research/p123-metric-discrimination.md) §3 graded, and the seam gap is a **derived** column —
+  the difference of two rows of that same table — which was never one of the ten. Both p123 and
+  [#136](https://github.com/JStoschek/DEMAE/issues/136) already stated the outcome as "five headline columns *plus* the
+  seam gap"; **no document ever decided the gap does not print**, and the plan's arithmetic simply multiplied by five.
+  R1's roster is now **six names**, R5 carries **396** printed numbers (66 cells × 6) in place of 330, and the plan's
+  four copies of the arithmetic were amended in the same change. **No rule's content changed and no metric entered or
+  left the set** — this is a miscount repaired, and repaired **before any arm ran**, which is the only condition under
+  which it was repairable. The counts still read **twelve** rules.
 - **Context ticket:** "Decide whether the pre-registration gets its own ADR, now that it carries seven rules" ([issue #141](https://github.com/JStoschek/DEMAE/issues/141)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the twelve rules' own source tickets, cited per row in [The register](#the-register)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9 *(2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142) adds §4.3, R12's home, and §8's risk bullet as a marked site)*
@@ -135,11 +146,11 @@ Twelve rules. **R11 is asserted in ADR-0011 and pointed at here**, per the heade
 
 | # | Rule | Home | In bar file | Source |
 |---|---|---|---|---|
-| R1 | Metric set: five headline columns, four appendix, nothing else — graded by measured separation | §5 | ✅ names | [#123](https://github.com/JStoschek/DEMAE/issues/123) |
+| R1 | Metric set: ten candidates graded → **five headline plus the derived seam gap** (six printed columns), four appendix, nothing else — graded by measured separation | §5 | ✅ names (6) | [#123](https://github.com/JStoschek/DEMAE/issues/123), [#146](https://github.com/JStoschek/DEMAE/issues/146) |
 | R2 | Pretraining-corpus caveat is symmetric — unavailable to explain a DEMAE loss unless also priced as a discount on a DEMAE win | §2.3, §6.4 | ❌ discursive | [#122](https://github.com/JStoschek/DEMAE/issues/122) |
 | R3 | R5 is the headline unconditionally; an R4 win is reported prominently but never becomes C1's number | §0, §2.3 | ❌ discursive | [#122](https://github.com/JStoschek/DEMAE/issues/122) |
 | R4 | TerraMind's 20 DEM-tokenizer epochs carry their per-modality citation wherever stated — not the paper's 100 | §2.3, §6.4, §10 | ✅ `20` | [#138](https://github.com/JStoschek/DEMAE/issues/138) |
-| R5 | The printed table's shape: which axes pool, blobs headline, the 66-cell C4 rank block | §5, §9 | ✅ axes | [#136](https://github.com/JStoschek/DEMAE/issues/136) |
+| R5 | The printed table's shape: which axes pool, blobs headline, **66 (row, band) cells × 6 columns = 396 printed numbers**, the 66-cell C4 rank block | §5, §9 | ✅ axes | [#136](https://github.com/JStoschek/DEMAE/issues/136), [#146](https://github.com/JStoschek/DEMAE/issues/146) |
 | R6 | Exactly four arm pairs carry a bootstrap CI mark, named in advance, of 55 computed | §5, §9 | ✅ the four | [#136](https://github.com/JStoschek/DEMAE/issues/136) |
 | R7 | A seam gap above **+0.15°** is a seam break | §5 | ✅ `0.15` | [#136](https://github.com/JStoschek/DEMAE/issues/136) |
 | R8 | Real-medium+ is unstratified unless the realised histogram clears **100 per band** | §3.3, §5 | ✅ `100` | [#121](https://github.com/JStoschek/DEMAE/issues/121) |
