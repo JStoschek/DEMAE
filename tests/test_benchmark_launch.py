@@ -57,6 +57,18 @@ def flags(box):
 
 
 @pytest.fixture
+def freeze_flags(flags):
+    """``flags`` with the release encoder unmounted.
+
+    The stub at ``paths.demae_r5_checkpoint`` exists so the resolution line has an md5 to print,
+    and since #156 `freeze` refuses to *pin* a file whose md5 is not the one the plan publishes —
+    correctly, and tested directly below. A freeze test should be about freezing, so it takes the
+    box a rented one actually has: nothing mounted yet.
+    """
+    return [*flags, "--set", "paths.demae_r5_checkpoint=null"]
+
+
+@pytest.fixture
 def frozen(box):
     """The same box after a `freeze` that this ticket does not implement."""
     for name, body in FROZEN.items():
@@ -260,10 +272,54 @@ def test_a_run_past_the_dry_run_refuses_rather_than_pretending(frozen, flags, ca
     assert "DEMAE Task 1" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("verb", ["freeze", "report"])
-def test_the_other_two_verbs_refuse_the_same_way(verb, frozen, flags):
+def test_report_refuses_the_same_way(frozen, flags):
     with pytest.raises(NotImplementedError, match="#147 shipped the command surface"):
-        launch.main([verb, *flags])
+        launch.main(["report", *flags])
+
+
+def test_freeze_writes_the_contract_it_has_and_then_names_the_four_it_does_not(
+    box, freeze_flags, capsys
+):
+    """#156 gave `freeze` its first artifact, and the refusal has to survive that.
+
+    A verb that lands one of five committed inputs and exits 0 reads as a frozen box, which is
+    the ADR-0009 shape this whole module exists to prevent — so it writes what it has, says so,
+    and still raises naming the rest.
+    """
+    from benchmark import extract
+
+    with pytest.raises(NotImplementedError, match="wrote extractor_spec.json and stopped"):
+        launch.main(["freeze", *freeze_flags])
+    out = capsys.readouterr().out
+    written = box / "artifacts" / extract.SPEC_FILENAME
+    assert written.is_file()
+    assert hashlib.md5(written.read_bytes()).hexdigest() in out
+    # And it really is the contract, not a placeholder: it re-checks itself at load.
+    assert extract.load_spec(written).layers == extract.LAYERS
+
+
+def test_freeze_is_idempotent_and_refuses_a_contract_whose_hash_has_moved(box, freeze_flags):
+    """§3.4, at the command rather than at the writer. Re-running `freeze` after a code change
+    must not silently re-draw an input a half-finished run is already scoring against."""
+    from benchmark import extract
+
+    for _ in range(2):
+        with pytest.raises(NotImplementedError):
+            launch.main(["freeze", *freeze_flags])
+    (box / "artifacts" / extract.SPEC_FILENAME).write_text('{"layers": 12}\n')
+    with pytest.raises(FileExistsError, match="content hash has moved"):
+        launch.main(["freeze", *freeze_flags])
+
+
+def test_freeze_refuses_a_box_whose_release_encoder_is_not_the_one_the_plan_pins(box, flags):
+    """The `flags` box mounts a stub at `paths.demae_r5_checkpoint`, and that is now a refusal.
+
+    R5's md5 is published (#156), so freezing there would commit a contract naming weights nobody
+    ran and hand it to Task 2 — and unlike almost everything else in this benchmark, the moment
+    to catch it is while the file is being *written*, not while it is being read.
+    """
+    with pytest.raises(ValueError, match="the demae-r5 encoder this plan benchmarks is"):
+        launch.main(["freeze", *flags])
 
 
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):

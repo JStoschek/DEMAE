@@ -17,13 +17,18 @@ uv run python -m benchmark.launch report              # the printed table, the C
 ``benchmark.train`` and any per-stage ``main`` that appears during the build are documented as
 **not a way to produce a result**, exactly as ``pretrain.train`` is.
 
-## What this ticket shipped, and what it did not
+## What is built, and what is not
 
-The command surface, the frozen run config, the resolution line and ``--dry-run``: the
-pre-flight a build session walks before renting anything. **Nothing is scored here.** Past
-``--dry-run`` every verb raises and names the stage that has not been built yet — deliberately,
-because a verb that quietly returned 0 having done nothing is precisely the shape of failure
-this module exists to prevent, and it is the shape that survived four tickets in Phase 1.
+#147 shipped the command surface, the frozen run config, the resolution line and ``--dry-run``:
+the pre-flight a build session walks before renting anything. #156 gave ``freeze`` the first of
+its five artifacts, ADR-0012's extractor contract (:mod:`benchmark.extract`). **Nothing is
+scored here.**
+
+Past ``--dry-run`` every verb still raises and names the stage that has not been built —
+deliberately, because a verb that quietly returned 0 having done part of its job is precisely
+the shape of failure this module exists to prevent, and it is the shape that survived four
+tickets in Phase 1. It matters more once a verb writes real files than it did when none did: a
+``freeze`` that lands one of five artifacts and exits 0 is read as a frozen box.
 
 ## Why the resolution line is printed before anything is spent
 
@@ -40,7 +45,7 @@ from __future__ import annotations
 import argparse
 from typing import Final, NoReturn
 
-from . import arms, artifacts
+from . import arms, artifacts, extract
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -65,18 +70,17 @@ def format_resolution(resolution: Resolution, *, verb: str) -> str:
     return "\n".join(resolution.lines(verb=verb))
 
 
-def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
+def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     """The far side of the seam, out loud.
 
     Named rather than absent, and raising rather than returning 0, because the alternative is a
-    command that reports success having done nothing — which is the failure ADR-0009 exists to
-    close and the one this repo has a name for.
+    command that reports success having done part of its job — which is the failure ADR-0009
+    exists to close and the one this repo has a name for.
     """
     raise NotImplementedError(
-        f"`{verb}` {does} yet: #147 shipped the command surface, the frozen run config and the "
-        f"resolution line, and nothing behind them. What belongs here is {produces} — see the "
-        f"stage tickets under the Task 1 map (#145) and `docs/task1-build-spec.md`. "
-        f"`--dry-run` is the whole of what this command does today."
+        f"`{verb}` {state}: #147 shipped the command surface, the frozen run config and the "
+        f"resolution line. What belongs here is {produces} — see the stage tickets under the "
+        f"Task 1 map (#145) and `docs/task1-build-spec.md`."
     )
 
 
@@ -88,13 +92,29 @@ def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
 
 
 def _freeze(resolution: Resolution) -> NoReturn:
-    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local."""
+    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
+
+    ADR-0012's extractor contract is written here (#156) and the rest of the freeze is still
+    owed. It is first rather than last because it is the one committed input whose *other*
+    reader is Task 2: a contract that only appeared once the mask bank did would be gated on
+    work the task inheriting it does not depend on. Like every artifact §3.4 governs it is
+    idempotent and refuses to overwrite a version of itself whose content hash has moved.
+
+    Still `NoReturn`, and that matters more now than when this verb wrote nothing: a `freeze`
+    that lands one of five artifacts and exits 0 is read as a frozen box.
+    """
+    written = extract.write_spec(resolution.config)
+    print(f"\nwrote {written}")
+    print(
+        f"{'':<16} ADR-0012's contract, md5 {artifacts.file_md5(written)} — raw int16 metres "
+        f"in, {extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
+    )
     _unbuilt(
         "freeze",
-        "writes nothing",
-        "the four tile lists, the eval mask list, the train mask bank, `extractor_spec.json` "
-        "and `task1-prereg-bar.json` — idempotent, and refusing to overwrite an artifact whose "
-        "content hash has moved (§3.4)",
+        f"wrote {extract.SPEC_FILENAME} and stopped — the rest of the freeze is not built",
+        "the four tile lists, the eval mask list, the train mask bank and "
+        "`task1-prereg-bar.json`, written beside it — idempotent, and refusing to overwrite an "
+        "artifact whose content hash has moved (§3.4)",
     )
 
 
@@ -118,7 +138,7 @@ def _run(resolution: Resolution) -> NoReturn:
         )
     _unbuilt(
         "run",
-        "scores nothing",
+        "scores nothing yet",
         "exactly one (arm, size, seed) cell, appending its rows to the results parquet, having "
         "asserted the extractor contract, the registered bar and the split containment on the "
         "way in (ADR-0012, ADR-0013)",
@@ -129,7 +149,7 @@ def _report(resolution: Resolution) -> NoReturn:
     """`report` — render the table from the results parquet, re-running no arm."""
     _unbuilt(
         "report",
-        "renders nothing",
+        "renders nothing yet",
         "the 396-number printed table, the 66-cell C4 rank block and the three figures, read "
         "from the results parquet and printing nothing R5 does not permit it to print (#136)",
     )
