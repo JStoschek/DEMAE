@@ -6,6 +6,7 @@
 - **Evidence:** terratorch 1.2.10 source (`terramind/tokenizer/models/vit_models.py`); the probe run in [#118](https://github.com/JStoschek/DEMAE/issues/118) §6; the closed-form checks recorded in [Context](#context) below, which need no weights and no GPU
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.2
 - **Materiality check:** [#134](https://github.com/JStoschek/DEMAE/issues/134), pre-registered — **run 2026-08-11, returned 0.9708, so the ablation row this ADR adds stays** ([`p134-posemb-materiality.md`](../research/p134-posemb-materiality.md))
+- **Registered rule:** Decisions 4–5 (the pre-registered ablation row and its ≥ 0.99 materiality threshold) are entry **R11** of the Task-1 pre-registration register, [ADR-0013](0013-task1-pre-registration-register.md). They are asserted **here** and pointed at from there, never restated — the row is inseparable from Decision 2's re-derivation and is meaningless apart from it ([#141](https://github.com/JStoschek/DEMAE/issues/141))
 
 ## Context
 

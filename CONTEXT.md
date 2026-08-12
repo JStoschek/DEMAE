@@ -224,6 +224,9 @@ GitHub issue #1.
   loudly. Choosing a denominator, population, or tolerance *after* seeing which choice
   fires is the peeking the whole arrangement exists to prevent; where such a choice is
   genuinely open, the alternative is published as a sensitivity, never as a second verdict.
+  Phase 2 reuses the *mechanism* and not the object: see **Pre-registration register**, which
+  borrows the "refuses to load a bar whose prose no longer states it" check for Task 1's
+  evidence-use rules but has no pass/fail, no Defect/Finding classes and no stop condition.
 - **Would-be stratum** — the stratum a *gate-dropped* window would have joined, obtained by
   scoring it against the committed `centroids.json` + `scaler.json`. k-means was fit on
   survivors only, so dropped rows carry full metrics and no `stratum_id`; retroactive
@@ -661,6 +664,29 @@ GitHub issue #1.
   plausible-looking function (see **The composition**). Where the two encoders genuinely differ
   they get **named fields, never a shared index**: DEMAE norms after its last block and
   TerraMind does not, so "the last layer" and "block twelve" are two things.
+- **Pre-registration register** — the eleven Task-1 rules governing **how the benchmark's
+  evidence may be used**, asserted together in
+  [ADR-0013](docs/adr/0013-task1-pre-registration-register.md) and indexed at plan §6 item 8
+  ([#141](https://github.com/JStoschek/DEMAE/issues/141)). Distinct from the **C-claims**
+  (what the benchmark must show, plan §0) and from a **contract** (what a component promises
+  a caller): a registered rule constrains how results are *read, reported or compared*.
+  Membership is the **tunability test** — a rule is in iff a different choice, made after
+  seeing the numbers, could change which conclusion the table supports. "Fixed before the
+  numbers existed" does not discriminate, because Task 1's map is plan-only and that is true
+  of every decision in it. Each rule is stated once beside the topic it governs and carries a
+  registration marker; §6 is the single deliberate duplicate, because it ships in the writeup
+  verbatim, and the numeric subset is additionally committed to `task1-prereg-bar.json`, which
+  **refuses to load if the §6 phrase it was registered in no longer appears** — the mechanism
+  borrowed intact from the **Pre-registered bar**. The two are the same discipline on
+  different objects and are deliberately not one term: Gate E's bar is *pass/fail* criteria
+  for a gate, with Defect-versus-Finding classes and a stop condition; this register has no
+  pass/fail at all. Entry **R9b** is a **refusal** — the FSQ diagnostic carries no threshold,
+  because the statistic has no natural scale and one would imply the instrument settles what
+  the GSD shift costs — recorded because reasoning that declines to commit is worth as much
+  as reasoning that commits. Two entries have already fired against their own projections and
+  held (**R8**'s 100-per-band floor, met at 4.6x its projection; **R11**'s 0.99 materiality
+  bar, returned 0.9708), which is the argument for the whole arrangement: neither outcome was
+  available to argue with.
 - **Seam gap / seam break** — the **seam gap** is slope RMSE on the full void mask minus
   slope RMSE on the eroded one, and it is a *signed* diagnostic whose **sign is the signal**:
   a fill that joins the terrain around it scores negative, one that breaks at the void boundary
