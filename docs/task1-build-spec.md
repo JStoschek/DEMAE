@@ -1,0 +1,181 @@
+Closes the hand-off from the Task 1 wayfinder map, [#117](https://github.com/JStoschek/DEMAE/issues/117), whose last open question closed on 2026-08-12 and whose fog is empty. The map declares this work out of its own scope — *"Building `benchmark/` and running any arm — that is the hand-off this map exists to make possible, not part of it."*
+
+**Source of truth:** [`docs/research/task1-void-fill-plan.md`](https://github.com/JStoschek/DEMAE/blob/main/docs/research/task1-void-fill-plan.md), now decision-complete. This spec does not restate its numbers or re-open its decisions; where it names one, the plan section is cited so the two cannot drift. Binding ADRs: [0009](https://github.com/JStoschek/DEMAE/blob/main/docs/adr/0009-one-shipping-entry-point.md) (one shipping entry point), [0011](https://github.com/JStoschek/DEMAE/blob/main/docs/adr/0011-terramind-posemb-rederived-at-14x14.md) (`pos_emb` re-derivation), [0012](https://github.com/JStoschek/DEMAE/blob/main/docs/adr/0012-frozen-feature-extractor-contract.md) (extractor contract), [0013](https://github.com/JStoschek/DEMAE/blob/main/docs/adr/0013-task1-pre-registration-register.md) (the twelve registered rules).
+
+## Problem Statement
+
+Task 1's benchmark exists entirely as a plan. Every hard-to-reverse call has been made and recorded — the arms, the metric set, the mask geometry, the table shape, the twelve registered rules — but nothing in the repository computes a number. A build session that sat down today would have to reconstruct the whole pipeline from a 1,748-line memo and thirteen resolved tickets, and every reconstruction detail it got wrong would be invisible: an encoder fed the wrong normalization returns a plausible tensor and raises nothing, a `pos_embed` loaded with the wrong axis order trains fine, a head that learns nothing scores exactly A1.
+
+Worse, the value of the pre-registration decays the moment a number exists. C1–C4 and the twelve rules in ADR-0013 are only worth anything while they are ahead of the results; a rule discovered to be ambiguous *after* the first table is printed cannot be resolved honestly, because every available resolution now has a known consequence.
+
+And the plan itself already carries one such ambiguity into the build, plus a stale arithmetic line it flagged and did not fix. Both need settling before the first arm runs, not after.
+
+## Solution
+
+A `benchmark/` package with **one shipping command**, `python -m benchmark.launch`, carrying three verbs:
+
+```bash
+uv run python -m benchmark.launch freeze              # write every committed input
+uv run python -m benchmark.launch run --arm A4-R5 --size 20k --seed 0
+uv run python -m benchmark.launch report              # the printed table, the C4 block, three figures
+```
+
+`freeze` writes the tile lists, the eval mask list, the train mask bank, `extractor_spec.json` and `task1-prereg-bar.json`, and is CPU-only and local. `run` executes exactly one (arm, size, seed) cell and appends its rows to the results parquet, having asserted the extractor contract, the registered bar and the split containment on the way in. `report` reads the parquet and renders the 330-number printed table, the 66-cell C4 rank block and the three figures, printing nothing that R5 does not permit it to print.
+
+Determinism is the corpus's contract, one level up: two runs from the committed inputs reproduce the tables. Nothing that reaches the page is drawn at run time.
+
+The deliverable is the benchmark plus its answers — the results memo in `docs/research/` answering C1, C2 and C3 in numbers and C4 in ranks, opening on §0's incomparability paragraph and carrying §6's fairness checklist verbatim.
+
+## User Stories
+
+**Executing the plan without re-litigating it**
+
+1. As a build session, I want one command that runs an arm end to end, so that I never have to discover which of five drivers is the one that actually produces a scored result.
+2. As a build session, I want `freeze` to be idempotent and to refuse to overwrite an artifact whose content hash has moved, so that re-running it after a code change cannot silently re-draw the inputs a half-finished run is already scoring against.
+3. As a build session, I want every registered rule from ADR-0013 to be reachable from code rather than from prose, so that I cannot violate one by not having read §5.
+4. As a build session, I want the numeric subset of the register committed as `task1-prereg-bar.json` with each entry carrying the exact §6 phrase it was registered in, and the loader to refuse a bar whose phrase no longer appears in the plan, so that a threshold cannot move in the file without the run failing loudly.
+5. As a build session, I want `--dry-run` to assemble the whole run — config, artifacts, extractor, arm — and spend nothing, so that I can walk the pre-flight before renting anything.
+6. As a build session, I want the run to print what it resolved before it takes a step (which encoder, which checkpoint md5, which mask bank, which spec, how many instances), so that a run scoring the wrong arm does not look like a normal run.
+7. As a build session, I want to resolve the plan's two known internal inconsistencies before the first arm runs and record the resolution in the plan, so that neither is settled after a number exists.
+
+**The committed inputs**
+
+8. As a benchmark operator, I want the head-train, val, test and label-efficiency tile lists committed as artifacts in the `pretrain.artifact` format, so that the benchmark joins the contract family whose rule is that the committed file is what later phases re-read.
+9. As a benchmark operator, I want the 20,000 head-train tiles drawn from *train* geocells stratified proportionally over the corpus's k=20 strata under a recorded seed, so that the draw is a file rather than a reproduction of an RNG.
+10. As a benchmark operator, I want the 1k ⊂ 5k ⊂ 20k label-efficiency subsets nested, so that C3's sweep measures data volume rather than draw luck.
+11. As a benchmark operator, I want the 5,000 test tiles drawn from *test* geocells only, and split containment asserted at construction exactly as a Phase-1 Dataset asserts it, so that a benchmark cannot score on ground the encoder pretrained on.
+12. As a benchmark operator, I want the eval mask list committed as `(tile_id, family, bucket, mask_rle, seed)` — 30,000 synthetic rows plus the real family's 9,978 — so that every arm sees byte-identical inputs and the C4 comparison is confound-free by construction.
+13. As a benchmark operator, I want the train mask bank of K = 50 draws per head-train tile written once and read by every arm, seed and config, so that per-epoch mask variation is preserved exactly without head training becoming loader-bound.
+14. As a benchmark operator, I want both mask artifacts to carry the same generator and the same config hash, so that the determinism contract is one contract rather than two.
+15. As a benchmark operator, I want the generator's constraints checked on every draw rather than assumed — voids fully interior at ≥ 8 px from the tile edge, area ≤ 40% of the tile, equivalent diameter within its bucket — so that no draw is ever silently trimmed.
+16. As a benchmark operator, I want the real-void family built by transplanting SRTM void shapes onto stratum-matched clean GLO-30 test tiles with the mask cropped and pasted rather than resampled, so that the family carries real geometry and not an interpolation artifact.
+17. As a benchmark operator, I want each real void's ruggedness band computed from GLO-30 at the void's own coordinates and never inferred from the surrounding SRTM pixels, so that the assignment is not biased systematically flat.
+18. As a benchmark operator, I want `|lat| < 50` asserted rather than discovered for every real-void source cell, so that the same-lattice premise the transplant rests on cannot fail silently poleward.
+19. As a benchmark operator, I want the eval mask list to record the real family's excluded components — the >160 px tail and the 705 in the sub-row gaps — as counts, so that the published histogram states what the tile geometry and the sub-row boundaries cut off.
+20. As a benchmark operator, I want a dataset card documenting the tile lists, both mask artifacts, the generator's config hash and the three sets of data terms, so that a reader can see the module commits tile lists and masks and never tiles.
+
+**The extractor contract**
+
+21. As a Task 2 build session, I want the extractor to be a committed `extractor_spec.json` I re-read rather than a description I re-implement, so that both tasks' C1 claims are about the same features.
+22. As a build session, I want the extractor to take raw int16 metres plus a valid-pixel mask and apply its own declared normalization, so that handing it the pretraining loader's per-tile-standardized output is not expressible rather than merely tested against.
+23. As a build session, I want `valid = land ∧ ¬void`, so that Task 1's non-void statistics and Task 2's clean-tile statistics are one code path.
+24. As a build session, I want per-tile statistics always recomputed from the passed mask and never read from the manifest, so that no branch exists that only one task exercises.
+25. As a build session, I want the extractor to emit all twelve block outputs *plus* a separately named `output` field, so that DEMAE's post-`LayerNorm` tensor and its `intermediates[11]` are never confused for one another.
+26. As a build session, I want the spec to re-check itself at load and refuse rather than warn — encoder identity and checkpoint md5, TerraMind's constants selected by the named v1 lookup *and* checked against `670.665 / 951.272`, shape and layer count, and ADR-0011's `pos_emb` derivation as a declared field — so that a wrong-diet arm cannot run to completion.
+27. As a build session, I want the spec's md5 recorded in the benchmark's run record and explicitly *not* in Phase 1's frozen four-field data fingerprint, so that a results table says which contract produced it without moving a hash four committed artifacts quote.
+28. As a build session, I want the TerraMind arm's fp32-versus-compute-dtype agreement measured on first run rather than inherited from the DEMAE-family figure, so that the unmeasured half is closed rather than assumed.
+
+**The arms**
+
+29. As a build session, I want A1 to run first and its numbers to gate everything else, so that the classical baseline every learned arm is a residual over is established before any head trains.
+30. As a build session, I want every frozen-encoder arm to predict a residual over the A1 fill, so that a head that learns nothing scores exactly A1 and the table stays legible.
+31. As a build session, I want A4, A5 and A6 to share one byte-identical head differing only in input channel width, so that C1 isolates the representation and nothing else.
+32. As a build session, I want head hyperparameters tuned once on A6 using val only and then frozen for every arm, so that no thumb lands on the scale.
+33. As a build session, I want each arm's `pos_embed` materialized from its own run config and loaded strictly, so that R4's `sincos2d_rowfirst` and R5's `sincos2d` cannot be swapped by a `strict=False` load that silently succeeds.
+34. As a build session, I want TerraMind's position embedding re-derived as the centre-anchored 14×14 crop rather than bicubically resized, so that both encoders are in-distribution at 224 px simultaneously and C1 cannot be dismissed with "you crippled the baseline".
+35. As a build session, I want the A5-at-20k bicubic-versus-re-derived ablation row to run, so that the ADR-0011 intervention is evidenced in the results rather than asserted in prose.
+36. As a build session, I want A2 to run zero-shot with no trained head and its row reported under R12 — no C-claim, insulated from C1 in both directions, the A2→A3 difference reported as a joint quantity — so that a decoder result cannot be read as a representation result in either direction.
+37. As a build session, I want A2 reported as a negative result if it does not beat A1 in a majority of the four ruggedness bands on RMSE, so that a zero-shot failure is stated rather than narrated as the baseline half of a delta.
+38. As a build session, I want A3 to read the same mask bank the frozen arms train against, so that its adaptation geometry and their training geometry are the same draws rather than merely the same distribution.
+39. As a build session, I want A3's inference composite to cross-fade 16 px at patch boundaries inside the void and to average four shifted encodings for near-tile-scale voids, so that the patch grid does not print as a seam the seam-gap column then charges it for.
+40. As a build session, I want A7 trained from scratch at every label-efficiency size under the same loss, schedule length and seeds, so that C3's from-scratch bar is a real bar.
+41. As a build session, I want A9's per-instance cost measured before the full pass is committed to, so that the one unpriced line in §7 stops being unpriced rather than becoming the bill.
+42. As a build session, I want the ViT-S appendix cells (A4-S, A6-S at 20k, one seed) reported as single observations without a ±, so that they do not read as a capacity bracket the plan explicitly demoted.
+
+**Scoring**
+
+43. As a build session, I want every metric computed only inside the void and always in metres after inverting the per-tile transform with non-void statistics, so that no arm is ever scored in its own normalized space.
+44. As a build session, I want an identity-mask test asserting `fill(identity-mask) == input` and a golden-tile fixture with a hand-checked fill gating every arm's eval, so that a norm-inversion bug cannot silently flatter or sabotage an arm.
+45. As a build session, I want slope computed from the Zevenbergen–Thorne quadratic surface and asserted numerically identical to the corpus's own `dataset.metrics.slope_deg`, so that benchmark slope and the `slope_mean` defining the ruggedness bands stay the same quantity.
+46. As a build session, I want derivative metrics scored on the *full* void mask with the eroded-mask score kept as a contamination control, so that the boundary ring where a discontinuous fill is caught is not eroded away.
+47. As a build session, I want the seam gap computed as full-minus-eroded slope RMSE and compared against the +0.15° threshold fixed before any arm ran, so that the operational half of C2 is auditable rather than assumed.
+48. As a build session, I want mean per-instance |bias| reported and the pooled mean signed error refused, so that a fill sitting at the wrong absolute level is visible rather than cancelled to a null column.
+49. As a build session, I want the four ruggedness bands cut as quartiles of `slope_mean` over the eligible test pool, so that the stratification is a defined operation rather than a collapse of k-means labels that carry no ordering.
+50. As a build session, I want a (row, band) cell with fewer than 100 instances reported as a count with no metric, so that R8's floor fires rather than being pooled into a neighbouring band.
+51. As a build session, I want the bootstrap to resample test *tiles* rather than instances, so that ~7 real voids sharing one host tile's terrain do not overstate precision by up to √7.
+52. As a build session, I want exactly the four pre-registered arm pairs to carry a CI mark and the other 51 computed and left unmarked, so that which comparisons matter is fixed by the claims rather than by which ones cleared zero.
+
+**Reading the result**
+
+53. As a writeup reader, I want the printed table to be the pre-registered subset and nothing else — blob family headline, size buckets pooled, all four bands whole — so that the table's shape was not chosen to flatter its contents.
+54. As a writeup reader, I want C4 printed as a 66-cell rank block rather than three columns of metres, so that I am handed the ordering claim rather than a subtraction the caption forbids.
+55. As a writeup reader, I want the appendix metrics computed into the parquet and printed nowhere, so that the noise 24,000 instances were spent removing is not re-imported.
+56. As a writeup reader, I want the RMSE-versus-void-size figure, the label-efficiency curve and the hillshade panel, all three marked load-bearing, so that C2's "at every void size" and the visual-quality evidence exist somewhere.
+57. As a writeup reader, I want seed spread in the parquet plus one printed maximum, so that a ± does not imply a seed structure six of the eleven arm rows do not have.
+58. As a writeup reader, I want parameter counts printed total *and* trainable, so that A7's 17M does not read as handicapped beside A4's 86.4M when it in fact trains 14× more.
+59. As a writeup reader, I want the memo to open on §0's incomparability paragraph, so that I do not arrive at the table expecting a competitor column and read its absence as an omission.
+60. As a writeup reader, I want §6's fairness checklist reproduced verbatim, so that the caveats ship with the numbers rather than beside them.
+61. As a skeptical reviewer, I want every registered rule's disposition stated in the memo — including the two that already fired against their own projections — so that I can check the pre-registration did work rather than take it on trust.
+
+## Implementation Decisions
+
+**Package shape and the one entry point.** A new `src/benchmark/` package, torch-optional in the same way `src/dataset` is: the freeze and scoring paths import no torch, so the artifacts and A1 can be built on a box with no CUDA stack. `python -m benchmark.launch` is the only command that trains, scores or reports — ADR-0009's rule carried into Phase 2, for the reason it was written: *a seam that nobody is on both sides of is a feature that does not exist*. Three verbs, `freeze`, `run` and `report`. `benchmark.train` and any per-stage `main` that appears during the build are documented as not a way to produce a result, exactly as `pretrain.train` is.
+
+Modules, roughly one per plan section, each importable and none of them a second command:
+
+- `benchmark.config` — the frozen run object, `pretrain.config.RunConfig`'s sibling: every knob from §4 at its cited default, round-tripping to a partial dict, hashing to a **config hash** that covers the recipe and not the environment paths. An arm is this object with a knob moved.
+- `benchmark.tiles` — the four tile-list draws and the split-containment assertion.
+- `benchmark.masks` — the mask generator (blob, rectangle, real transplant), the RLE codec, the eval mask list and the train mask bank. Promoted from `prototypes/p119_fill_headroom_proto.py`'s generator and `prototypes/p121_{masks,bank}.py`, which are the code the measured constraint checks were run against.
+- `benchmark.voids` — real SRTM void extraction, the `num > 10 AND num < 201` predicate with its documented strict flag, component labelling, the size sub-rows, and GLO-30-sourced band assignment. Promoted from `prototypes/p135_void_ruggedness_proto.py` and `scripts/p127_fetch_srtm_voids.py`.
+- `benchmark.extract` — ADR-0012's contract: the extractor, the `extractor_spec.json` writer, and the loader that re-checks and refuses.
+- `benchmark.head` — the shared conv head for A4/A5/A6.
+- `benchmark.arms` — one registry entry per arm, each declaring its encoder, its trainable part, its input convention and its normalization; the run verb dispatches on it.
+- `benchmark.metrics` — `score(truth, filled, void, px) -> dict`, the graded metric set. Promoted from `prototypes/p123_metric_discrimination_proto.py`, whose ZT kernel is the one the 0.0006° divergence was measured on.
+- `benchmark.results` — the results parquet schema, the run record, and the bootstrap.
+- `benchmark.prereg` — `task1-prereg-bar.json` and its §6-phrase refusal, borrowing `dataset.validate`'s mechanism intact.
+- `benchmark.report` — the printed table, the C4 rank block, the three figures.
+
+**Committed inputs, and where the 740 MB goes.** The tile lists, the eval mask list (~40k rows), `extractor_spec.json`, `task1-prereg-bar.json` and the dataset card are committed to git. The train mask bank is **1,000,000 RLE rows at ~740 MB and cannot be**, on the same rule the corpus's shards follow: it is generated once by `freeze`, its md5 and generator config hash are committed in a sidecar, and `run` refuses a bank whose md5 does not match. This preserves the determinism contract — the mask sequence a run sees is still a committed input, its *hash* rather than its bytes — and it is the one place this spec resolves something the plan left implicit. State it in the dataset card rather than letting a reader infer that 740 MB is in the repository.
+
+**Arm registry.** A1 (classical fill — `gdal_fillnodata`-class, rasterio `fillnodata`, TPS variant), A2 (DEMAE zero-shot), A3 (DEMAE fine-tuned), A4 (DEMAE frozen + head), A5 (TerraMind frozen + head), A6 (ImageNet-MAE frozen + head), A7 (UNet from scratch), A9 (tokenizer pass-through). A2/A3/A4 each split R5/R4, giving the eleven printed arm rows. A8 and A10 do not exist in the registry — they are out of scope and adding a disabled entry for either would put a ruled-out arm back on a surface someone reads.
+
+**The head.** LayerNorm on patch tokens → 1×1 conv to 256 → four stages of [3×3 conv, GroupNorm, GELU, 2× bilinear upsample] at (256, 128, 64, 32), with the full-resolution void mask concatenated at each stage's input and a 1-channel residual output added to the A1 fill. **1.08M parameters at 384-d and 1.18M at 768-d** — §4.1's "~3M" is wrong and §7 says so; print the corrected figures. Loss is masked L1 on void pixels in metres plus 0.1× an L1 slope-consistency term on Sobel gradients inside the void. AdamW, lr 1e-3, wd 0.05, cosine to 0, 5% warmup, bf16, batch 128, 50 epochs on the 20k set, early stop on val RMSE.
+
+**Extractor interface.** `extract(raw_i16, valid_mask, *, arm) -> Features` where `Features` carries `output`, `intermediates` (twelve, ordered), and `cls` (DEMAE family only, `None` for TerraMind). Canonical layout `(N, 196, D)`, row-major. fp32 is the reference; compute dtype is a declared field per task; storage dtype is outside the contract. The spec file's fields and its four load-time checks are ADR-0012's, unchanged.
+
+**Results parquet.** One row per (arm, init, size, seed, family, bucket, band, tile_id, instance) carrying every metric in the graded set — headline and appendix — plus the eroded-mask slope, the instance's void area and equivalent diameter, and the mask's RLE hash. **Computed and printed are different questions**: nothing that collapses an axis for print discards a number, so `report` is a pure function of this file and re-rendering the table never re-runs an arm. The run record beside it carries the config hash, the extractor spec md5, the mask bank md5, the tile-list md5s, the git SHA, and each arm's total and trainable parameter counts.
+
+**Two plan inconsistencies to settle before the first arm runs.** Both are pre-registration-shaped, so both must be resolved and recorded in the plan while no number exists:
+
+1. **Five headline columns or six.** §5 marks six things headline — RMSE, NMAD, mean per-instance |bias|, slope RMSE, slope-weighted aspect error, and the seam gap — while R1 and #136's printed-table arithmetic (330 = 11×4×5 + 11×2×5) both say five. The reading that makes every statement true is that **R1's five are the five survivors of the ten graded candidates**, and the **seam gap is a derived column outside that grading** — it is free by construction, was invented in #123 as drainage's replacement, and was never one of the ten. Under that reading the printed table is six columns wide and 396 numbers, not 330. The build session should confirm this reading with the map's owner, amend §5, R1, R5 and #136's count together, and record which of the two counts the table prints. It must not be settled by whichever choice the first table makes look better.
+2. **§7's stale presentation count.** The 34.4M training tile presentations, and every 19.1 CPU-h / 1M / 33 min / 740 MB figure derived beside it, were counted against §7's table *before* §2.3's rewrite cut the ViT-S cells to one seed and took R4 out of the label sweep. §7 flags them as upper bounds wanting re-derivation. Re-derive them against the current 39-pass shape during `freeze` and print the actual bank size and generation time. The bank-versus-on-the-fly conclusion is not in doubt at a 7.5× margin; the printed numbers are.
+
+**What is not re-decided here.** The size buckets and their 158 px top, the +0.15° seam threshold, the four bootstrap pairs, R5 as the headline, the 20-epoch TerraMind citation, the metric grading, the real family's R4-only stratification, and the twelve registered rules are all settled records. If the build finds one wrong, it surfaces it as an amendment against the plan and ADR-0013 — it does not route around it.
+
+## Testing Decisions
+
+**What makes a good test here.** The suite is ~1,600 tests and is the gate before every push; there is no typechecker, so pytest is the only gate. A good test drives the shipping entry point far enough to see an artifact, and asserts external behaviour: a file exists with the rows it should have, a table prints the columns it is allowed to print, a wrong input is refused. This repo has a named failure — *the composition* — for the shape where every piece is tested and nothing calls them together, and the standing defence is a test that drives `main(argv)` rather than one that drives each piece.
+
+**Seam 1 — `benchmark.launch.main(argv)`, the primary.** Nearly every behaviour test attaches here, against a tiny fixture corpus built by `tests/conftest.py`'s existing `build_corpus` (a test geocell, a val COG, controllable geography) and a stub encoder. Prior art is `tests/test_pretrain_launch.py`, and the three tests ADR-0009 named — `test_the_shipping_command_writes_a_checkpoint`, `..._opens_a_run_and_logs_the_epoch_panel`, `..._carries_the_recipe_the_run_was_launched_with` — are the template. The benchmark's equivalents: the shipping command writes rows to the results parquet; the run record carries the recipe, the extractor spec md5 and the mask bank md5 the run was launched with; `report` renders from the parquet without re-running an arm; a typo'd override stops before the corpus is touched; `--dry-run` assembles everything and writes nothing; `freeze` is idempotent and refuses a changed artifact; a mask bank whose md5 has moved is refused rather than read.
+
+**Seam 2 — `benchmark.extract`, mandated rather than chosen.** A second consumer (Task 2) re-reads this contract, and ADR-0012 Decision 4 explicitly requires Task 1 to test the intermediates path *even though no Task 1 arm reads it* — shapes, ordering, count, and the layer-12-versus-`output` relation on both sides. No launch-level behaviour exercises that path, so the test cannot attach at seam 1. Also here: the spec refuses a wrong checkpoint md5; refuses TerraMind constants that resolve by name to a value other than `670.665 / 951.272`; refuses a declared layer count that does not match the model loaded; recomputed statistics reproduce the manifest's stored `mean`/`std` within the measured bound over a tile sample; and a pre-normalized tensor is not a thing the interface accepts.
+
+**Seam 3 — `benchmark.metrics.score(...)`, for the numeric identities.** The claims that are equalities against another module or against a fixed constant, which read badly through a CLI: ZT slope equals `dataset.metrics.slope_deg` to 0.0006° over a tile sample; NMAD equals `1.4826 · median|Δh − m|`; the seam gap equals full-mask minus eroded-mask slope RMSE by construction; +0.15° is read from `task1-prereg-bar.json` rather than typed; aspect error is circular; a metric requested outside the graded set raises rather than being computed. §8's **golden-tile fixture** — a committed tile with a known void and a hand-checked fill — lives here and is also driven through seam 1 as A1, so the same numbers are asserted at both altitudes.
+
+**Modules tested through seam 1 rather than directly:** `benchmark.tiles` (assert the committed lists' composition and that a contaminated split is refused), `benchmark.masks` (assert the constraint checks fire over a draw sample — zero cap violations, zero interiority violations, buckets by equivalent diameter — and that the bank's K = 50 rows per tile differ), `benchmark.voids` (assert the predicate yields a non-empty mask, that the `num == 0` rule yields an empty one and is therefore refused, that bands come from GLO-30 and not from the SRTM surround, and that `|lat| ≥ 50` is rejected), `benchmark.report` (assert the printed table's shape is exactly R5's, that an appendix metric never reaches print, that exactly four pairs carry a CI mark, and that a sub-100-instance cell prints a count and no metric), `benchmark.prereg` (assert the bar refuses to load when a registered §6 phrase is edited out of the plan — the mechanism `dataset.validate` already ships).
+
+**Prior art to follow:** `tests/test_pretrain_launch.py` for entry-point tests, `tests/test_validate.py` for the bar-phrase refusal, `tests/test_masks.py` and `tests/test_metrics.py` for numeric-identity style, `tests/test_p127_fetch_srtm_voids.py` for testing a fetch path without a network, and `tests/conftest.py`'s `build_corpus` for the fixture corpus. Every write goes to `tmp_path`; nothing shares mutable state, because the suite runs sharded under `pytest-xdist`.
+
+**What is not tested:** GPU throughput, and any claim about the *magnitude* of a result. The benchmark's job is to produce numbers; asserting a particular number in a test would pre-empt the very claims the pre-registration exists to leave open.
+
+## Out of Scope
+
+- **A8 (Diff-DEM cross-eval) and A10 (GeomorPM cross-eval).** Both ruled out and closed off in #128; §0 now carries the strong form — incomparable, and we looked. Not to be added as disabled registry entries.
+- **The secondary 10 m TerraMind-native regime.** Reaffirmed out of scope in #139 on stronger evidence than the ruling had. What stands in its place is §2.2's measured, symmetric caveat, already landed.
+- **Task 2 (landform classification) and the cross-cutting representation study.** Own plan doc, own map. This build fixes the extractor contract Task 2 inherits and nothing else; `task2-landform-plan.md`'s three stale feature-cache references are Task 2's map to fix, not this spec's.
+- **Re-opening any Phase-0 or Phase-1 decision** — the tiling, the strata, the split, per-tile normalization, the frozen release recipe. Moving the primary regime to 256 px is specifically refused, since it would retile the corpus.
+- **Amending the metric set, the bucket boundaries, the seam threshold or the table shape** on the basis of a result. Those are registered rules; an amendment needs a ticket and an ADR amendment, in that order.
+- **A feature cache.** Priced at a $0.50 saving against a design constraint it breaks; the encoder runs inline.
+- **Spot-instance or resume machinery.** §7's measured total is 2.47 GPU-hours with a 46-minute longest job. Heads checkpoint per epoch like everything else in this repo and that is the whole of it.
+
+## Further Notes
+
+**The budget is not the constraint and should stop being treated as one.** $0.99 of GPU against a $25 target, on the project's own laptop for the CPU hours. The real budget is attention and wall-clock: the largest single line is the 2.0–5.2 CPU-hours of eval scoring, and the combinatorics of arms × families × buckets × bands × seeds produce a table nobody can read long before they produce a bill anyone can feel. The one number that could still move the total is A9's unpriced diffusion decode — at 1 s/instance it is 11.1 GPU-hours, 4.5× the whole table. Measure it early.
+
+**Everything needed is already on disk.** The 47 GB `corpus_500k` shards, the committed split, the R4 and R5 release encoders under `.release-work/`, the 24 fetched SRTMGL1N granules under `data/srtm_voids/`, and the p135 component catalog. The laptop has MPS, so non-CPU work reproduces locally and "needs a rented GPU" is usually false. A *new* DAAC would still need a human's consent click; nothing here does.
+
+**Pin `diffusers` in the benchmark's own environment**, at the version the TerraMind path is verified on (terratorch 1.2.10 / diffusers 0.39.0 in p118). terratorch declares a bare `diffusers`, so nothing is pinned and a future release can break the tokenizer import with no lockfile signal.
+
+**Order of operations** is §4.5's, with §7's pass breakdown as the authority on cell and seed counts — §4.5 orders them and has drifted from them once already. Freeze, then A1 plus the norm-inversion and golden-tile gates, then head tuning on A6/val, then the four primary frozen cells at three seeds plus A7 at three and the two ViT-S cells at one, then the 1k/5k sweep, then A3, then A2 and A9.
+
+**When the build finds the plan wrong.** It will; this map found a stale parameter outliving its governing ruling three separate times, and ten sites still carrying an arm ruled out at charting. The disposition is the one the map used throughout: amend the section in flight, record it against the ticket, and if it touches a registered rule, amend ADR-0013 in the same change. There is no big-bang rewrite.
