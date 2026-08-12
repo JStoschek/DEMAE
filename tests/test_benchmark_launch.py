@@ -260,10 +260,20 @@ def test_a_run_past_the_dry_run_refuses_rather_than_pretending(frozen, flags, ca
     assert "DEMAE Task 1" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("verb", ["freeze", "report"])
-def test_the_other_two_verbs_refuse_the_same_way(verb, frozen, flags):
-    with pytest.raises(NotImplementedError, match="#147 shipped the command surface"):
-        launch.main([verb, *flags])
+def test_report_refuses_the_same_way(frozen, flags):
+    with pytest.raises(NotImplementedError, match="`report` renders nothing yet"):
+        launch.main(["report", *flags])
+
+
+def test_freeze_refuses_after_doing_the_part_of_its_job_that_exists(frozen, flags):
+    """#149 built the tile stage, so `freeze` writes and *then* names what is still missing.
+
+    The refusal is what keeps "the box is frozen" from being claimed by a partial run. What
+    `freeze` actually commits is asserted in `test_benchmark_tiles.py`, against a corpus — this
+    box has none, which is why the draw is the thing that fails here.
+    """
+    with pytest.raises(FileNotFoundError, match="manifest.parquet"):
+        launch.main(["freeze", *flags])
 
 
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):

@@ -40,7 +40,7 @@ from __future__ import annotations
 import argparse
 from typing import Final, NoReturn
 
-from . import arms, artifacts
+from . import arms, artifacts, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -70,13 +70,13 @@ def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
 
     Named rather than absent, and raising rather than returning 0, because the alternative is a
     command that reports success having done nothing — which is the failure ADR-0009 exists to
-    close and the one this repo has a name for.
+    close and the one this repo has a name for. A verb that has done *part* of its job raises
+    the same way, after doing that part: "wrote three of seven inputs" is a state a build
+    session must be told about, and a 0 would say the box was frozen.
     """
     raise NotImplementedError(
-        f"`{verb}` {does} yet: #147 shipped the command surface, the frozen run config and the "
-        f"resolution line, and nothing behind them. What belongs here is {produces} — see the "
-        f"stage tickets under the Task 1 map (#145) and `docs/task1-build-spec.md`. "
-        f"`--dry-run` is the whole of what this command does today."
+        f"`{verb}` {does} yet. What belongs here is {produces} — see the stage tickets under "
+        f"the Task 1 map (#145) and `docs/task1-build-spec.md`."
     )
 
 
@@ -88,13 +88,25 @@ def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
 
 
 def _freeze(resolution: Resolution) -> NoReturn:
-    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local."""
+    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
+
+    §3.1's five tile lists are written (#149); the rest is later tickets. They are written
+    **first** and their md5s printed, because everything after them is a function of the
+    head-train draw: the bank is K draws per head-train tile and the eval mask list is per test
+    tile, so a stage that failed later leaves behind exactly the inputs the next attempt
+    reproduces byte-for-byte.
+    """
+    print()
+    for line in tiles.format_written(
+        tiles.freeze(resolution.config), resolution.config.paths.artifacts_dir
+    ):
+        print(line)
     _unbuilt(
         "freeze",
-        "writes nothing",
-        "the four tile lists, the eval mask list, the train mask bank, `extractor_spec.json` "
-        "and `task1-prereg-bar.json` — idempotent, and refusing to overwrite an artifact whose "
-        "content hash has moved (§3.4)",
+        "has written §3.1's tile lists and nothing else",
+        "the eval mask list, the train mask bank, `extractor_spec.json` and "
+        "`task1-prereg-bar.json`, plus §3.4's rule over the whole committed set — idempotent, "
+        "and refusing to overwrite any artifact whose content hash has moved",
     )
 
 

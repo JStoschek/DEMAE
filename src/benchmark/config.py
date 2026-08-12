@@ -469,6 +469,10 @@ class Paths(_Frozen):
 
     corpus_dir: str = "data/corpus_500k"
     split_assignment_path: str = dataset_config.SPLIT_ASSIGNMENT_PATH
+    #: #77's committed block lists — what was held out *as a block*. Read beside the blocks the
+    #: manifest's own ``split`` column implies, because neither subsumes the other (#89), and
+    #: the union is what §3.1's four tile draws are checked against at construction (#149).
+    split_blocks_path: str = dataset_config.SPLIT_BLOCKS_PATH
     #: Where the committed inputs live: the four tile lists, the eval mask list, the extractor
     #: spec, the pre-registration bar and the dataset card.
     artifacts_dir: str = "artifacts/task1"

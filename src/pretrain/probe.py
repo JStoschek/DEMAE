@@ -75,6 +75,7 @@ import numpy as np
 import torch
 
 from dataset import config as dataset_config
+from dataset import containment
 
 from .artifact import read_tile_strata, write_tile_strata
 from .config import PROBE_POOLINGS, RunConfig
@@ -113,9 +114,10 @@ PROBE_COLUMNS: Final = (
     *PROBE_REGRESSION_TARGETS,
 )
 
-#: How many offending tiles an error message names before it stops listing — `pretrain.data`'s
-#: number, for the same reason: enough to tell one relabelled tile from a whole stale artifact.
-_MAX_NAMED: Final = 5
+#: How many offending tiles an error message names before it stops listing —
+#: :data:`dataset.containment.MAX_NAMED`, quoted rather than retyped: enough to tell one
+#: relabelled tile from a whole stale artifact.
+_MAX_NAMED: Final = containment.MAX_NAMED
 
 
 # --- The committed probe set --------------------------------------------------
@@ -168,11 +170,12 @@ def draw_probe_set(
     Run **once per tier**, and its output committed. Two properties, and each is one of the
     ways a probe number stops being comparable:
 
-    - **Stratified proportionally**, through :func:`dataset.sampling.band_quotas` — the
-      project's one largest-remainder apportionment, reused rather than rewritten. A probe set
-      that over-weighted a stratum would report an accuracy about a population the corpus does
-      not have; capped per stratum, so a split short on a stratum yields fewer rather than
-      raising.
+    - **Stratified proportionally**, through :func:`dataset.sampling.stratified_draw` — the
+      project's one apportion-then-take-the-lowest-ranked, over
+      :func:`~dataset.sampling.band_quotas`' largest remainders, shared with Task 1's tile lists
+      rather than rewritten. A probe set that over-weighted a stratum would report an accuracy
+      about a population the corpus does not have; capped per stratum, so a split short on a
+      stratum yields fewer rather than raising.
     - **Ordered by keyed hash**, through :func:`dataset.splits.tie_rank`. The house rule
       (`dataset.sampling`): NumPy guarantees its bit-generator streams across releases but not
       the distributions layered on them, so every tie-break in this project is a BLAKE2b of the
@@ -182,7 +185,7 @@ def draw_probe_set(
     val tiles against a 5k budget, but a debug tier has fewer, and a draw that raised would
     make the probe unusable exactly where it is cheapest to exercise.
     """
-    from dataset.sampling import band_quotas
+    from dataset.sampling import stratified_draw
     from dataset.splits import tie_rank
 
     cols = _read_columns(manifest_path, ("tile_id", "split", PROBE_CLASS_LABEL))
@@ -195,19 +198,8 @@ def draw_probe_set(
     tile_id = cols["tile_id"][rows].astype(str)
     stratum = cols[PROBE_CLASS_LABEL][rows].astype(np.int64)
 
-    # Keys are the stratum ids as sortable strings: `band_quotas` breaks its own ties on the
-    # key name, so zero-padding is what keeps the apportionment independent of `str` ordering.
-    caps = {f"{s:03d}": int((stratum == s).sum()) for s in np.unique(stratum)}
-    quotas = band_quotas(caps, size, allocation="proportional")
-
-    rank = tie_rank(tile_id, seed)
-    chosen: list[int] = []
-    for key, quota in quotas.items():
-        within = np.flatnonzero(stratum == int(key))
-        chosen.extend(within[np.argsort(rank[within], kind="stable")][:quota].tolist())
-
-    order = np.argsort(tile_id[chosen], kind="stable")
-    picked = np.asarray(chosen)[order]
+    chosen = stratified_draw(stratum, tie_rank(tile_id, seed), size)
+    picked = chosen[np.argsort(tile_id[chosen], kind="stable")]
     return ProbeSet(
         tile_id=tuple(tile_id[picked].tolist()),
         stratum_id=tuple(int(s) for s in stratum[picked]),
