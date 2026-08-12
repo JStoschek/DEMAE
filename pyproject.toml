@@ -82,4 +82,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dataset", "src/pretrain"]
+packages = ["src/dataset", "src/pretrain", "src/benchmark"]
