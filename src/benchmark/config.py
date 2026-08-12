@@ -16,12 +16,12 @@ beside the plan and check it line by line.
   the one knob it moves, nothing else. An unknown group and an unknown knob both raise, because
   a typo that silently keeps the default is a run that reports the recipe it was *asked* for
   and scores the one it defaulted to.
-- **Hashes to a stable :attr:`BenchmarkConfig.config_hash`.** A keyed hash over canonical JSON,
-  not :func:`hash` (which ``PYTHONHASHSEED`` randomizes per process), so two boxes agree. It
-  covers the **recipe** and deliberately not :class:`Paths` — where the corpus, the artifacts,
-  the bank and the encoder checkpoints are mounted. §11's argument carried into Phase 2: a
-  rented box mounts them somewhere else, and a hash that moved with the mount point would read
-  every relaunch as a config change.
+- **Hashes to a stable :attr:`BenchmarkConfig.config_hash`.** A content hash over canonical
+  JSON, not :func:`hash` (which ``PYTHONHASHSEED`` randomizes per process), so two boxes agree.
+  It covers the **recipe** and deliberately not :class:`Paths` — where the corpus, the
+  artifacts, the bank and the encoder checkpoints are mounted. §11's argument carried into
+  Phase 2: a rented box mounts them somewhere else, and a hash that moved with the mount point
+  would read every relaunch as a config change.
 
 ## What is recipe and what is environment, in one sentence each
 
@@ -30,6 +30,22 @@ parquet is keyed on, and two of them differing is two different computations. Th
 :class:`Paths` is **environment**: *which* encoder an arm reads is the arm — already hashed —
 and *where* that checkpoint sits is a fact about the box, whose md5 the resolution line prints
 and the run record carries (:mod:`benchmark.artifacts`).
+
+## Two divergences from the sibling, both deliberate
+
+**The serialization machinery is duplicated rather than shared.** ``_Frozen``, ``_to_dict``,
+``_from_dict``, ``_overlay`` and ``parse_override`` are near-verbatim from :mod:`pretrain`.
+Sharing them would make the benchmark's freeze path — CPU-only, torch-free, and the one thing
+that has to run on a box with no CUDA stack — import a package that is an optional extra
+(``demae[pretrain]``). ~60 lines of shape is the price of that independence, and the two copies
+are pinned to the same behaviour by two suites asserting the same refusals.
+
+**The override surface lives here rather than in a ``header`` module.** :mod:`pretrain` splits
+it into ``header.py`` because that module also owns ``format_header`` and the run record; here
+the resolution line and the run record are :mod:`benchmark.artifacts`'s, so a third module
+would hold five functions and nothing else. ADR-0009 §4's actual invariant — *one* consumer of
+the shared flags, asserted off the package's own source — is unaffected and is pinned by
+``test_every_command_offering_set_consumes_it_through_the_one_consumer``.
 
 Numbers registered by [ADR-0013](../../docs/adr/0013-task1-pre-registration-register.md) are
 **not** here. The +0.15 degree seam threshold, the four bootstrap pairs and the 100-instance
@@ -95,7 +111,15 @@ def _from_dict(cls: type, d: dict, *, where: str):
     """Build ``cls`` from a partial plain dict, restoring tuple-typed fields.
 
     An unknown key raises rather than being ignored, for the reason the module docstring gives.
+    A *group* that is not a mapping raises here too, and by name: ``--set head=5`` is a plausible
+    typo for ``--set head.epochs=5``, and left to Python it surfaces as a ``TypeError`` from
+    inside a set comprehension, which names neither the group nor the mistake.
     """
+    if not isinstance(d, dict):
+        raise ValueError(
+            f"{where} is a group of knobs, not a value; got {d!r}. Name the knob "
+            f"(e.g. {where}.{sorted(f.name for f in fields(cls))[0]}=…)"
+        )
     known = {f.name for f in fields(cls)}
     unknown = sorted(set(d) - known)
     if unknown:
@@ -211,8 +235,9 @@ class Masks(_Frozen):
                 f"{self.max_area_frac:.0%} area cap's {self.max_equivalent_diameter_px:.2f} px "
                 f"equivalent diameter — a draw there would have to be silently trimmed (§3.2)"
             )
-        if self.bank_draws_per_tile < 1 or self.voids_per_instance < 1:
-            raise ValueError("bank_draws_per_tile and voids_per_instance must be >= 1")
+        for name in ("bank_draws_per_tile", "voids_per_instance"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} {getattr(self, name)} must be >= 1")
 
     @property
     def max_equivalent_diameter_px(self) -> float:
@@ -274,15 +299,17 @@ class Head(_Frozen):
             raise ValueError(f"unknown decay {self.decay!r} (§4.1 chose cosine to 0)")
         if self.precision not in ("bf16", "fp32"):
             raise ValueError(f"precision {self.precision!r}: §4.1 trains in bf16")
-        if self.lr <= 0 or self.weight_decay < 0 or self.slope_weight < 0:
-            raise ValueError("lr must be positive; weight_decay and slope_weight >= 0")
+        if self.lr <= 0:
+            raise ValueError(f"lr {self.lr} must be positive")
+        for name in ("weight_decay", "slope_weight"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} {getattr(self, name)} must be >= 0")
         if not 0.0 <= self.warmup_frac < 1.0:
             raise ValueError(f"warmup_frac {self.warmup_frac} must lie in [0, 1)")
-        if self.batch_size < 1 or self.epochs < 1:
-            raise ValueError("batch_size and epochs must be >= 1")
-        if not self.stage_dims or self.proj_dim < 1:
-            raise ValueError("the head needs a projection width and at least one stage")
-        for name in ("seeds", "label_sweep_seeds", "appendix_seeds"):
+        if not self.stage_dims:
+            raise ValueError("§4.1's head is four upsampling stages; it needs at least one")
+        for name in ("batch_size", "epochs", "proj_dim", "seeds", "label_sweep_seeds",
+                     "appendix_seeds"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} {getattr(self, name)} must be >= 1")
 
@@ -303,6 +330,12 @@ class Finetune(_Frozen):
     decoder_lr: float = 1.5e-3
     decay: str = "cosine"
     precision: str = "bf16"
+    #: §4.2 — masked **MSE** in per-tile-standardized space, and deliberately not §4.1's L1: A3
+    #: continues MAE training with the mask sampler swapped, so it keeps pretraining's objective
+    #: rather than adopting the head's. Named as a knob for the reason :attr:`Head.loss` is —
+    #: the two arms disagree about it, and a disagreement nobody can see in the config is one
+    #: nobody can see in a results row either.
+    loss: str = "mse"
     #: §4.2 — the void-shaped mask plus 25% random patches, so the encoder keeps seeing global
     #: context and the effective mask ratio stays near pretraining's.
     random_patch_frac: float = 0.25
@@ -319,8 +352,14 @@ class Finetune(_Frozen):
     def __post_init__(self) -> None:
         if self.epochs < 1:
             raise ValueError(f"epochs {self.epochs} must be >= 1")
-        if self.encoder_lr <= 0 or self.decoder_lr <= 0:
-            raise ValueError("both learning rates must be positive")
+        if self.loss != "mse":
+            raise ValueError(
+                f"unknown loss {self.loss!r} (§4.2 continues MAE training: masked MSE in "
+                f"per-tile-standardized space, with norm_pix off)"
+            )
+        for name in ("encoder_lr", "decoder_lr"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} {getattr(self, name)} must be positive")
         if not 0.0 < self.layer_decay <= 1.0:
             raise ValueError(f"layer_decay {self.layer_decay} must lie in (0, 1]")
         if not 0.0 <= self.random_patch_frac < 1.0:
@@ -354,7 +393,10 @@ class Unet(_Frozen):
         if self.depth < 1:
             raise ValueError(f"depth {self.depth} must be >= 1")
         if self.in_channels != 2:
-            raise ValueError("§4.4's input is the A1-filled tile plus the void mask")
+            raise ValueError(
+                f"in_channels {self.in_channels}: §4.4's input is the A1-filled tile plus the "
+                f"void mask, and nothing else"
+            )
         if not self.residual:
             raise ValueError(
                 "§2.4: every learned arm predicts a residual over the A1 fill, so a head that "
@@ -396,9 +438,12 @@ class Extract(_Frozen):
             raise ValueError("ADR-0012 §6: fp32 is the reference tensor")
         if self.compute_dtype not in ("fp32", "bf16", "fp16"):
             raise ValueError(f"unknown compute_dtype {self.compute_dtype!r}")
-        if self.layers != 12 or self.tokens != dataset_config.TOKENS_PER_TILE:
+        if self.layers != 12:
+            raise ValueError(f"layers {self.layers}: ADR-0012 §3 emits all twelve block outputs")
+        if self.tokens != dataset_config.TOKENS_PER_TILE:
             raise ValueError(
-                f"ADR-0012 §3/§5: twelve blocks and {dataset_config.TOKENS_PER_TILE} tokens"
+                f"tokens {self.tokens}: ADR-0012 §5's canonical layout is "
+                f"(N, {dataset_config.TOKENS_PER_TILE}, D) at the corpus's 224/16 grid"
             )
         if not self.emit_intermediates:
             raise ValueError(
@@ -449,6 +494,20 @@ class Paths(_Frozen):
     terramind_checkpoint: str | None = None
     imagenet_mae_checkpoint: str | None = None
     imagenet_mae_vits_checkpoint: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every field here is a path, and :func:`parse_override` reads a value as JSON before
+        # falling back to the string — which is what makes `head.epochs=50` an int and has to
+        # be, but which also turns `paths.corpus_dir=2024` into the *integer* 2024. Nothing
+        # downstream would notice until an `open()` deep inside a rented run, so the type is
+        # checked where the field is declared.
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(
+                    f"paths.{f.name} is a path; {value!r} has type {type(value).__name__}. "
+                    f"Quote it if it is meant literally (e.g. paths.{f.name}=\"2024\")"
+                )
 
 
 # --- The config ---------------------------------------------------------------

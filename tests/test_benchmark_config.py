@@ -85,6 +85,9 @@ def test_the_fine_tune_arm_carries_section_four_twos_recipe():
     assert ft.epochs == 20
     assert (ft.encoder_lr, ft.layer_decay, ft.decoder_lr) == (1e-4, 0.75, 1.5e-3)
     assert ft.random_patch_frac == 0.25
+    # §4.2: masked MSE, not §4.1's L1 — A3 continues MAE training with the mask sampler swapped,
+    # so it keeps pretraining's objective rather than adopting the head's.
+    assert ft.loss == "mse" and BenchmarkConfig().head.loss == "l1"
     # §4.2: void filling needs absolute per-patch scale, so norm_pix is off — the one place
     # this benchmark deliberately inverts Phase 1's own default.
     assert ft.norm_pix_loss is False
@@ -300,6 +303,85 @@ def test_the_one_consumer_honours_set():
     args = parser.parse_args(["--set", "head.epochs=9", "--set", "arm=A5"])
     cfg = config_from_args(args)
     assert cfg.head.epochs == 9 and cfg.arm == "A5"
+
+
+def _called_names(source: str) -> set[str]:
+    """Every plain function name called anywhere in the module."""
+    return {
+        node.func.id
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def _modules_offering_the_shared_flags() -> list[str]:
+    """Modules of this package that *define* the shared flags, read off their own source."""
+    directory = Path(benchmark.__file__).parent
+    return sorted(
+        path.stem
+        for path in directory.glob("*.py")
+        if "add_config_arguments" in _called_names(path.read_text())
+    )
+
+
+def test_the_package_has_commands_offering_the_shared_flags():
+    """The guard on the test below: an AST walk that found nothing would pass it vacuously.
+
+    ``config`` *defines* the flags and does not offer them — it has no ``main`` — so the one
+    command is the whole list today, and that is exactly the state in which this pin is cheap.
+    """
+    assert "launch" in _modules_offering_the_shared_flags()
+
+
+@pytest.mark.parametrize("module", _modules_offering_the_shared_flags())
+def test_every_command_offering_set_consumes_it_through_the_one_consumer(module):
+    """ADR-0009 §4, ported: a command that *defines* ``--set`` reaches its config through
+    :func:`config_from_args`.
+
+    Written against the **call** rather than the flag, because the call is where the Phase-1 bug
+    was: ``pretrain.monitor.main`` defined ``--set`` with ``dest="overrides"`` and then called
+    ``build_config`` with the other five arguments and not that one, so the two arms that *are*
+    ``--set`` ablations would have run the baseline's recipe and read out as "no difference".
+    Neither broken command's *parser* was ever wrong, so a test that parsed the flag and then
+    called ``config_from_args`` itself would have stayed green through it.
+
+    Read off the package's own source, so a second verb — or a second command someone adds in a
+    later stage ticket — is covered the moment it is written rather than when someone remembers
+    to add it to a list. That is the whole reason it is here while there is still only one
+    command to cover.
+    """
+    calls = _called_names((Path(benchmark.__file__).parent / f"{module}.py").read_text())
+    assert "config_from_args" in calls, (
+        f"benchmark.{module} offers --set and never calls config_from_args"
+    )
+    if module != "config":  # where the one consumer lives, and calls build_config itself
+        assert "build_config" not in calls, (
+            f"benchmark.{module} calls build_config directly, which is how --set gets dropped: "
+            f"the arguments are retyped at a second site and one goes missing (ADR-0009 §4)"
+        )
+
+
+# --- Refusals that name what went wrong ---------------------------------------
+
+
+def test_a_path_knob_that_json_read_as_a_number_is_refused(tmp_path):
+    """`--set paths.corpus_dir=2024` is the int 2024, and nothing downstream would notice.
+
+    JSON-first is what makes ``head.epochs=50`` an int and has to be. The cost lands on the one
+    group whose every field is a string, so the type is checked where the field is declared —
+    rather than at an ``open()`` deep inside a run someone is paying for.
+    """
+    with pytest.raises(ValueError, match="paths.corpus_dir is a path"):
+        build_config(overrides=["paths.corpus_dir=2024"])
+    # And the quoted form still works, which is what the refusal tells you to do.
+    assert build_config(overrides=['paths.corpus_dir="2024"']).paths.corpus_dir == "2024"
+
+
+def test_setting_a_whole_group_to_a_value_names_the_group():
+    # `--set head=5` is a plausible typo for `--set head.epochs=5`, and left to Python it
+    # surfaces as a TypeError from inside a set comprehension, naming neither.
+    with pytest.raises(ValueError, match="head is a group of knobs, not a value"):
+        build_config(overrides=["head=5"])
 
 
 # --- The registry -------------------------------------------------------------

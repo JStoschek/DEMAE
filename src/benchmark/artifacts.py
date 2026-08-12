@@ -19,7 +19,6 @@ because an absent entry and a forgotten one look identical otherwise.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -28,10 +27,6 @@ from dataset.provenance import git_sha
 
 from . import arms
 from .config import BenchmarkConfig
-
-#: Read in chunks: the release encoders are 341 MB and a benchmark box should not hold one in
-#: memory to answer "which one is this".
-_CHUNK: Final = 1 << 20
 
 #: What `freeze` writes into ``paths.artifacts_dir``. The train mask bank is **not** here — it
 #: is 740 MB and lives under ``paths.mask_bank_path``, committed as a hash rather than as bytes
@@ -43,16 +38,26 @@ TILE_LIST_NAMES: Final = {
 }
 
 
-def file_md5(path: Path | str) -> str | None:
-    """The file's md5, or ``None`` if it is not on this box."""
+def file_md5(path: Path | str | None) -> str | None:
+    """The file's md5, or ``None`` if there is no path or nothing at it.
+
+    :func:`dataset.materialize.file_md5` is the project's **one** implementation of "hash a
+    committed artifact" — the corpus card, the ledger, the split and every Phase-1 fingerprint
+    pin their inputs with it, and a second chunked loop here would be a second answer to the
+    same question. Imported inside the function so resolving a config never drags in the ETL,
+    exactly as :func:`pretrain.fingerprint._md5` does it.
+
+    Absence returns ``None`` rather than raising, because before `freeze` runs it is the
+    expected state — see the module docstring.
+    """
+    if path is None:
+        return None
     path = Path(path)
     if not path.is_file():
         return None
-    digest = hashlib.md5()
-    with path.open("rb") as handle:
-        while chunk := handle.read(_CHUNK):
-            digest.update(chunk)
-    return digest.hexdigest()
+    from dataset.materialize import file_md5 as hash_artifact
+
+    return hash_artifact(path)
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,7 @@ class Resolved:
 
     @property
     def present(self) -> bool:
+        """Is it on this box? ``md5`` is the only evidence that counts — see the module docstring."""
         return self.md5 is not None
 
     def line(self) -> str:
@@ -83,6 +89,7 @@ class Resolved:
         return f"{self.label:<16} {self.path}  md5 {self.md5}"
 
     def to_dict(self) -> dict:
+        """What the run record files this input under: where it was, and what it hashed to."""
         return {"path": self.path, "md5": self.md5}
 
 
@@ -99,6 +106,7 @@ class Resolution:
 
     @property
     def encoder(self) -> arms.Encoder | None:
+        """This arm's encoder, or ``None`` for the two arms that run none (A1 and A7)."""
         return None if self.arm.encoder is None else arms.ENCODERS[self.arm.encoder]
 
     @property
@@ -107,6 +115,23 @@ class Resolution:
         return tuple(item.label for item in self.inputs if not item.present)
 
     # --- what a human reads
+
+    def lines(self, *, verb: str) -> list[str]:
+        """The whole resolution block, for the person about to spend money on this command.
+
+        The verb is read **once**, here, rather than at each of the four places its answer
+        differs. What it selects is honest rather than cosmetic: ``freeze`` is CPU-only,
+        torch-free and touches no encoder (§3.4), so an encoder block and a checkpoint md5
+        there would be noise at best and, read as a resolution, misleading; and only ``run``
+        and ``report`` have anything to do with the results parquet.
+        """
+        block = [*self.header_lines(verb=verb), ""]
+        if verb == "run":
+            block += [*self.arm_lines(), ""]
+        block += self.input_lines()
+        if verb != "freeze":
+            block.append(self.results_line())
+        return [*block, "", *self.scale_lines()]
 
     def header_lines(self, *, verb: str) -> list[str]:
         """The first thing on screen — what this command is about, and its hash.
@@ -126,11 +151,7 @@ class Resolution:
         return [f"DEMAE Task 1 — {verb}   artifacts {cfg.artifact_hash} (§3.4's generator hash)"]
 
     def arm_lines(self) -> list[str]:
-        """Which encoder, which checkpoint, what trains, and on what diet.
-
-        Printed for `run` and not for `freeze`, which is CPU-only, torch-free and touches no
-        encoder — a checkpoint md5 there would be noise at best and misleading at worst.
-        """
+        """Which encoder, which checkpoint, what trains, on what diet, under what contract."""
         encoder = self.encoder
         if encoder is None:
             return [
@@ -160,6 +181,7 @@ class Resolution:
         return lines
 
     def input_lines(self) -> list[str]:
+        """Every committed input, by content — what `freeze` writes and `run` reads."""
         return [item.line() for item in self.inputs]
 
     def results_line(self) -> str:
@@ -202,6 +224,11 @@ class Resolution:
         The extractor spec's md5 is in here and deliberately **not** in Phase 1's frozen
         four-field data fingerprint (ADR-0012 §7): a results table should say which contract
         produced it without moving a hash four committed artifacts quote.
+
+        This is the provenance block, not the run record. ``benchmark.results`` owns the record
+        and the parquet schema beside it, and embeds this — the same split
+        :func:`pretrain.header.run_record` and :mod:`pretrain.fingerprint` have, and for the
+        same reason: what a run *read* is a different question from what it *produced*.
         """
         return {
             "config": self.config.to_dict(),
@@ -218,6 +245,7 @@ class Resolution:
 
 
 def _committed(key: str, label: str, path: Path | str) -> Resolved:
+    """One artifact `freeze` owns — so its absence is "not frozen yet" rather than "missing"."""
     return Resolved(
         key=key,
         label=label,

@@ -57,20 +57,12 @@ def resolve(args: argparse.Namespace) -> Resolution:
 
 
 def format_resolution(resolution: Resolution, *, verb: str) -> str:
-    """What this command resolved, laid out for the person about to spend money on it.
+    """The resolution block as one string.
 
-    The arm block is printed for ``run`` alone. ``freeze`` is CPU-only, torch-free and touches
-    no encoder (§3.4), and ``report`` is a pure function of the results parquet — a checkpoint
-    md5 on either would be noise at best and, read as a resolution, misleading.
+    The layout belongs to :meth:`~benchmark.artifacts.Resolution.lines`, beside the facts it is
+    laying out; what is here is the console's join and nothing else.
     """
-    lines = [*resolution.header_lines(verb=verb), ""]
-    if verb == "run":
-        lines += [*resolution.arm_lines(), ""]
-    lines += resolution.input_lines()
-    if verb != "freeze":
-        lines.append(resolution.results_line())
-    lines += ["", *resolution.scale_lines()]
-    return "\n".join(lines)
+    return "\n".join(resolution.lines(verb=verb))
 
 
 def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
@@ -88,7 +80,15 @@ def _unbuilt(verb: str, does: str, produces: str) -> NoReturn:
     )
 
 
-def _freeze(resolution: Resolution) -> int:
+#: The three verbs take one resolution and return an exit code — the shape they will have once
+#: they are built. Today every one of them raises instead, so ``NoReturn`` is the honest
+#: annotation and the uniform parameter is what keeps :data:`VERBS` a table rather than a
+#: cascade. `freeze` and `report` do not read the resolution yet; the command has already
+#: printed it.
+
+
+def _freeze(resolution: Resolution) -> NoReturn:
+    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local."""
     _unbuilt(
         "freeze",
         "writes nothing",
@@ -98,7 +98,8 @@ def _freeze(resolution: Resolution) -> int:
     )
 
 
-def _run(resolution: Resolution) -> int:
+def _run(resolution: Resolution) -> NoReturn:
+    """`run` — execute exactly one (arm, size, seed) cell, having refused a box it cannot."""
     # Both refusals come before the stage refusal, and both are about *this box* rather than
     # about what is built: a run cannot be scored against inputs that are not there, and
     # discovering that after the encoder has loaded is discovering it on the clock.
@@ -124,7 +125,8 @@ def _run(resolution: Resolution) -> int:
     )
 
 
-def _report(resolution: Resolution) -> int:
+def _report(resolution: Resolution) -> NoReturn:
+    """`report` — render the table from the results parquet, re-running no arm."""
     _unbuilt(
         "report",
         "renders nothing",
