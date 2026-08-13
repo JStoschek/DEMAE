@@ -1,0 +1,531 @@
+{
+  "adr": "ADR-0012",
+  "agreement": {
+    "compute_dtype": "bf16",
+    "device": "mps",
+    "encoder": "terramind",
+    "immaterial": true,
+    "mean_cosine": 0.9988765120506287,
+    "min_cosine": 0.8932707905769348,
+    "p01_cosine": 0.9853146076202393,
+    "reference_dtype": "fp32",
+    "relative_rms": 0.04794401302933693,
+    "threshold": 0.99,
+    "tiles": 60,
+    "tokens": 11760
+  },
+  "arm": "A5",
+  "encoder": {
+    "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",
+    "measured_params": 90126336,
+    "name": "terramind",
+    "normalization": "terramind_v1",
+    "params_delta_is_the_crop": true,
+    "pos_emb": {
+      "adr": "ADR-0011",
+      "anchor": [
+        1,
+        1
+      ],
+      "derivation": "rederived_14x14_crop",
+      "grid_px": 14,
+      "native_grid_px": 16
+    },
+    "registry_params": 90172416
+  },
+  "extractor_spec_md5": "20d3039cfafaf3f63668eb244e30e309",
+  "issue": 157,
+  "selection": {
+    "per_stratum": 3,
+    "rule": "p134's: evenly-spaced, all-land, test-split, per stratum"
+  },
+  "tiles": [
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 69.595458984375,
+      "lon": 33.528888888888886,
+      "split": "test",
+      "stratum_id": 0,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E033_00_DEM_1792_1792"
+    },
+    {
+      "lat": 62.284444444444446,
+      "local_relief_metres": 40.24720764160156,
+      "lon": 22.56,
+      "split": "test",
+      "stratum_id": 0,
+      "tile_id": "Copernicus_DSM_COG_10_N62_00_E022_00_DEM_2464_896"
+    },
+    {
+      "lat": -86.09333333333333,
+      "local_relief_metres": 176.480224609375,
+      "lon": -164.3111111111111,
+      "split": "test",
+      "stratum_id": 0,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W165_00_DEM_224_136"
+    },
+    {
+      "lat": 0.2222222222222222,
+      "local_relief_metres": 1469.50732421875,
+      "lon": 30.031111111111112,
+      "split": "test",
+      "stratum_id": 1,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_2688_0"
+    },
+    {
+      "lat": 40.09777777777778,
+      "local_relief_metres": 232.3907470703125,
+      "lon": 97.40444444444445,
+      "split": "test",
+      "stratum_id": 1,
+      "tile_id": "Copernicus_DSM_COG_10_N40_00_E097_00_DEM_3136_1344"
+    },
+    {
+      "lat": -9.653333333333332,
+      "local_relief_metres": 969.0143966674805,
+      "lon": 159.84,
+      "split": "test",
+      "stratum_id": 1,
+      "tile_id": "Copernicus_DSM_COG_10_S10_00_E159_00_DEM_2240_2912"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 30.819580078125,
+      "lon": 33.715555555555554,
+      "split": "test",
+      "stratum_id": 2,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E033_00_DEM_1120_2464"
+    },
+    {
+      "lat": 61.22222222222222,
+      "local_relief_metres": 73.45343017578125,
+      "lon": -96.44,
+      "split": "test",
+      "stratum_id": 2,
+      "tile_id": "Copernicus_DSM_COG_10_N61_00_W097_00_DEM_2688_896"
+    },
+    {
+      "lat": -85.15555555555555,
+      "local_relief_metres": 64.81800079345703,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 2,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_448_136"
+    },
+    {
+      "lat": 0.5333333333333333,
+      "local_relief_metres": 88.5596923828125,
+      "lon": 32.96888888888889,
+      "split": "test",
+      "stratum_id": 3,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E032_00_DEM_1568_3376"
+    },
+    {
+      "lat": 60.22222222222222,
+      "local_relief_metres": 54.349449157714844,
+      "lon": 29.808888888888887,
+      "split": "test",
+      "stratum_id": 3,
+      "tile_id": "Copernicus_DSM_COG_10_N60_00_E029_00_DEM_2688_1344"
+    },
+    {
+      "lat": -87.28,
+      "local_relief_metres": 52.81396484375,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 3,
+      "tile_id": "Copernicus_DSM_COG_10_S88_00_W163_00_DEM_896_136"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 121.0345458984375,
+      "lon": 30.653333333333332,
+      "split": "test",
+      "stratum_id": 4,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1120_2240"
+    },
+    {
+      "lat": 59.03111111111111,
+      "local_relief_metres": 139.86412811279297,
+      "lon": -160.76666666666668,
+      "split": "test",
+      "stratum_id": 4,
+      "tile_id": "Copernicus_DSM_COG_10_N59_00_W161_00_DEM_3376_448"
+    },
+    {
+      "lat": -86.21777777777778,
+      "local_relief_metres": 152.475830078125,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 4,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_672_136"
+    },
+    {
+      "lat": 0.40888888888888886,
+      "local_relief_metres": 45.88671875,
+      "lon": 36.59111111111111,
+      "split": "test",
+      "stratum_id": 5,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E036_00_DEM_2016_2016"
+    },
+    {
+      "lat": 44.782222222222224,
+      "local_relief_metres": 223.452880859375,
+      "lon": 94.71555555555555,
+      "split": "test",
+      "stratum_id": 5,
+      "tile_id": "Copernicus_DSM_COG_10_N44_00_E094_00_DEM_672_2464"
+    },
+    {
+      "lat": -85.21777777777778,
+      "local_relief_metres": 19.590957641601562,
+      "lon": -161.3111111111111,
+      "split": "test",
+      "stratum_id": 5,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W162_00_DEM_672_136"
+    },
+    {
+      "lat": 6.346666666666667,
+      "local_relief_metres": 209.648681640625,
+      "lon": 38.46666666666667,
+      "split": "test",
+      "stratum_id": 6,
+      "tile_id": "Copernicus_DSM_COG_10_N06_00_E038_00_DEM_2240_1568"
+    },
+    {
+      "lat": 19.782222222222224,
+      "local_relief_metres": 292.8564453125,
+      "lon": -98.65777777777778,
+      "split": "test",
+      "stratum_id": 6,
+      "tile_id": "Copernicus_DSM_COG_10_N19_00_W099_00_DEM_672_1120"
+    },
+    {
+      "lat": -85.52888888888889,
+      "local_relief_metres": 375.478271484375,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 6,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W169_00_DEM_1792_136"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 102.48779296875,
+      "lon": 35.34222222222222,
+      "split": "test",
+      "stratum_id": 7,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E035_00_DEM_1120_1120"
+    },
+    {
+      "lat": -82.34222222222222,
+      "local_relief_metres": 12.73876953125,
+      "lon": 56.84444444444444,
+      "split": "test",
+      "stratum_id": 7,
+      "tile_id": "Copernicus_DSM_COG_10_S83_00_E056_00_DEM_1120_496"
+    },
+    {
+      "lat": -88.03111111111112,
+      "local_relief_metres": 16.78076171875,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 7,
+      "tile_id": "Copernicus_DSM_COG_10_S89_00_W169_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 47.9974365234375,
+      "lon": 32.404444444444444,
+      "split": "test",
+      "stratum_id": 8,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E032_00_DEM_0_1344"
+    },
+    {
+      "lat": 52.09777777777778,
+      "local_relief_metres": 25.107589721679688,
+      "lon": -87.04666666666667,
+      "split": "test",
+      "stratum_id": 8,
+      "tile_id": "Copernicus_DSM_COG_10_N52_00_W088_00_DEM_3136_2176"
+    },
+    {
+      "lat": -85.40444444444445,
+      "local_relief_metres": 124.90512084960938,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 8,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.5333333333333333,
+      "local_relief_metres": 179.599609375,
+      "lon": 30.466666666666665,
+      "split": "test",
+      "stratum_id": 9,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1568_1568"
+    },
+    {
+      "lat": 41.782222222222224,
+      "local_relief_metres": 95.0889892578125,
+      "lon": 98.71555555555555,
+      "split": "test",
+      "stratum_id": 9,
+      "tile_id": "Copernicus_DSM_COG_10_N41_00_E098_00_DEM_672_2464"
+    },
+    {
+      "lat": -86.40444444444445,
+      "local_relief_metres": 122.310546875,
+      "lon": -167.3111111111111,
+      "split": "test",
+      "stratum_id": 9,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W168_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 638.814208984375,
+      "lon": 34.59111111111111,
+      "split": "test",
+      "stratum_id": 10,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E034_00_DEM_0_2016"
+    },
+    {
+      "lat": 18.968888888888888,
+      "local_relief_metres": 473.518310546875,
+      "lon": -98.34666666666666,
+      "split": "test",
+      "stratum_id": 10,
+      "tile_id": "Copernicus_DSM_COG_10_N18_00_W099_00_DEM_0_2240"
+    },
+    {
+      "lat": -86.46666666666667,
+      "local_relief_metres": 552.4906005859375,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 10,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_1568_136"
+    },
+    {
+      "lat": 0.72,
+      "local_relief_metres": 176.86279296875,
+      "lon": 35.46666666666667,
+      "split": "test",
+      "stratum_id": 11,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E035_00_DEM_896_1568"
+    },
+    {
+      "lat": 44.84444444444444,
+      "local_relief_metres": 47.3707275390625,
+      "lon": 99.34222222222222,
+      "split": "test",
+      "stratum_id": 11,
+      "tile_id": "Copernicus_DSM_COG_10_N44_00_E099_00_DEM_448_1120"
+    },
+    {
+      "lat": -88.03111111111112,
+      "local_relief_metres": 19.424560546875,
+      "lon": 56.68888888888889,
+      "split": "test",
+      "stratum_id": 11,
+      "tile_id": "Copernicus_DSM_COG_10_S89_00_E056_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 159.6055908203125,
+      "lon": 30.90222222222222,
+      "split": "test",
+      "stratum_id": 12,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_0_3136"
+    },
+    {
+      "lat": 48.346666666666664,
+      "local_relief_metres": 360.042724609375,
+      "lon": 94.34222222222222,
+      "split": "test",
+      "stratum_id": 12,
+      "tile_id": "Copernicus_DSM_COG_10_N48_00_E094_00_DEM_2240_1120"
+    },
+    {
+      "lat": -86.09333333333333,
+      "local_relief_metres": 408.391357421875,
+      "lon": -166.3111111111111,
+      "split": "test",
+      "stratum_id": 12,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W167_00_DEM_224_136"
+    },
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 119.809814453125,
+      "lon": 30.52888888888889,
+      "split": "test",
+      "stratum_id": 13,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1792_1792"
+    },
+    {
+      "lat": 50.346666666666664,
+      "local_relief_metres": 138.52093505859375,
+      "lon": -88.58,
+      "split": "test",
+      "stratum_id": 13,
+      "tile_id": "Copernicus_DSM_COG_10_N50_00_W089_00_DEM_2240_896"
+    },
+    {
+      "lat": -86.15555555555555,
+      "local_relief_metres": 145.824462890625,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 13,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W169_00_DEM_448_136"
+    },
+    {
+      "lat": 0.5955555555555556,
+      "local_relief_metres": 203.32275390625,
+      "lon": 30.404444444444444,
+      "split": "test",
+      "stratum_id": 14,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1344_1344"
+    },
+    {
+      "lat": 41.22222222222222,
+      "local_relief_metres": 184.2734375,
+      "lon": 96.34222222222222,
+      "split": "test",
+      "stratum_id": 14,
+      "tile_id": "Copernicus_DSM_COG_10_N41_00_E096_00_DEM_2688_1120"
+    },
+    {
+      "lat": -86.40444444444445,
+      "local_relief_metres": 185.8641357421875,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 14,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.8444444444444444,
+      "local_relief_metres": 325.3201904296875,
+      "lon": 31.52888888888889,
+      "split": "test",
+      "stratum_id": 15,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E031_00_DEM_448_1792"
+    },
+    {
+      "lat": 66.16,
+      "local_relief_metres": 192.4912567138672,
+      "lon": -91.06222222222222,
+      "split": "test",
+      "stratum_id": 15,
+      "tile_id": "Copernicus_DSM_COG_10_N66_00_W092_00_DEM_2912_1576"
+    },
+    {
+      "lat": -86.03111111111112,
+      "local_relief_metres": 376.9835205078125,
+      "lon": -163.3111111111111,
+      "split": "test",
+      "stratum_id": 15,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W164_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 55.8653564453125,
+      "lon": 30.466666666666665,
+      "split": "test",
+      "stratum_id": 16,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_0_1568"
+    },
+    {
+      "lat": 51.906666666666666,
+      "local_relief_metres": 27.510589599609375,
+      "lon": -88.20666666666666,
+      "split": "test",
+      "stratum_id": 16,
+      "tile_id": "Copernicus_DSM_COG_10_N51_00_W089_00_DEM_224_1792"
+    },
+    {
+      "lat": -86.34222222222222,
+      "local_relief_metres": 74.114501953125,
+      "lon": -161.3111111111111,
+      "split": "test",
+      "stratum_id": 16,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W162_00_DEM_1120_136"
+    },
+    {
+      "lat": 0.09777777777777774,
+      "local_relief_metres": 55.4278564453125,
+      "lon": 30.093333333333334,
+      "split": "test",
+      "stratum_id": 17,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_3136_224"
+    },
+    {
+      "lat": 50.284444444444446,
+      "local_relief_metres": 21.103965759277344,
+      "lon": -82.48666666666666,
+      "split": "test",
+      "stratum_id": 17,
+      "tile_id": "Copernicus_DSM_COG_10_N50_00_W083_00_DEM_2464_1120"
+    },
+    {
+      "lat": -85.21777777777778,
+      "local_relief_metres": 107.69825744628906,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 17,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_672_136"
+    },
+    {
+      "lat": 0.9066666666666666,
+      "local_relief_metres": 99.7950439453125,
+      "lon": 30.342222222222222,
+      "split": "test",
+      "stratum_id": 18,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_224_1120"
+    },
+    {
+      "lat": 44.22222222222222,
+      "local_relief_metres": 141.8511962890625,
+      "lon": 96.71555555555555,
+      "split": "test",
+      "stratum_id": 18,
+      "tile_id": "Copernicus_DSM_COG_10_N44_00_E096_00_DEM_2688_2464"
+    },
+    {
+      "lat": -86.46666666666667,
+      "local_relief_metres": 64.13916015625,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 18,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W163_00_DEM_1568_136"
+    },
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 1546.65966796875,
+      "lon": 30.031111111111112,
+      "split": "test",
+      "stratum_id": 19,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1792_0"
+    },
+    {
+      "lat": 43.471111111111114,
+      "local_relief_metres": 1394.564208984375,
+      "lon": 93.21777777777778,
+      "split": "test",
+      "stratum_id": 19,
+      "tile_id": "Copernicus_DSM_COG_10_N43_00_E093_00_DEM_1792_672"
+    },
+    {
+      "lat": 49.72,
+      "local_relief_metres": 1072.30029296875,
+      "lon": 91.28,
+      "split": "test",
+      "stratum_id": 19,
+      "tile_id": "Copernicus_DSM_COG_10_N49_00_E091_00_DEM_896_896"
+    }
+  ],
+  "versions": {
+    "diffusers": "0.39.0",
+    "numpy": "2.5.1",
+    "terratorch": "1.2.10",
+    "timm": "1.0.28",
+    "torch": "2.13.0"
+  }
+}

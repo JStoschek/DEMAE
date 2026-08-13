@@ -17,6 +17,7 @@ import argparse
 import ast
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -477,7 +478,39 @@ def test_the_two_demae_inits_differ_by_the_axis_order_and_nothing_else():
     assert r5.width == r4.width == 768
 
 
-def test_the_terramind_arm_declares_adr_elevens_re_derivation():
+def test_the_terramind_arms_declare_adr_elevens_re_derivation():
     # Not a convention living in extraction code: a declared field, so a bicubic resize cannot
-    # be swapped in silently (ADR-0011, ADR-0012 §7.4).
-    assert arms.ENCODERS["terramind"].pos_encoding == "rederived_14x14_crop"
+    # be swapped in silently (ADR-0011, ADR-0012 §7.4). Two fields rather than one, because they
+    # answer different questions — what the shipped tensor *is*, and what the model *runs with*.
+    for name in ("terramind", "terramind-tokenizer"):
+        assert arms.ENCODERS[name].pos_encoding == "sincos2d_terramind"
+        assert arms.ENCODERS[name].pos_emb_derivation == "rederived_14x14_crop"
+    # And every other encoder runs the tensor its checkpoint ships, which is also declared.
+    for name in ("demae-r5", "demae-r4", "demae-vits", "imagenet-mae"):
+        assert arms.ENCODERS[name].pos_emb_derivation == "as_published"
+
+
+def test_an_encoder_declaring_an_unregistered_derivation_is_refused():
+    with pytest.raises(ValueError, match="unknown pos_emb derivation"):
+        replace(arms.ENCODERS["terramind"], pos_emb_derivation="stretch_it")
+
+
+def test_an_encoder_declaring_an_unregistered_axis_order_is_refused():
+    # An unregistered order is a `pos_embed` nothing verifies, and that tensor is the one P102 §4
+    # says must be verified rather than trusted.
+    with pytest.raises(ValueError, match="unknown pos_encoding"):
+        replace(arms.ENCODERS["demae-r5"], pos_encoding="sincos2d_columnwise")
+
+
+def test_a_derivation_and_a_native_grid_that_disagree_are_refused():
+    """The two fields are one claim in halves, so a half on its own is a contradiction.
+
+    Left unchecked, an encoder declaring a crop with no native grid would be told its native grid
+    is the run's — i.e. that a 14x14 crop of a 14x14 tensor is the whole of it, which is the
+    identity wearing ADR-0011's name.
+    """
+    with pytest.raises(ValueError, match="names no native grid"):
+        replace(arms.ENCODERS["demae-r5"], pos_emb_native_grid_px=16)
+    with pytest.raises(ValueError, match="names the grid it derives"):
+        replace(arms.ENCODERS["terramind"], pos_emb_native_grid_px=None)
+    assert arms.ENCODERS["terramind"].pos_emb_native_grid_px == 16

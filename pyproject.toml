@@ -43,6 +43,27 @@ pretrain = [
     # is what keeps #97 off the critical path of #80's ops provisioning.
     "wandb>=0.17",
 ]
+# The TerraMind half of ADR-0012's extractor contract (issue #157, plan §2.1/§9.4). A5 and A9
+# read `terratorch`'s DEM tokenizer encoder, and the contract's `terramind_v1` diet is selected
+# by the *named* `v1_pretraining_mean/std["tok_dem@224"]` lookup — so the benchmark environment
+# has to hold the package, not just a record of one.
+#
+# This reverses `scripts/p118_terramind_probe.py`'s "must not become a project dependency", and
+# the reason it can is that it is an **extra**: `pip install demae` still builds a corpus on a
+# box with no CUDA stack, and `pip install demae[pretrain]` is still what the training box
+# installs. What p118 measured — 113 packages / 405 MB, and `numpy>=2.2` / `timm>=1.0.15` floors
+# sitting close to DEMAE's own — is an argument against putting it in the *core*, which this
+# does not.
+#
+# **Both versions are exact pins, and the `diffusers` one is the point.** terratorch declares a
+# bare `diffusers` (p118 §4: the `==0.30.0` in its warning text is remediation advice, not a
+# constraint), so with a range here a future diffusers release breaks the tokenizer import with
+# no lockfile signal at all. 1.2.10 / 0.39.0 is the pair the TerraMind path is *verified* on —
+# p118's run and #157's — and moving either is a deliberate re-verification.
+terramind = [
+    "terratorch==1.2.10",
+    "diffusers==0.39.0",
+]
 
 [dependency-groups]
 # Dev-only; kept out of the runtime pipeline so the reproducible core stays lean.
@@ -67,6 +88,11 @@ dev = [
     # test); #89 makes it a declared runtime dependency of `pretrain`, and this line is
     # what keeps a plain `uv sync` still installing it.
     "demae[pretrain]",
+    # Same story one artifact along (#157): the live suite now covers the TerraMind half of
+    # ADR-0012's contract, and a `benchmark.extract` test that skips because terratorch is
+    # absent is a contract clause shipped unexercised. The 405 MB lands in the *dev* group and
+    # nowhere else — the ETL box installs neither this nor `pretrain`.
+    "demae[terramind]",
 ]
 
 [tool.pytest.ini_options]
