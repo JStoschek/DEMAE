@@ -75,6 +75,9 @@ class Encoder:
     ``checkpoint_field`` names a field of :class:`benchmark.config.Paths` rather than holding a
     path, because *where* a checkpoint is mounted is environment (a rented box mounts it
     somewhere else) while *which* encoder an arm reads is the arm — and the arm is hashed.
+    ``checkpoint_md5`` is the other half of that split and is **not** environment: it is the
+    one fact that distinguishes this encoder's weights from a sibling's, so it is declared here
+    and enforced by :mod:`benchmark.extract` (ADR-0012 §7.1) rather than remembered.
     """
 
     #: Registry key, and what the resolution line prints.
@@ -94,7 +97,45 @@ class Encoder:
     #: left ``None`` rather than inferred: §6 item 4 prints parameter counts, and a count this
     #: registry guessed would print as a measurement.
     params: int | None = None
+    #: Transformer blocks. ADR-0012 §3 emits one intermediate per block, so a declared count
+    #: that disagrees with the checkpoint is refused rather than absorbed by a shape error.
+    depth: int = 12
+    #: The published architecture this checkpoint *is*, as a consumer types it into
+    #: ``timm.create_model``. Quoted from :data:`pretrain.release.TIMM_MODELS` rather than
+    #: rebuilt from the width, and pinned against it by a test.
+    timm_model: str = "vit_base_patch16_224"
+    #: How the file is laid out. ``timm`` is a §14 release export, which loads **strictly**;
+    #: ``mmselfsup_rgb`` is the published ImageNet MAE, whose `backbone.`-prefixed keys and
+    #: 3-channel patch embed §8's collapse translates (:mod:`pretrain.init` owns that map).
+    checkpoint_format: str = "timm"
+    #: The authoritative file's md5, where this plan has one. ``None`` is *unpinned*, and
+    #: `freeze` then records whatever this box mounted with its source stated — see
+    #: :func:`benchmark.extract.build_spec`. Never guessed.
+    checkpoint_md5: str | None = None
+    #: Whether the architecture has a CLS token at all. ADR-0012 §5 makes it an optional side
+    #: field for exactly this reason: TerraMind structurally has none, so a statistic pooled
+    #: over it would compare one model's token to the other's absence.
+    #:
+    #: §5 says "DEMAE-family only", written when the contract had two encoders in view;
+    #: ImageNet-MAE is a ViT and structurally has one. ADR-0012's own amendment note under
+    #: Decision 5 settles that (#156) — this field is what it settles *to*, and the ADR is where
+    #: the reasoning lives, so the decision has one home.
+    has_cls: bool = True
+    #: Whether this encoder's own final tensor is its last block's output put through a norm.
+    #: DEMAE norms after block twelve and TerraMind does not (ADR-0012 §3), which is the whole
+    #: reason `output` and `intermediates[11]` are separately named.
+    output_is_normed: bool = True
 
+
+#: The `-v2` release bundles' `encoder.pt` md5s, and the answer to "which bundle is
+#: authoritative" (#156). Both R5 bundles ship a **byte-identical** `encoder.pt`, and so do both
+#: R4 bundles — `-v2` re-exported the *bundle* (it adds `LICENSE` and the manifest's `licence`
+#: block; #101's licence work) and not the weights. So the question the ticket asks has no
+#: weights axis at all: these md5s identify the R5 and R4 encoders under either directory, and
+#: `-v2` is the authoritative bundle because it is the one that carries its own terms.
+#: :mod:`benchmark.config`'s `Paths` points at `-v2` for that reason.
+DEMAE_R5_MD5: Final = "3ec5ebc72fa28c43fe88f67692d9b41a"
+DEMAE_R4_MD5: Final = "59e8346c4b08e1ab4fedd44f0802e12b"
 
 #: The encoders §1 and §2.3 name. TerraMind's 4.92M excess over DEMAE's ViT-B is reported and
 #: not attributed (§2.3): terratorch was not installed in any live worktree when it was written.
@@ -106,6 +147,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_encoding="sincos2d",
         checkpoint_field="demae_r5_checkpoint",
         params=85_254_144,
+        checkpoint_md5=DEMAE_R5_MD5,
     ),
     "demae-r4": Encoder(
         name="demae-r4",
@@ -116,6 +158,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="demae_r4_checkpoint",
         params=85_254_144,
+        checkpoint_md5=DEMAE_R4_MD5,
     ),
     "demae-vits": Encoder(
         name="demae-vits",
@@ -124,6 +167,10 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_encoding="sincos2d",
         checkpoint_field="demae_vits_checkpoint",
         params=21_393_408,
+        timm_model="vit_small_patch16_224",
+        # No §2.3 ViT-S run has been released, so there is no file to pin. `freeze` records the
+        # md5 of whatever a box mounts, stating that it did — see `benchmark.extract`.
+        checkpoint_md5=None,
     ),
     "terramind": Encoder(
         name="terramind",
@@ -135,6 +182,12 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_encoding="rederived_14x14_crop",
         checkpoint_field="terramind_checkpoint",
         params=90_172_416,
+        checkpoint_format="terratorch",
+        # p118 §5.3 measured it: `return_intermediates=True` yields twelve tensors with no
+        # separate post-norm entry, its last bit-identical to `encoder(x)`. So "the last layer"
+        # means something different here than it does for DEMAE, which is ADR-0012 §3's subject.
+        output_is_normed=False,
+        has_cls=False,
     ),
     "imagenet-mae": Encoder(
         name="imagenet-mae",
@@ -142,6 +195,14 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="imagenet_mae_checkpoint",
+        # The published mmselfsup file, RGB and `backbone.`-prefixed. §8's collapse and P102's
+        # key map turn it into the single-channel timm encoder A6 reads; `pretrain.init` owns
+        # both, and `benchmark.extract` reuses them rather than writing a second map.
+        checkpoint_format="mmselfsup_rgb",
+        # Unpinned here rather than quoted from `pretrain.init.KNOWN_CHECKPOINTS`: that md5 is
+        # the 485 MB *full* MAE file, and what A6 reads is the encoder half of it. The value
+        # goes in the moment a box mounts one and `freeze` records what it froze against.
+        checkpoint_md5=None,
     ),
     "terramind-tokenizer": Encoder(
         name="terramind-tokenizer",
@@ -149,6 +210,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="rederived_14x14_crop",
         checkpoint_field="terramind_checkpoint",
+        checkpoint_format="terratorch",
+        output_is_normed=False,
+        has_cls=False,
     ),
 }
 
@@ -309,6 +373,23 @@ ARMS: Final[dict[str, Arm]] = dict(
 PRINTED_ROWS: Final[tuple[str, ...]] = tuple(
     name for name, arm in ARMS.items() if arm.printed
 )
+
+
+def normalization_for(encoder_name: str) -> str:
+    """§2.1's declared diet for an encoder, read off the arms that eat it.
+
+    Here rather than in :mod:`benchmark.extract` because it is a question about this table:
+    ``normalization`` is an *arm* field, since §2.1's whole point is that each model is fed its
+    native diet. Two arms on one encoder disagreeing about the diet is a contradiction, and one
+    the contract should surface rather than pick a side of.
+    """
+    diets = {arm.normalization for arm in ARMS.values() if arm.encoder == encoder_name}
+    if len(diets) != 1:
+        raise ValueError(
+            f"the arms reading {encoder_name} declare {sorted(diets)} — §2.1 feeds each model "
+            f"one native diet, and a contract cannot declare two"
+        )
+    return diets.pop()
 
 
 def get(name: str) -> Arm:

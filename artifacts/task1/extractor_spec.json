@@ -1,0 +1,98 @@
+{
+  "adr": "ADR-0012",
+  "arms": {
+    "A1": null,
+    "A2-R4": "demae-r4",
+    "A2-R5": "demae-r5",
+    "A3-R4": "demae-r4",
+    "A3-R5": "demae-r5",
+    "A4-R4": "demae-r4",
+    "A4-R5": "demae-r5",
+    "A4-S": "demae-vits",
+    "A5": "terramind",
+    "A6": "imagenet-mae",
+    "A7": null,
+    "A9": "terramind-tokenizer"
+  },
+  "encoders": {
+    "demae-r4": {
+      "checkpoint_format": "timm",
+      "checkpoint_md5": "59e8346c4b08e1ab4fedd44f0802e12b",
+      "depth": 12,
+      "family": "demae",
+      "has_cls": true,
+      "name": "demae-r4",
+      "normalization": "per_tile",
+      "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
+      "output_is_normed": true,
+      "pos_encoding": "sincos2d_rowfirst",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
+    "demae-r5": {
+      "checkpoint_format": "timm",
+      "checkpoint_md5": "3ec5ebc72fa28c43fe88f67692d9b41a",
+      "depth": 12,
+      "family": "demae",
+      "has_cls": true,
+      "name": "demae-r5",
+      "normalization": "per_tile",
+      "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
+      "output_is_normed": true,
+      "pos_encoding": "sincos2d",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
+    "demae-vits": {
+      "checkpoint_format": "timm",
+      "checkpoint_md5": null,
+      "depth": 12,
+      "family": "demae",
+      "has_cls": true,
+      "name": "demae-vits",
+      "normalization": "per_tile",
+      "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
+      "output_is_normed": true,
+      "pos_encoding": "sincos2d",
+      "timm_model": "vit_small_patch16_224",
+      "width": 384
+    },
+    "imagenet-mae": {
+      "checkpoint_format": "mmselfsup_rgb",
+      "checkpoint_md5": null,
+      "depth": 12,
+      "family": "imagenet-mae",
+      "has_cls": true,
+      "name": "imagenet-mae",
+      "normalization": "per_tile",
+      "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
+      "output_is_normed": true,
+      "pos_encoding": "sincos2d_rowfirst",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    }
+  },
+  "grid_px": 14,
+  "img_px": 224,
+  "layers": 12,
+  "layout": "(N, 196, D) patch tokens, row-major; CLS an optional side field",
+  "patch_px": 16,
+  "pending": {
+    "terramind": {
+      "encoders": [
+        "terramind",
+        "terramind-tokenizer"
+      ],
+      "owes": [
+        "the named v1_pretraining_mean/std[\"tok_dem@224\"] lookup, and its value checked against 670.665 / 951.272 (ADR-0012 \u00a77.2, #138)",
+        "ADR-0011's rederived_14x14_crop pos_emb derivation as a checked declared field",
+        "the fp32-versus-compute-dtype agreement, which ADR-0012 \u00a76 names as unmeasured for this arm rather than inheriting the DEMAE family's 0.999968"
+      ],
+      "ticket": 12
+    }
+  },
+  "reference_dtype": "fp32",
+  "statistics": "recomputed from the passed valid mask; never read from the manifest",
+  "tokens": 196,
+  "valid_mask": "land_and_not_void"
+}

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
+- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. No other decision changes.
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
@@ -85,6 +86,15 @@ side: DEMAE tokenizes through timm's `PatchEmbed` (`flatten(2).transpose(1,2)` o
 and TerraMind's spatial tensor flattens identically against the same grid its `pos_emb` is built on.
 **CLS is DEMAE-family only and never enters a cross-encoder comparison** — TerraMind structurally has
 none, so any statistic pooled over it would compare one model's token to the other's absence.
+
+> *(Amended 2026-08-12 — [#156](https://github.com/JStoschek/DEMAE/issues/156).* This sentence was
+> written with two encoders in view, and the build had to resolve it against a three-family
+> registry: **ImageNet-MAE is a ViT and structurally has a CLS token.** Read against the reason
+> this decision gives — TerraMind's *absence* — it sits on the DEMAE side of the line, and
+> emitting `None` for it would be a false claim about the architecture rather than a conservative
+> one. So the emitted field follows the architecture, declared per encoder as
+> `benchmark.arms.Encoder.has_cls`, and the clause that does the work is unchanged and is about
+> **comparison**: no statistic pooled over CLS crosses encoders, whichever of them have one.*)
 
 **6. fp32 is the reference tensor; compute dtype is a declared field; storage dtype is outside the
 contract.** Context fact 4 is why the field may differ per task rather than being pinned: the

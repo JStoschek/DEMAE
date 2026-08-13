@@ -21,14 +21,15 @@ uv run python -m benchmark.launch report              # the printed table, the C
 
 #147 shipped the command surface, the frozen run config, the resolution line and ``--dry-run``:
 the pre-flight a build session walks before renting anything. #148 gave ``freeze`` the first of
-its five artifacts, the registered bar (:mod:`benchmark.prereg`), and #149 the second, §3.1's
-tile lists (:mod:`benchmark.tiles`). **Nothing is scored here.**
+its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
+lists (:mod:`benchmark.tiles`), and #156 the third, ADR-0012's extractor contract
+(:mod:`benchmark.extract`). **Nothing is scored here.**
 
 Every verb still raises past the work it has, and names the stage that has not been built —
 deliberately, because a verb that quietly returned 0 having done part of its job is precisely
 the shape of failure this module exists to prevent, and it is the shape that survived four
 tickets in Phase 1. It matters more once a verb writes real files than it did when none did: a
-``freeze`` that lands two of five artifacts and exits 0 is read as a frozen box.
+``freeze`` that lands three of five artifacts and exits 0 is read as a frozen box.
 
 ## Why the resolution line is printed before anything is spent
 
@@ -46,7 +47,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, prereg, tiles
+from . import arms, artifacts, extract, prereg, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -77,7 +78,7 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     Named rather than absent, and raising rather than returning 0, because the alternative is a
     command that reports success having done part of its job — which is the failure ADR-0009
     exists to close and the one this repo has a name for. It matters most now that one verb has
-    started writing real artifacts: a `freeze` that lands two of five files and exits 0 is read
+    started writing real artifacts: a `freeze` that lands three of five files and exits 0 is read
     as a frozen box.
     """
     raise NotImplementedError(
@@ -96,37 +97,47 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 def _freeze(resolution: Resolution) -> NoReturn:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
 
-    Two of the five are built: the registered bar (#148) and §3.1's tile lists (#149), in that
-    order.
+    Three of the five are built, and the order is each ticket's own argument rather than the
+    order they happened to land in.
 
-    The bar goes **first** for the reason ADR-0013 gives: every threshold the later stages are
-    drawn against is in it, and it refuses to be written at all once a rule it registers has
-    drifted from plan §6. A freeze that would produce artifacts measured against a bar the plan
-    no longer states should not reach the artifacts.
+    The **registered bar** goes first (#148) for the reason ADR-0013 gives: every threshold the
+    later stages are drawn against is in it, and it refuses to be written at all once a rule it
+    registers has drifted from plan §6. A freeze that would produce artifacts measured against a
+    bar the plan no longer states should not reach the artifacts.
 
-    The tile lists go next, ahead of the two mask artifacts, because those are a function of
-    this draw — the bank is K draws per head-train tile and the eval mask list is per test tile
-    — so a stage that fails later leaves behind exactly the inputs the next attempt reproduces
-    byte-for-byte.
+    **§3.1's tile lists** go next (#149), ahead of the two mask artifacts, because those are a
+    function of this draw — the bank is K draws per head-train tile and the eval mask list is per
+    test tile — so a stage that fails later leaves behind exactly the inputs the next attempt
+    reproduces byte-for-byte.
+
+    **ADR-0012's extractor contract** goes last of the three (#156) but still ahead of the two
+    that are owed, because it is the one committed input whose *other* reader is Task 2: a
+    contract that only appeared once the mask bank did would be gated on work the task inheriting
+    it does not depend on. Unlike the bar it carries §3.4's guard, refusing to overwrite a
+    version of itself whose content hash has moved.
     """
     paths = resolution.config.paths
-    written = prereg.write_bar(
-        Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path
-    )
-    print(f"\nwrote {written}")
+    bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
+    print(f"\nwrote {bar}")
     print(
         "  ADR-0013's register: twelve rules, seven with a number, each anchored in "
         f"{prereg.SECTION} of {paths.plan_path}"
     )
     for line in tiles.format_written(tiles.freeze(resolution.config), paths.artifacts_dir):
         print(line)
+    spec = extract.write_spec(resolution.config)
+    print(f"wrote {spec}")
+    print(
+        f"  ADR-0012's contract, md5 {artifacts.file_md5(spec)} — raw int16 metres in, "
+        f"{extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
+    )
     _unbuilt(
         "freeze",
-        f"wrote {prereg.BAR_NAME} and §3.1's tile lists, and stopped — the rest of the freeze "
-        f"is not built",
-        "the eval mask list, the train mask bank and `extractor_spec.json`, written beside them "
-        "— idempotent, and refusing to overwrite an artifact whose content hash has moved "
-        "(§3.4). The bar needs no such guard and `benchmark.prereg.write_bar` says why",
+        f"wrote {prereg.BAR_NAME}, §3.1's tile lists and {extract.SPEC_FILENAME}, and stopped — "
+        f"the rest of the freeze is not built",
+        "the eval mask list and the train mask bank, written beside them — idempotent, and "
+        "refusing to overwrite an artifact whose content hash has moved (§3.4). The bar needs no "
+        "such guard and `benchmark.prereg.write_bar` says why",
     )
 
 

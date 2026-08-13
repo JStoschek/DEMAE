@@ -279,6 +279,8 @@ def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, fl
     landed, and then #149's tile draw asks this box for a corpus it does not have. What the
     tile stage commits when a corpus *is* there is `test_benchmark_tiles.py`'s.
     """
+    from benchmark import extract
+
     with pytest.raises(FileNotFoundError, match="manifest.parquet"):
         launch.main(["freeze", *flags])
     out = capsys.readouterr().out
@@ -288,6 +290,11 @@ def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, fl
     assert bar.seam_break_deg == 0.15  # read from the artifact, not typed into the benchmark
     assert bar.rules == 12
 
+    # ADR-0012's contract is written *after* the tile lists (#156), so a freeze that stopped at
+    # the draw left none of it behind. That ordering is the claim, and the absence is the check:
+    # a half-frozen box must not carry a contract naming inputs that were never drawn.
+    assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
+
 
 def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box, flags, tmp_path):
     """ADR-0013's coupling, through the command: §6 is load-bearing, and this is how it bears.
@@ -295,6 +302,8 @@ def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box,
     Editing a registered phrase out of the copy that ships breaks the freeze rather than
     producing a bar nothing states — and the refusal names the entry that lost its anchor.
     """
+    from benchmark import extract
+
     text = PLAN.read_text()
     head, section = text[: text.index(prereg.SECTION)], text[text.index(prereg.SECTION):]
     plan = tmp_path / "edited-plan.md"
@@ -303,6 +312,9 @@ def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box,
     with pytest.raises(ValueError, match="R8 lost its anchor"):
         launch.main(["freeze", *flags, "--set", f'paths.plan_path="{plan}"'])
     assert not (box / "artifacts" / prereg.BAR_NAME).exists()
+    # The bar is written first for exactly this reason (ADR-0013), so nothing downstream of it
+    # reached the artifacts either.
+    assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
 
 
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):

@@ -40,9 +40,30 @@ from dataset import config as dataset_config
 
 
 def _imported_modules(source: str) -> set[str]:
-    """Every top-level package name this module imports, however it spells the import."""
+    """Every package name this module imports **at module scope**, however it spells it.
+
+    Module scope and not `ast.walk`, which is the whole distinction being tested: an import
+    inside a function costs nothing until that function is called, and that is exactly how
+    `dataset.loader` keeps torch out of the ETL's import (ADR-0003) and how
+    :mod:`benchmark.extract` keeps it out of `freeze`'s. A walk would find both and be unable to
+    tell them apart, which would make this test a ban on the pattern it is meant to permit.
+    """
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Import):
+            names |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def _lazily_imported_modules(source: str) -> set[str]:
+    """Every package name imported from *inside* something — a function or a method body."""
+    module_scope = set(ast.parse(source).body)
     names: set[str] = set()
     for node in ast.walk(ast.parse(source)):
+        if node in module_scope:
+            continue
         if isinstance(node, ast.Import):
             names |= {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
@@ -62,6 +83,20 @@ def test_the_package_is_torch_optional_the_way_dataset_is():
         path.name for path in directory.glob("*.py") if "torch" in _imported_modules(path.read_text())
     }
     assert not offenders, f"{sorted(offenders)} import torch at module scope"
+
+
+def test_the_module_that_runs_an_encoder_reaches_for_torch_lazily_rather_than_not_at_all():
+    """The guard on the test above: it would pass vacuously over a package that never used torch.
+
+    :mod:`benchmark.extract` is the one module that genuinely runs a model, and the property
+    worth having is not "no torch anywhere" — it is that `freeze` stays CPU-only and torch-free
+    while extraction is free to import whatever it needs at the moment it needs it. So this pins
+    the other half: torch and timm really are reached for, and really are reached for inside a
+    function.
+    """
+    source = (Path(benchmark.__file__).parent / "extract.py").read_text()
+    assert {"torch", "timm", "pretrain"} <= _lazily_imported_modules(source)
+    assert "torch" not in _imported_modules(source)
 
 
 # --- §4's knobs, at the numbers the plan cites --------------------------------
