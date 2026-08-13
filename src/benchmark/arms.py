@@ -67,6 +67,19 @@ INPUT_CONVENTIONS: Final = (
 #: TerraMind encoder accepts either silently (p118 §7). ``none`` is an arm with no encoder.
 NORMALIZATIONS: Final = ("none", "per_tile", "terramind_v1")
 
+#: How the position embedding the model *runs with* is derived from the one the checkpoint
+#: ships. Distinct from :attr:`Encoder.pos_encoding`, which names the closed form the shipped
+#: tensor is **checked against**: two encoders can agree on the form and disagree on the
+#: derivation, and ADR-0011 is exactly that case.
+#:
+#: ``as_published`` is the identity — the checkpoint's tensor is already at the run's grid, which
+#: is true of every 224 px-native ViT here. ``rederived_14x14_crop`` is ADR-0011 Decision 2's
+#: centre-anchored crop of TerraMind's native 16x16 grid. ``bicubic_resize`` is terratorch's own
+#: default path, rejected at 0.9708 against #134's 0.99 bar and kept expressible **only** because
+#: ADR-0011 Decision 4 pre-registers an A5-at-20k ablation row against it (ADR-0013 R11) — a
+#: derivation the contract cannot express is an ablation nobody can run.
+POS_EMB_DERIVATIONS: Final = ("as_published", "rederived_14x14_crop", "bicubic_resize")
+
 
 @dataclass(frozen=True)
 class Encoder:
@@ -87,15 +100,28 @@ class Encoder:
     family: str
     #: Feature width — the only thing A4/A5/A6's shared head differs by (§4.1).
     width: int
-    #: ADR-0011 / §2.3's precondition, declared rather than remembered. ``sincos2d`` is MAE's
-    #: own column-first order; ``sincos2d_rowfirst`` is mmselfsup's, which R4's weights learned;
-    #: ``rederived_14x14_crop`` is ADR-0011's centre-anchored crop, *not* a bicubic resize.
+    #: §2.3's precondition, declared rather than remembered. ``sincos2d`` is MAE's own
+    #: column-first order; ``sincos2d_rowfirst`` is mmselfsup's, which R4's weights learned;
+    #: ``sincos2d_terramind`` is `build_2d_sincos_posemb`'s, the MoCo-v3 form TerraMind's
+    #: ``[1, D, 16, 16]`` parameter is a closed form of. What the shipped tensor **is**.
     pos_encoding: str
     #: The :class:`benchmark.config.Paths` field naming this encoder's checkpoint.
     checkpoint_field: str
+    #: One of :data:`POS_EMB_DERIVATIONS` — how the tensor the model *runs with* is derived from
+    #: the one above. ADR-0011 Decision 2 is a value of this field and not a line in extraction
+    #: code, because it is a fact about this encoder that a reader has to be able to find from
+    #: the committed contract: the nine possible crops span 44% relative RMS, more than the
+    #: bicubic error being removed, so the anchor is as load-bearing as the derivation.
+    pos_emb_derivation: str = "as_published"
     #: §2.3's table, where it gives one. ``None`` where no source in this plan counts them, and
     #: left ``None`` rather than inferred: §6 item 4 prints parameter counts, and a count this
     #: registry guessed would print as a measurement.
+    #:
+    #: The encoder **as published**. TerraMind's is p118 §8's 90,172,416, and the model
+    #: :mod:`benchmark.extract` runs holds 46,080 fewer — ADR-0011 substitutes the 14x14 crop for
+    #: the native 16x16 ``pos_emb``, all of it frozen position and none of it trainable. p157
+    #: records both with the arithmetic checked, so the two numbers are reconciled somewhere
+    #: rather than looking like a disagreement.
     params: int | None = None
     #: Transformer blocks. ADR-0012 §3 emits one intermediate per block, so a declared count
     #: that disagrees with the checkpoint is refused rather than absorbed by a shape error.
@@ -126,6 +152,13 @@ class Encoder:
     #: reason `output` and `intermediates[11]` are separately named.
     output_is_normed: bool = True
 
+    def __post_init__(self) -> None:
+        if self.pos_emb_derivation not in POS_EMB_DERIVATIONS:
+            raise ValueError(
+                f"encoder {self.name}: unknown pos_emb derivation {self.pos_emb_derivation!r}; "
+                f"registered: {sorted(POS_EMB_DERIVATIONS)}"
+            )
+
 
 #: The `-v2` release bundles' `encoder.pt` md5s, and the answer to "which bundle is
 #: authoritative" (#156). Both R5 bundles ship a **byte-identical** `encoder.pt`, and so do both
@@ -136,6 +169,15 @@ class Encoder:
 #: :mod:`benchmark.config`'s `Paths` points at `-v2` for that reason.
 DEMAE_R5_MD5: Final = "3ec5ebc72fa28c43fe88f67692d9b41a"
 DEMAE_R4_MD5: Final = "59e8346c4b08e1ab4fedd44f0802e12b"
+
+#: `TerraMind_Tokenizer_DEM.pt` — the whole 1,145,511,376-byte tokenizer, of which A5 and A9 read
+#: the 90.2 M-parameter `encoder.` half (p118 §8). Published rather than observed, on
+#: :attr:`Encoder.checkpoint_md5`'s rule: the file is public, Apache-2.0 and ungated, at
+#: `ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM` revision `aba0a56` (p118 §3), so its identity
+#: is a reviewed line here rather than something a box certifies by having downloaded it. #138
+#: is why that matters here more than elsewhere: **three** DEM constant pairs ship across IBM's
+#: artifacts, and the v0.1 tokenizer is a different file with the same shape and a different diet.
+TERRAMIND_TOKENIZER_DEM_MD5: Final = "66b7fbcb81e04684df31873623d7a3de"
 
 #: The encoders §1 and §2.3 name. TerraMind's 4.92M excess over DEMAE's ViT-B is reported and
 #: not attributed (§2.3): terratorch was not installed in any live worktree when it was written.
@@ -176,13 +218,19 @@ ENCODERS: Final[dict[str, Encoder]] = {
         name="terramind",
         family="terramind",
         width=768,  # the 768-d `feats`, pre-`quant_proj` (§1)
-        # ADR-0011: the centre-anchored 14x14 crop of TerraMind's 16x16 grid, so both encoders
-        # are in-distribution at 224 px simultaneously. The bicubic resize scored 0.9708 against
-        # #134's 0.99 materiality bar and was rejected; §4's A5-at-20k ablation row evidences it.
-        pos_encoding="rederived_14x14_crop",
+        # What the checkpoint ships is `build_2d_sincos_posemb(16, 16)` — a closed form of the
+        # token's *integer* grid index, in the checkpoint at all only because it is wrapped in an
+        # `nn.Parameter` (ADR-0011). So it is verified against that form rather than trusted.
+        pos_encoding="sincos2d_terramind",
+        # ADR-0011 Decision 2: the centre-anchored 14x14 crop of that 16x16 grid, so both
+        # encoders are in-distribution at 224 px simultaneously. terratorch's default bicubic
+        # resize scored 0.9708 against #134's 0.99 materiality bar and was rejected; §4's
+        # A5-at-20k ablation row evidences it.
+        pos_emb_derivation="rederived_14x14_crop",
         checkpoint_field="terramind_checkpoint",
         params=90_172_416,
         checkpoint_format="terratorch",
+        checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         # p118 §5.3 measured it: `return_intermediates=True` yields twelve tensors with no
         # separate post-norm entry, its last bit-identical to `encoder(x)`. So "the last layer"
         # means something different here than it does for DEMAE, which is ADR-0012 §3's subject.
@@ -204,13 +252,20 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # goes in the moment a box mounts one and `freeze` records what it froze against.
         checkpoint_md5=None,
     ),
+    # A9's entry. Same file, same 90.2 M-parameter encoder, same diet — what differs is what the
+    # arm does *after* the features (§1: encode, FSQ, diffusion decode), which is not something
+    # the frozen-feature contract has an opinion about. `params` stays `None` here rather than
+    # repeating 90,172,416: §6 item 4 prints parameter counts, and A9's total is the encoder plus
+    # the 196 M-parameter decoder it actually runs, which is a number no source in this plan gives.
     "terramind-tokenizer": Encoder(
         name="terramind-tokenizer",
         family="terramind",
         width=768,
-        pos_encoding="rederived_14x14_crop",
+        pos_encoding="sincos2d_terramind",
+        pos_emb_derivation="rederived_14x14_crop",
         checkpoint_field="terramind_checkpoint",
         checkpoint_format="terratorch",
+        checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
         has_cls=False,
     ),

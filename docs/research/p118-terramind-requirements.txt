@@ -1,8 +1,11 @@
 # The exact environment #118's run was recorded on, resolved by `uv pip compile` from
 # `terratorch>=1.2.5` + `diffusers` on 2026-08-07, python 3.12.
 #
-# This is a record, not a project dependency. terratorch must NOT go in DEMAE's own
-# pyproject.toml — see the module docstring of scripts/p118_terramind_probe.py. Recreate with:
+# This is a record of one resolve, not a dependency list. Since #157, pyproject.toml carries a
+# `terramind` *extra* pinning terratorch==1.2.10 and diffusers==0.39.0 — the two lines this file
+# argues for — because benchmark.extract reads the encoder for arms A5 and A9. The other 111
+# lines stay here and out of the core, which is what "not a project dependency" was protecting.
+# Recreate the full environment this run was recorded on with:
 #
 #   uv venv --python 3.12 /tmp/tt-venv
 #   VIRTUAL_ENV=/tmp/tt-venv uv pip install -r docs/research/p118-terramind-requirements.txt

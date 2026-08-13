@@ -25,6 +25,11 @@
       "normalization": "per_tile",
       "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
       "output_is_normed": true,
+      "pos_emb": {
+        "derivation": "as_published",
+        "grid_px": 14,
+        "native_grid_px": 14
+      },
       "pos_encoding": "sincos2d_rowfirst",
       "timm_model": "vit_base_patch16_224",
       "width": 768
@@ -39,6 +44,11 @@
       "normalization": "per_tile",
       "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
       "output_is_normed": true,
+      "pos_emb": {
+        "derivation": "as_published",
+        "grid_px": 14,
+        "native_grid_px": 14
+      },
       "pos_encoding": "sincos2d",
       "timm_model": "vit_base_patch16_224",
       "width": 768
@@ -53,6 +63,11 @@
       "normalization": "per_tile",
       "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
       "output_is_normed": true,
+      "pos_emb": {
+        "derivation": "as_published",
+        "grid_px": 14,
+        "native_grid_px": 14
+      },
       "pos_encoding": "sincos2d",
       "timm_model": "vit_small_patch16_224",
       "width": 384
@@ -67,7 +82,60 @@
       "normalization": "per_tile",
       "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors.",
       "output_is_normed": true,
+      "pos_emb": {
+        "derivation": "as_published",
+        "grid_px": 14,
+        "native_grid_px": 14
+      },
       "pos_encoding": "sincos2d_rowfirst",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
+    "terramind": {
+      "checkpoint_format": "terratorch",
+      "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",
+      "depth": 12,
+      "family": "terramind",
+      "has_cls": false,
+      "name": "terramind",
+      "normalization": "terramind_v1",
+      "note": "`output` is bit-identical to `intermediates[11]` (p118 \u00a75.3) \u2014 and not because nothing happens after block 12. terratorch's `ViTEncoder` applies a residual `post_mlp` and **overwrites the last intermediate with the result**, so both fields carry it and neither is the raw block output. What this field claims is the *relation*, which is the thing a consumer can be wrong about. The two fields are still separate, because on the DEMAE side they are two different tensors.",
+      "output_is_normed": false,
+      "pos_emb": {
+        "adr": "ADR-0011",
+        "anchor": [
+          1,
+          1
+        ],
+        "derivation": "rederived_14x14_crop",
+        "grid_px": 14,
+        "native_grid_px": 16
+      },
+      "pos_encoding": "sincos2d_terramind",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
+    "terramind-tokenizer": {
+      "checkpoint_format": "terratorch",
+      "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",
+      "depth": 12,
+      "family": "terramind",
+      "has_cls": false,
+      "name": "terramind-tokenizer",
+      "normalization": "terramind_v1",
+      "note": "`output` is bit-identical to `intermediates[11]` (p118 \u00a75.3) \u2014 and not because nothing happens after block 12. terratorch's `ViTEncoder` applies a residual `post_mlp` and **overwrites the last intermediate with the result**, so both fields carry it and neither is the raw block output. What this field claims is the *relation*, which is the thing a consumer can be wrong about. The two fields are still separate, because on the DEMAE side they are two different tensors.",
+      "output_is_normed": false,
+      "pos_emb": {
+        "adr": "ADR-0011",
+        "anchor": [
+          1,
+          1
+        ],
+        "derivation": "rederived_14x14_crop",
+        "grid_px": 14,
+        "native_grid_px": 16
+      },
+      "pos_encoding": "sincos2d_terramind",
       "timm_model": "vit_base_patch16_224",
       "width": 768
     }
@@ -77,20 +145,7 @@
   "layers": 12,
   "layout": "(N, 196, D) patch tokens, row-major; CLS an optional side field",
   "patch_px": 16,
-  "pending": {
-    "terramind": {
-      "encoders": [
-        "terramind",
-        "terramind-tokenizer"
-      ],
-      "owes": [
-        "the named v1_pretraining_mean/std[\"tok_dem@224\"] lookup, and its value checked against 670.665 / 951.272 (ADR-0012 \u00a77.2, #138)",
-        "ADR-0011's rederived_14x14_crop pos_emb derivation as a checked declared field",
-        "the fp32-versus-compute-dtype agreement, which ADR-0012 \u00a76 names as unmeasured for this arm rather than inheriting the DEMAE family's 0.999968"
-      ],
-      "ticket": 12
-    }
-  },
+  "pending": {},
   "reference_dtype": "fp32",
   "statistics": "recomputed from the passed valid mask; never read from the manifest",
   "tokens": 196,

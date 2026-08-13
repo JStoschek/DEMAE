@@ -37,6 +37,7 @@ import numpy as np
 import pytest
 
 from benchmark import arms, artifacts
+from benchmark import extract as extract_module
 from benchmark.config import BenchmarkConfig
 from benchmark.extract import (
     ADR,
@@ -71,6 +72,26 @@ GRID = dataset_config.TILE_PX // dataset_config.PATCH_PX
 #: pinned by the registry rather than observed at freeze time.
 R5 = REPO / ".release-work" / "release-R5-v2" / "encoder.pt"
 requires_r5 = pytest.mark.skipif(not R5.is_file(), reason="the R5 release encoder is not mounted")
+
+#: TerraMind's DEM tokenizer, which is not a file this repository mounts anywhere: it comes down
+#: from the Hugging Face hub and lives in that cache. Resolved **offline** — `try_to_load_from_cache`
+#: never reaches the network — so a box that has it runs these tests and a box that does not skips
+#: them, and neither downloads 1.15 GB because a test module was imported.
+def _cached_terramind() -> Path | None:
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:  # terratorch is an extra; so is everything it brings
+        return None
+    hit = try_to_load_from_cache(
+        "ibm-esa-geospatial/TerraMind-1.0-Tokenizer-DEM", "TerraMind_Tokenizer_DEM.pt"
+    )
+    return Path(hit) if isinstance(hit, str) else None
+
+
+TERRAMIND = _cached_terramind()
+requires_terramind = pytest.mark.skipif(
+    TERRAMIND is None, reason="TerraMind's DEM tokenizer is not in this box's Hugging Face cache"
+)
 
 MANIFEST = REPO / "data" / "corpus_500k" / "manifest.parquet"
 SHARDS = REPO / "data" / "corpus_500k" / "shards"
@@ -405,21 +426,47 @@ def test_the_std_floor_is_the_loaders_own():
     assert STD_FLOOR == dataset_loader._STD_FLOOR
 
 
-# --- TerraMind is named as owed, not absent ------------------------------------
+# --- Nothing is owed, and the block that would say so is still there ------------
 
 
-def test_terramind_is_named_as_owed_rather_than_missing_from_the_contract(tmp_path, vits_checkpoint):
-    """#12's half, in the committed file. An absent contract that read as a resolved one is
-    exactly what this family of artifacts exists to prevent."""
+def test_every_registered_encoder_is_in_the_contract_and_nothing_is_pending(
+    tmp_path, vits_checkpoint
+):
+    """#157 discharged the last owed half, so the committed file covers the whole registry.
+
+    The `pending` block stays, empty. It is the shape this contract uses to say an encoder's
+    half is *owed rather than absent*, and an empty block is the claim "nothing is owed" where a
+    deleted field would be silence — which is the state #156 was careful not to ship.
+    """
     spec = build_spec(_config(tmp_path, vits_checkpoint))
-    assert "terramind" not in spec.encoders and "terramind-tokenizer" not in spec.encoders
-    owed = spec.pending["terramind"]
-    assert owed["ticket"] == 12
-    assert set(owed["encoders"]) == {"terramind", "terramind-tokenizer"}
-    assert any("670.665" in line for line in owed["owes"])
+    assert set(spec.encoders) == set(arms.ENCODERS)
+    assert spec.pending == {}
     for arm in ("A5", "A9"):
-        with pytest.raises(NotImplementedError, match="ticket #12"):
-            spec.encoder_for(arm)
+        assert spec.encoder_for(arm).family == "terramind"
+
+
+def test_an_encoder_named_as_owed_refuses_by_naming_its_ticket(tmp_path, vits_checkpoint):
+    """The mechanism itself, exercised against a spec that has something outstanding.
+
+    Nothing in this repository is pending today, so the branch would otherwise ship untested —
+    which is exactly the failure ADR-0012 Decision 4 names one paragraph over. A spec built by
+    hand is the honest way to keep it a feature: the *next* encoder to be registered ahead of
+    its build is the case, and this is what it will do.
+    """
+    spec = build_spec(_config(tmp_path, vits_checkpoint))
+    owed = replace(
+        spec,
+        encoders={k: v for k, v in spec.encoders.items() if k != "terramind"},
+        pending={
+            "terramind": {
+                "ticket": 12,
+                "encoders": ["terramind"],
+                "owes": ["the named tok_dem@224 lookup, checked against 670.665 / 951.272"],
+            }
+        },
+    )
+    with pytest.raises(NotImplementedError, match="ticket #12"):
+        owed.encoder_for("A5")
 
 
 def test_an_arm_with_no_encoder_has_no_frozen_feature_contract(tmp_path, vits_checkpoint):
@@ -519,10 +566,10 @@ def test_a_tile_with_no_valid_pixels_is_refused_rather_than_divided_by_the_floor
         tile_statistics(raw, np.zeros_like(raw, dtype=bool))
 
 
-def test_a_normalization_this_ticket_does_not_own_says_so(tile):
+def test_a_normalization_this_contract_does_not_implement_says_so(tile):
     raw, valid = tile
     with pytest.raises(NotImplementedError, match="pending"):
-        normalize(raw[None], valid[None], normalization="terramind_v1")
+        normalize(raw[None], valid[None], normalization="none")
 
 
 @requires_corpus
@@ -649,25 +696,22 @@ def test_layer_twelve_is_not_the_output_and_the_relation_is_the_declared_one(fea
 
 
 def test_the_note_states_the_relation_on_both_sides_not_just_the_demae_one(tmp_path, vits_checkpoint):
-    """ADR-0012 Decision 4 says "on both sides", and the un-normed side has no encoder yet.
+    """ADR-0012 Decision 4 says "on both sides", and the two sides say different things."""
+    spec = build_spec(_config(tmp_path, vits_checkpoint))
 
-    Its *note* is still a clause of the contract this ticket writes, and an unexercised branch
-    inside a committed contract is the failure this whole seam exists to avoid — so the string
-    is asserted directly, against the registry entry #12 will wire up.
-    """
-    from benchmark.extract import _encoder_note
-
-    normed = _encoder_note(arms.ENCODERS["demae-r5"])
+    normed = spec.encoders["demae-r5"].note
     assert "**not** `intermediates[11]`" in normed
 
     # TerraMind: p118 §5.3 measured twelve intermediates with no separate post-norm entry, the
     # last bit-identical to `encoder(x)`. Same two fields, and on this side they are one tensor.
-    un_normed = _encoder_note(arms.ENCODERS["terramind"])
+    un_normed = spec.encoders["terramind"].note
     assert "bit-identical to `intermediates[11]`" in un_normed
     assert arms.ENCODERS["terramind"].output_is_normed is False
-    # And the note never reaches the committed file while the encoder is #12's, which is why the
-    # string is checked here rather than read out of `extractor_spec.json`.
-    assert "terramind" not in build_spec(_config(tmp_path, vits_checkpoint)).encoders
+    # And the note says *why* they are one tensor, which is not "nothing happens after block 12":
+    # `ViTEncoder` writes its residual `post_mlp` back over the last intermediate, so both fields
+    # carry it. A note that got the mechanism wrong would be a plausible sentence in a file whose
+    # whole job is being re-read rather than re-derived.
+    assert "post_mlp" in un_normed
 
 
 def test_the_canonical_layout_is_patch_tokens_with_cls_as_a_side_field(features):
@@ -1014,6 +1058,574 @@ def test_a_checkpoint_that_is_not_the_mmselfsup_mae_is_refused(vits_checkpoint, 
     state, _ = read_state_dict(vits_checkpoint)
     with pytest.raises(ValueError, match="not the mmselfsup MAE this contract declares"):
         _timm_state_from_mmselfsup(state, imagenet_mae_entry)
+
+
+# --- The TerraMind half (#157) -------------------------------------------------
+#
+# Three checks specific to this encoder, plus ADR-0012 §6's unmeasured half. Split the way the
+# module is: everything that is a fact about *geometry* or about the *contract* is checked with
+# no weights at all — ADR-0011's whole argument is closed-form and needs none — and the refusals
+# that fire before a model is built use the same few-tensor stubs the timm side does. The real
+# 1.15 GB tokenizer, where a box mounts one, then runs the forward pass none of that can fake.
+
+
+def _terramind_state(*, depth=LAYERS, width=768, native_px=16, pos_emb="closed_form"):
+    """The `encoder.`-prefixed few-tensor stub, for the refusals that never build a model."""
+    import torch
+
+    from terratorch.models.backbones.terramind.tokenizer.models.vit_models import (
+        build_2d_sincos_posemb,
+    )
+
+    state = {f"encoder.blocks.{i}.norm1.weight": torch.zeros(width) for i in range(depth)}
+    if pos_emb == "closed_form":
+        state["encoder.pos_emb"] = build_2d_sincos_posemb(native_px, native_px, embed_dim=width)
+    elif pos_emb is not None:
+        state["encoder.pos_emb"] = pos_emb
+    return state
+
+
+def _terramind_checkpoint(path, **kwargs):
+    import torch
+
+    torch.save(_terramind_state(**kwargs), path)
+    return path
+
+
+def _terramind_config(tmp_path, checkpoint) -> BenchmarkConfig:
+    base = BenchmarkConfig()
+    return base.replace(
+        arm="A5",
+        paths=base.paths.replace(
+            artifacts_dir=str(tmp_path),
+            demae_r5_checkpoint=None,
+            demae_r4_checkpoint=None,
+            terramind_checkpoint=None if checkpoint is None else str(checkpoint),
+        ),
+        extract=base.extract.replace(compute_dtype="fp32"),
+    )
+
+
+def _terramind_extractor(tmp_path, checkpoint, monkeypatch):
+    """An extractor whose TerraMind md5 is the stub's, so the load reaches the checks under test.
+
+    Republishing rather than bypassing: §7.1's md5 refusal is the *first* guard and has its own
+    test below, so a TerraMind test that wanted to reach the second guard would otherwise only
+    ever be re-testing the first.
+
+    **Both** entries, because A5 and A9 read the same file — `terramind` and
+    `terramind-tokenizer` share a `checkpoint_field`, so republishing one leaves `freeze`
+    comparing the other against the real 1.15 GB tokenizer's md5.
+    """
+    for name in ("terramind", "terramind-tokenizer"):
+        _publish(monkeypatch, checkpoint, name)
+    cfg = _terramind_config(tmp_path, checkpoint)
+    return Extractor(build_spec(cfg), cfg)
+
+
+# --- The pin, which is the first thing this ticket owes
+
+
+def test_the_terramind_environment_pins_diffusers_at_the_verified_version():
+    """AC 1, and the hazard p118 §4 actually found.
+
+    terratorch declares a **bare** `diffusers` — the `==0.30.0` everyone quotes lives in the body
+    of a warning that fires when the VQVAE import fails, not in `requires-dist` — so with a range
+    here a future diffusers release breaks the tokenizer import with no lockfile signal at all.
+    Both pins are therefore exact, and this asserts the exactness rather than the values alone.
+    """
+    import tomllib
+
+    extras = tomllib.loads((REPO / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"
+    ]
+    assert extras["terramind"] == ["terratorch==1.2.10", "diffusers==0.39.0"]
+    # And it is an *extra*: `pip install demae` still builds a corpus on a box with no CUDA
+    # stack, which is the property p118's "must not become a project dependency" was protecting.
+    assert not any("terratorch" in dep for dep in tomllib.loads(
+        (REPO / "pyproject.toml").read_text()
+    )["project"]["dependencies"])
+
+
+def test_the_installed_versions_are_the_pinned_ones():
+    """The pin is only a pin if the environment the suite runs in honours it."""
+    import importlib.metadata as md
+
+    assert md.version("terratorch") == "1.2.10"
+    assert md.version("diffusers") == "0.39.0"
+
+
+# --- ADR-0012 §7.2: the constants, selected by name and checked by value
+
+
+def test_the_constants_are_read_out_of_the_installed_package(monkeypatch):
+    from benchmark.extract import TERRAMIND_MEAN, TERRAMIND_STD, terramind_constants
+
+    assert terramind_constants() == (TERRAMIND_MEAN, TERRAMIND_STD) == (670.665, 951.272)
+
+
+def test_constants_that_resolve_by_name_to_another_value_are_refused(monkeypatch):
+    """The *value* half. #138 found three DEM pairs across IBM's artifacts, and this is what
+    catches a terratorch upgrade retuning the pair the name resolves to — a change that would
+    otherwise silently rescale every A5 and A9 input and raise nothing (p118 §7)."""
+    from terratorch.models.backbones.terramind.model import terramind_register
+
+    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+
+    monkeypatch.setitem(terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY, [651.663])
+    with pytest.raises(ValueError, match="651.663"):
+        terramind_constants()
+
+
+def test_a_renamed_modality_is_refused_rather_than_falling_back_to_a_value(monkeypatch):
+    """The *name* half. §2.1's "by name rather than by value" is about **selection**: the name is
+    what picks the pair belonging to the v1 checkpoint this plan benchmarks, so a rename is a
+    refusal and not something to paper over with the hardcoded number."""
+    from terratorch.models.backbones.terramind.model import terramind_register
+
+    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+
+    monkeypatch.delitem(terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY)
+    with pytest.raises(ValueError, match="publishes no v1 pretraining constants"):
+        terramind_constants()
+
+
+def test_multi_channel_constants_are_refused(monkeypatch):
+    from terratorch.models.backbones.terramind.model import terramind_register
+
+    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+
+    monkeypatch.setitem(
+        terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY, [670.665, 670.665]
+    )
+    with pytest.raises(ValueError, match="single-channel"):
+        terramind_constants()
+
+
+def test_the_terramind_diet_is_a_global_affine_over_metres(tile):
+    """§2.1's other diet, and p118 §7's trap from the other side.
+
+    A 1589 m offset must survive as 1589/951.272 — absolute elevation is *signal* to TerraMind,
+    where per-tile standardization destroys it. The two normalizations produce identically shaped
+    tensors the encoder accepts either of, so what makes them different has to be asserted.
+    """
+    raw, valid = tile
+    out = normalize(raw[None], valid[None], normalization="terramind_v1")
+    expected = (raw.astype(np.float32) - np.float32(670.665)) / np.float32(951.272)
+    np.testing.assert_array_equal(out[0], expected)
+
+    offset = (raw + 1589).astype(np.int16)
+    shifted = normalize(offset[None], valid[None], normalization="terramind_v1")
+    assert (shifted[0] - out[0]).mean() == pytest.approx(1589 / 951.272, rel=1e-4)
+
+
+def test_the_terramind_diet_ignores_the_mask_and_says_so(tile):
+    """ADR-0012 Decision 1: the affine is global, so there is no per-tile term a mask could enter.
+
+    Asserted rather than left to the reader, because the *other* diet in this same function is
+    defined entirely by the mask, and "which of the two reads it" is exactly the kind of thing a
+    consumer would otherwise have to infer from the implementation.
+    """
+    raw, valid = tile
+    everything = np.ones_like(valid)
+    np.testing.assert_array_equal(
+        normalize(raw[None], valid[None], normalization="terramind_v1"),
+        normalize(raw[None], everything[None], normalization="terramind_v1"),
+    )
+    # Where the per-tile diet moves with it, which is the contrast that makes the claim mean
+    # something rather than being true of both.
+    assert not np.array_equal(
+        normalize(raw[None], valid[None], normalization="per_tile"),
+        normalize(raw[None], everything[None], normalization="per_tile"),
+    )
+
+
+# --- ADR-0011: the derivation, as a declared field
+
+
+def test_the_contract_declares_the_centre_anchored_crop():
+    """AC 3. The value is in the *committed* file, not only in the code that writes it."""
+    from benchmark.extract import TERRAMIND_POS_EMB_ANCHOR
+
+    committed = json.loads((REPO / "artifacts" / "task1" / SPEC_FILENAME).read_text())
+    for name in ("terramind", "terramind-tokenizer"):
+        block = committed["encoders"][name]["pos_emb"]
+        assert block == {
+            "derivation": "rederived_14x14_crop",
+            "grid_px": 14,
+            "native_grid_px": 16,
+            "anchor": list(TERRAMIND_POS_EMB_ANCHOR),
+            "adr": "ADR-0011",
+        }
+    # Every other encoder declares the identity rather than saying nothing, so a reader of the
+    # file never has to work out whether a missing derivation means "none" or "not yet decided".
+    for name in ("demae-r5", "demae-r4", "demae-vits", "imagenet-mae"):
+        assert committed["encoders"][name]["pos_emb"]["derivation"] == "as_published"
+
+
+def test_a_bicubic_derived_contract_is_distinguishable_from_a_re_derived_one(
+    tmp_path, vits_checkpoint
+):
+    """AC 3's second half, and the reason the derivation is a *value* and not a code path.
+
+    ADR-0011 Decision 4 pre-registers an A5-at-20k ablation against the bicubic resize (ADR-0013
+    R11), so both have to be expressible — and the spec's md5 goes into every run record, so the
+    two must not hash the same. If they did, a results table could not say which of them produced
+    it, which is the one thing the committed file exists to make possible.
+    """
+    re_derived = build_spec(_config(tmp_path, vits_checkpoint))
+    bicubic_registry = replace(arms.ENCODERS["terramind"], pos_emb_derivation="bicubic_resize")
+    entry = re_derived.encoders["terramind"]
+    bicubic = replace(
+        re_derived,
+        encoders={
+            **re_derived.encoders,
+            "terramind": EncoderSpec(
+                **{
+                    **entry.to_dict(),
+                    "pos_emb": extract_module.pos_emb_block(bicubic_registry, grid_px=14),
+                }
+            ),
+        },
+    )
+    assert bicubic.encoders["terramind"].pos_emb["derivation"] == "bicubic_resize"
+    assert "anchor" not in bicubic.encoders["terramind"].pos_emb  # a resize has no anchor
+    assert bicubic.md5() != re_derived.md5()
+    # And it is refused at load while the registry says otherwise, so the ablation is a reviewed
+    # registry change rather than an edit to a committed file nobody diffs.
+    with pytest.raises(ValueError, match="derives its pos_emb as"):
+        bicubic.check()
+
+
+def test_the_crop_is_the_closed_form_at_this_grid_and_the_resize_is_not():
+    """ADR-0011's Context section, re-measured with no weights and no GPU — as it was taken.
+
+    Two claims, and the second is the one that bites. The crop is *bit-identical* to rebuilding
+    the embedding at 14, because `build_2d_sincos_posemb` builds its grid from `torch.arange` and
+    the index is absolute. The resize preserves *normalized* position instead, so it stretches
+    the index spacing to 1.1429 where a crop's is exactly 1.0.
+    """
+    import torch
+
+    from terratorch.models.backbones.terramind.tokenizer.models.vit_models import (
+        build_2d_sincos_posemb,
+    )
+
+    native = build_2d_sincos_posemb(16, 16, embed_dim=768)
+    at_grid = build_2d_sincos_posemb(14, 14, embed_dim=768)
+    assert torch.equal(native[:, :, :14, :14], at_grid)  # max abs difference 0.0
+
+    def rel_rms(a, b):
+        return float((a - b).pow(2).mean().sqrt() / b.pow(2).mean().sqrt())
+
+    centre = extract_module.derive_pos_emb(
+        native, {"derivation": "rederived_14x14_crop", "grid_px": 14, "native_grid_px": 16,
+                 "anchor": [1, 1]}
+    )
+    resized = extract_module.derive_pos_emb(
+        native, {"derivation": "bicubic_resize", "grid_px": 14, "native_grid_px": 16}
+    )
+    # ADR-0011's anchor table, both rows: the resize sits 13.57% from the centre crop and 26.25%
+    # from the top-left one — and the anchors are 23.35% apart, which is why the anchor is
+    # declared rather than assumed.
+    assert rel_rms(resized, centre) == pytest.approx(0.1357, abs=5e-4)
+    assert rel_rms(resized, native[:, :, :14, :14]) == pytest.approx(0.2625, abs=5e-4)
+    assert rel_rms(centre, native[:, :, :14, :14]) == pytest.approx(0.2335, abs=5e-4)
+
+
+def test_substituting_the_crop_makes_terratorchs_own_resize_a_no_op():
+    """Why `_build_terratorch` replaces a parameter instead of patching `ViTEncoder.forward`.
+
+    `forward` bicubically interpolates `pos_emb` to whatever grid the input implies — including
+    when it is *already* that grid, where `align_corners=False` maps every destination index to
+    itself and the interpolation is exactly the identity. So the crop goes in as the parameter
+    and terratorch's own line then adds it unchanged. Equality, not closeness: if this were
+    approximate, "we corrected how terratorch feeds TerraMind" would be two changes, not one.
+    """
+    import torch
+
+    from terratorch.models.backbones.terramind.tokenizer.models.vit_models import (
+        build_2d_sincos_posemb,
+    )
+
+    crop = build_2d_sincos_posemb(16, 16, embed_dim=768)[:, :, 1:15, 1:15]
+    same = torch.nn.functional.interpolate(
+        crop, size=(14, 14), mode="bicubic", align_corners=False
+    )
+    assert torch.equal(same, crop)
+
+
+def test_a_derivation_this_contract_does_not_implement_says_so():
+    import torch
+
+    with pytest.raises(NotImplementedError, match="pos_emb derivation"):
+        extract_module.derive_pos_emb(
+            torch.zeros(1, 8, 16, 16),
+            {"derivation": "stretch_it", "grid_px": 14, "native_grid_px": 16},
+        )
+
+
+def test_a_crop_that_does_not_fit_the_native_grid_is_refused():
+    import torch
+
+    with pytest.raises(ValueError, match="does not fit"):
+        extract_module.derive_pos_emb(
+            torch.zeros(1, 8, 16, 16),
+            {"derivation": "rederived_14x14_crop", "grid_px": 14, "native_grid_px": 16,
+             "anchor": [4, 4]},
+        )
+
+
+# --- §7.1 on this side: identity, layer count and shape against the model loaded
+
+
+def test_an_unmounted_terramind_encoder_names_the_path_knob(tmp_path):
+    spec = build_spec(_terramind_config(tmp_path, None))
+    with pytest.raises(FileNotFoundError, match="paths.terramind_checkpoint"):
+        Extractor(spec, _terramind_config(tmp_path, None)).encoder("A5")
+
+
+def test_a_wrong_terramind_checkpoint_md5_is_refused(tmp_path, monkeypatch):
+    """The published md5 is #138's real guard here: the v0.1 DEM tokenizer is a different file
+    with the same shape and a different diet, and it would load without complaint.
+
+    Both ends of the rule, because both are reachable. `freeze` refuses to *pin* a file that is
+    not the published one; and past that — a spec frozen honestly and the file swapped afterwards
+    — the load refuses to read it.
+    """
+    checkpoint = _terramind_checkpoint(tmp_path / "not_the_published_one.pt")
+    cfg = _terramind_config(tmp_path, checkpoint)
+    with pytest.raises(ValueError, match="the terramind encoder this plan benchmarks is"):
+        build_spec(cfg)
+
+    extractor = _terramind_extractor(tmp_path, checkpoint, monkeypatch)
+    swapped = tmp_path / "swapped.pt"
+    swapped.write_bytes(checkpoint.read_bytes() + b"\n")
+    moved = cfg.replace(paths=cfg.paths.replace(terramind_checkpoint=str(swapped)))
+    with pytest.raises(ValueError, match="declares terramind as"):
+        Extractor(extractor.spec, moved).encoder("A5")
+
+
+def test_a_checkpoint_with_no_encoder_half_is_refused(tmp_path, monkeypatch):
+    import torch
+
+    path = tmp_path / "decoder_only.pt"
+    torch.save({"decoder.blocks.0.norm1.weight": torch.zeros(8)}, path)
+    with pytest.raises(ValueError, match="no `encoder.` tensors"):
+        _terramind_extractor(tmp_path, path, monkeypatch).encoder("A5")
+
+
+def test_a_declared_layer_count_that_does_not_match_the_terratorch_model_is_refused(
+    tmp_path, monkeypatch
+):
+    """AC 4, off the checkpoint's own keys and before anything 361 MB is built.
+
+    ADR-0012 §3 emits one intermediate per block, so a spec declaring twelve against an
+    eleven-block checkpoint would hand Task 2 a contract whose `intermediates` index means
+    something else — and a strict load would report it as two dozen unmatched tensor names
+    rather than as the one fact that is wrong.
+    """
+    checkpoint = _terramind_checkpoint(tmp_path / "eleven.pt", depth=11)
+    with pytest.raises(ValueError, match="has 11 transformer blocks"):
+        _terramind_extractor(tmp_path, checkpoint, monkeypatch).encoder("A5")
+
+
+def test_a_terramind_checkpoint_with_no_pos_emb_is_refused(tmp_path, monkeypatch):
+    checkpoint = _terramind_checkpoint(tmp_path / "no_pos.pt", pos_emb=None)
+    with pytest.raises(ValueError, match="no `encoder.pos_emb`"):
+        _terramind_extractor(tmp_path, checkpoint, monkeypatch).encoder("A5")
+
+
+def test_a_pos_emb_of_the_wrong_native_shape_is_refused(tmp_path, monkeypatch):
+    """AC 4's shape half. A `[1, 768, 14, 14]` parameter would crop to nothing meaningful and a
+    `[1, 384, 16, 16]` one is a different width than the head is built for (§4.1)."""
+    import torch
+
+    from terratorch.models.backbones.terramind.tokenizer.models.vit_models import (
+        build_2d_sincos_posemb,
+    )
+
+    checkpoint = _terramind_checkpoint(
+        tmp_path / "native_14.pt", pos_emb=build_2d_sincos_posemb(14, 14, embed_dim=768)
+    )
+    with pytest.raises(ValueError, match=r"is \(1, 768, 14, 14\)"):
+        _terramind_extractor(tmp_path, checkpoint, monkeypatch).encoder("A5")
+
+    narrow = _terramind_checkpoint(
+        tmp_path / "narrow.pt", pos_emb=torch.zeros(1, 384, 16, 16), width=384
+    )
+    with pytest.raises(ValueError, match=r"is \(1, 384, 16, 16\)"):
+        _terramind_extractor(tmp_path, narrow, monkeypatch).encoder("A5")
+
+
+def test_a_pos_emb_that_is_not_the_closed_form_is_refused(tmp_path, monkeypatch):
+    """ADR-0011's tamper-evidence consequence, discharged.
+
+    The whole decision rests on the embedding being a closed form of the token's integer grid
+    index, in the checkpoint only because it is wrapped in an `nn.Parameter`. A terratorch that
+    shipped a learned or retuned one would keep every name and every shape — and cropping it
+    would no longer be re-deriving it, which is the claim the ADR makes and this is the check
+    the ADR asked for.
+    """
+    import torch
+
+    checkpoint = _terramind_checkpoint(
+        tmp_path / "learned.pt", pos_emb=torch.randn(1, 768, 16, 16) * 0.02
+    )
+    with pytest.raises(ValueError, match="not `build_2d_sincos_posemb"):
+        _terramind_extractor(tmp_path, checkpoint, monkeypatch).encoder("A5")
+
+
+def test_the_timm_path_refuses_a_derivation_it_cannot_apply(tmp_path, vits_checkpoint, publish):
+    """The other side of the same clause. The timm path loads the checkpoint's own tensor
+    unchanged, so a declared derivation it does not apply would run silently as the identity —
+    right today, wrong the moment an encoder declares otherwise."""
+    cfg = _config(tmp_path, publish(vits_checkpoint))
+    spec = build_spec(cfg)
+    entry = spec.encoders[ENCODER]
+    moved = EncoderSpec(
+        **{
+            **entry.to_dict(),
+            "pos_emb": {
+                "derivation": "rederived_14x14_crop",
+                "grid_px": 14,
+                "native_grid_px": 16,
+                "anchor": [1, 1],
+                "adr": "ADR-0011",
+            },
+        }
+    )
+    forged = replace(spec, encoders={**spec.encoders, ENCODER: moved})
+    with pytest.raises(NotImplementedError, match="the timm path does not apply"):
+        Extractor(forged, cfg).encoder(ARM)
+
+
+# --- The real tokenizer, where a box mounts one --------------------------------
+
+
+@requires_terramind
+def test_the_terramind_encoder_satisfies_the_contract_it_is_declared_under(tmp_path):
+    """AC 6 and the shape of ADR-0012 Decision 4, on the shipped weights.
+
+    Twelve intermediates in block order, the canonical `(N, 196, D)` slice, and `cls` correctly
+    `None` — which is not "we did not compute one" but a claim about the architecture: TerraMind
+    structurally has no CLS token, so a statistic pooled over it would compare one model's token
+    to the other's absence (ADR-0012 §5).
+    """
+    import torch
+
+    cfg = _terramind_config(tmp_path, TERRAMIND)
+    extractor = Extractor(load_spec(write_spec(cfg)), cfg)
+    rng = np.random.default_rng(5)
+    raw = rng.normal(1500.0, 400.0, size=(2, 224, 224)).astype(np.int16)
+    out = extractor.extract(raw, land_mask(raw), arm="A5")
+
+    assert out.output.shape == (2, 196, 768)
+    assert out.output.dtype == torch.float32
+    assert len(out.intermediates) == LAYERS
+    assert all(block.shape == (2, 196, 768) for block in out.intermediates)
+    assert out.cls is None
+    assert extractor.spec.encoders["terramind"].has_cls is False
+
+    # The relation on the un-normed side: `output` *is* block twelve, bit-identically (p118
+    # §5.3), where on the DEMAE side a final norm stands between them. Both fields still exist,
+    # because a shared index would quietly compare one to the other.
+    assert torch.equal(out.output, out.intermediates[-1])
+    assert extractor.spec.encoders["terramind"].output_is_normed is False
+    # And they really are twelve *different* tensors, not one repeated.
+    assert not torch.allclose(out.intermediates[0], out.intermediates[-1])
+
+
+@requires_terramind
+def test_the_re_derivation_is_what_the_encoder_actually_runs(tmp_path):
+    """ADR-0011 Decision 2 as behaviour, not as a field.
+
+    Two things at once. The parameter the built encoder holds is the declared crop, and running
+    the same tile under terratorch's default bicubic path gives *different features* — so the
+    intervention is real rather than a relabelling. #134 measured what that difference is worth:
+    mean per-token cosine 0.9708, below its own pre-registered 0.99 bar.
+    """
+    import torch
+
+    cfg = _terramind_config(tmp_path, TERRAMIND)
+    extractor = Extractor(load_spec(write_spec(cfg)), cfg)
+    model = extractor.encoder("A5")
+    assert tuple(model.pos_emb.shape) == (1, 768, 14, 14)
+    assert model.pos_emb.requires_grad is False
+
+    from pretrain.init import read_state_dict
+
+    state, _ = read_state_dict(TERRAMIND)
+    native = state["encoder.pos_emb"]
+    assert torch.equal(model.pos_emb.detach().cpu(), native[:, :, 1:15, 1:15])
+
+    rng = np.random.default_rng(6)
+    raw = rng.normal(1500.0, 400.0, size=(1, 224, 224)).astype(np.int16)
+    crop_features = extractor.extract(raw, land_mask(raw), arm="A5").output
+
+    from torch import nn
+
+    model.pos_emb = nn.Parameter(
+        extract_module.derive_pos_emb(
+            native, {"derivation": "bicubic_resize", "grid_px": 14, "native_grid_px": 16}
+        ).clone(),
+        requires_grad=False,
+    )
+    bicubic_features = extractor.extract(raw, land_mask(raw), arm="A5").output
+    assert not torch.allclose(crop_features, bicubic_features)
+    cosine = torch.nn.functional.cosine_similarity(
+        crop_features.flatten(0, 1), bicubic_features.flatten(0, 1), dim=-1
+    )
+    assert float(cosine.mean()) < extract_module.PRECISION_THRESHOLD  # #134's bar, 0.9708
+
+
+@requires_terramind
+def test_the_precision_agreement_is_measured_on_first_run_rather_than_inherited(tmp_path):
+    """AC 5 / ADR-0012 §6's *unmeasured half*.
+
+    The 0.999968 §6 quotes is DEMAE-family weights on MPS, and §6 names the rest as unmeasured
+    rather than generalizing it. So the figure this arm records has to come from this arm, and
+    what is asserted here is that it *was measured* — the recorded token count is the batch that
+    actually ran — rather than that it landed on any particular number.
+    """
+    base = _terramind_config(tmp_path, TERRAMIND)
+    cfg = base.replace(extract=base.extract.replace(compute_dtype="bf16"))
+    extractor = Extractor(load_spec(write_spec(cfg)), cfg)
+    assert extractor.precision_agreement("A5") is None  # nothing has run yet
+
+    rng = np.random.default_rng(7)
+    raw = rng.normal(1500.0, 400.0, size=(2, 224, 224)).astype(np.int16)
+    extractor.extract(raw, land_mask(raw), arm="A5")
+
+    measured = extractor.precision_agreement("A5")
+    assert measured["encoder"] == "terramind"
+    assert (measured["reference_dtype"], measured["compute_dtype"]) == ("fp32", "bf16")
+    assert measured["tiles"] == 2 and measured["tokens"] == 2 * 196
+    assert 0.0 <= measured["mean_cosine"] <= 1.0
+    assert measured["min_cosine"] <= measured["mean_cosine"]
+    assert measured["threshold"] == extract_module.PRECISION_THRESHOLD
+    assert measured["immaterial"] is (
+        measured["mean_cosine"] >= extract_module.PRECISION_THRESHOLD
+    )
+    # And A9 reads the *other* encoder entry, so it does not inherit this one's figure either.
+    assert extractor.precision_agreement("A9") is None
+
+
+@requires_terramind
+def test_no_agreement_is_recorded_when_the_run_declares_the_reference_dtype(tmp_path):
+    """There is no second number to compare, so measuring would be measuring fp32 against itself
+    — and recording a 1.0 would read as a result rather than as an absence."""
+    cfg = _terramind_config(tmp_path, TERRAMIND)  # compute_dtype fp32
+    extractor = Extractor(load_spec(write_spec(cfg)), cfg)
+    rng = np.random.default_rng(8)
+    raw = rng.normal(1500.0, 400.0, size=(1, 224, 224)).astype(np.int16)
+    extractor.extract(raw, land_mask(raw), arm="A5")
+    assert extractor.precision == {}
+
+
+@requires_terramind
+def test_the_published_terramind_md5_is_the_file_on_this_box():
+    assert artifacts.file_md5(TERRAMIND) == arms.TERRAMIND_TOKENIZER_DEM_MD5
 
 
 # --- The real encoder, where a box mounts one ----------------------------------

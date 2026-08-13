@@ -12,10 +12,20 @@ puts that out of scope, and a probe that grows into a module is how a plan-only 
 plan-only. And it does not decode: the tokenizer's decode path is diffusion, which is the
 expensive half and answers no question #118 asks.
 
-**terratorch is not a project dependency and must not become one.** It resolves 113 packages —
-lightning, lightly==1.5.22, torchgeo, geopandas — none of which the corpus ETL has any reason to
-carry, and `numpy>=2.2` / `timm>=1.0.15` sit close enough to DEMAE's own floors to make a shared
-lockfile a standing hazard. Run this from a throwaway venv and point `--corpus` at the real tree:
+**terratorch is not a *core* dependency.** It resolves 113 packages — lightning,
+lightly==1.5.22, torchgeo, geopandas — none of which the corpus ETL has any reason to carry, and
+`numpy>=2.2` / `timm>=1.0.15` sit close enough to DEMAE's own floors to make a shared lockfile a
+standing hazard.
+
+> *(Amended 2026-08-13 — [#157](https://github.com/JStoschek/DEMAE/issues/157).* This paragraph
+> read "and must not become one", written when nothing but this probe drove terratorch. A5 and A9
+> now read it through `benchmark.extract`, so `pyproject.toml` has a **`terramind` extra**
+> pinning `terratorch==1.2.10` and `diffusers==0.39.0` — the pin §4 below argues for. It is an
+> extra and not a core dependency, which is the whole of what this paragraph was protecting:
+> `pip install demae` still builds a corpus on a box with no CUDA stack. The throwaway venv below
+> still works and is still the right way to run *this script*, which imports nothing of DEMAE's.)*
+
+Run this from a throwaway venv and point `--corpus` at the real tree:
 
     uv venv --python 3.12 /tmp/tt-venv
     VIRTUAL_ENV=/tmp/tt-venv uv pip install 'terratorch>=1.2.5'

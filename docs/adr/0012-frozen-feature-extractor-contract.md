@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
-- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. No other decision changes.
+- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). No decision changes in either.
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
@@ -178,3 +178,35 @@ four-field block.
   declining C4 an ADR — "C1–C3 have none" — was about a *claim*. This is an *interface*, cross-task and
   hard to reverse, and ADR-0011 already set this map's precedent for interface calls where we diverge
   from a library's default path.
+
+## Amendments
+
+### Amendment 1 (2026-08-13) — Decision 6's unmeasured half is measured
+
+**Source:** the build of the TerraMind half of this contract,
+[#157](https://github.com/JStoschek/DEMAE/issues/157), read out in
+[`p157-terramind-precision.md`](../research/p157-terramind-precision.md). **Supersedes:** nothing.
+Decision 6 stands exactly as taken — fp32 is the reference, the compute dtype is a per-task
+declared field, storage dtype is outside the contract. What it *said* was that the TerraMind
+arm's precision agreement did not exist and the build session would measure it on first run. It
+did, and this is the number.
+
+**The outcome.** Mean per-token cosine between `torch.autocast(bf16)` and the fp32 reference is
+**0.99888** over 60 corpus tiles / 11,760 tokens on MPS, against #134's 0.99 bar. Immaterial, so
+A5 and A9 keep the declared `bf16` compute dtype and nothing in the arm table moves.
+
+**And the reason not to have inherited it stands, even though the verdict matched.** Beside the
+DEMAE-family figure this ADR's Context fact 4 quotes, every column is the same verdict at a
+different magnitude — mean 35× further from 1, 1st percentile 77×, worst token 188×, relative RMS
+5.9×. The row that matters: **TerraMind's 1st-percentile token sits at 0.9853, below the bar its
+mean clears comfortably**, where DEMAE's worst token of 12,544 was 0.9994. Nothing in scope reads
+a token in isolation, so this changes no decision; it is recorded because it is precisely what a
+reader assuming the 0.99997 covered TerraMind would have got wrong. Consequence 5 of this ADR
+said a reader who assumes that is reading something this ADR does not say. They now have the
+other number instead.
+
+**Also settled by that build, and worth writing down where the contract lives:** the encoder
+`benchmark.extract` runs holds **90,126,336** parameters against p118 §8's published 90,172,416.
+The 46,080 gap is `768 × (16² − 14²)` — ADR-0011's `pos_emb` crop, frozen position, nothing
+trainable — and p157 records the arithmetic as a checked field so the two counts are reconciled
+rather than left looking like a disagreement.

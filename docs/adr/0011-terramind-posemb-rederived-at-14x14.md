@@ -198,3 +198,41 @@ over 300 tiles and 58,800 tokens, against the 0.99 fixed the day before. Below t
 **Also confirmed, discharging this ADR's tamper-evidence consequence:** the `pos_emb` that comes
 down with the checkpoint *is* the closed form — `[1, 768, 16, 16]`, equal to a freshly built
 `build_2d_sincos_posemb(16, 16)` — so cropping it really is re-deriving it.
+
+### Amendment 2 (2026-08-13) — the decision is a declared field, and both halves are checked in code
+
+**Source:** the build of the TerraMind half of ADR-0012's extractor contract,
+[#157](https://github.com/JStoschek/DEMAE/issues/157). **Supersedes:** nothing. Decisions 1–5
+stand as taken. This records where they now live and closes the tamper-evidence consequence in
+the form that consequence asked for.
+
+**The derivation is a value in the committed contract, not a line in extraction code.**
+`extractor_spec.json`'s `encoders.terramind.pos_emb` carries
+`{derivation: rederived_14x14_crop, native_grid_px: 16, grid_px: 14, anchor: [1, 1], adr:
+ADR-0011}`, pinned against `benchmark.arms` at every load. Two consequences the prose form did
+not have: a **bicubic-derived contract has a different md5 from a re-derived one**, so a results
+table can say which of Decision 4's two ablation arms produced it; and the **anchor** is declared
+rather than implicit, which the anchor table above says is worth as much as the derivation.
+
+**The consequence asked for one check; there are two, because they fail differently.** This ADR
+asked the extraction path to assert the shipped `pos_emb` against a freshly built
+`build_2d_sincos_posemb(16, 16)` slice. That catches a terratorch that ships a *different tensor*
+— learned, retuned, or from another checkpoint. It does not catch a terratorch that changes
+`build_2d_sincos_posemb` **itself** to normalized grid coordinates: every name, every shape and
+that assertion would survive, and a crop would quietly stop being a re-derivation. So the build
+also asserts `build_2d_sincos_posemb(16, 16)[:, :, :14, :14] == build_2d_sincos_posemb(14, 14)`
+— Decision 2's premise, stated as a check on the *library* rather than on the checkpoint.
+
+**One measurement worth recording against Amendment 1's Context.** The shipped tensor is equal to
+a freshly built one to max abs **5.96e-8**, not bit-identically — float32 rounding from whatever
+device built it during training. Amendment 1's "equal to a freshly built
+`build_2d_sincos_posemb(16, 16)`" is right to a tolerance and not to the bit, so the check uses
+one (`atol=1e-6`, against a change that would miss by orders of magnitude more). The Context
+section's own `0.0` is a different claim and is exact: closed form against closed form, which is
+the identity Decision 2 actually rests on.
+
+**And the intervention needs no monkeypatch.** `ViTEncoder.forward` bicubically interpolates
+`pos_emb` to the grid the input implies on *every* pass — including when it is already that grid,
+where `align_corners=False` maps each destination index to itself and the interpolation is
+exactly the identity, measured max abs difference **0.0**. So the crop is installed as the
+parameter and terratorch's own line then adds it unchanged: one change to defend, not two.
