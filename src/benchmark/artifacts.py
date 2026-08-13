@@ -15,10 +15,18 @@ each is named, out loud, before anything is spent.
 which is what lets it work before the code that writes these files lands — the same property
 :mod:`pretrain.fingerprint` was built for. A missing artifact is a *state*, recorded as one,
 because an absent entry and a forgotten one look identical otherwise.
+
+The one thing here that *writes* is :func:`write_committed`, and it is here for the same reason
+the names are: §3.4's "do not overwrite a committed input whose content hash has moved" is one
+rule over the whole set, and a rule each stage restates in its own words is a rule three stages
+can end up disagreeing about. The stages keep what only they can know — how to render their
+artifact, and what counts as the same one — and this module keeps the refusal.
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -65,6 +73,72 @@ def file_md5(path: Path | str | None) -> str | None:
     from dataset.materialize import file_md5 as hash_artifact
 
     return hash_artifact(path)
+
+
+def write_committed(
+    path: Path | str,
+    body: Callable[[], bytes],
+    *,
+    what: str,
+    holds: Callable[[Path], bool] | None = None,
+) -> tuple[Path, str]:
+    """Write a committed input, idempotently, refusing to overwrite a moved one (§3.4).
+
+    Returns ``(path, md5)``, the md5 being **the committed file's** — what a run record quotes —
+    rather than the one this call would have written, which are the same number except in the
+    case ``holds`` exists to allow.
+
+    Three things happen here, and each closes a different failure:
+
+    *Re-freezing the same artifact is a no-op.* The bytes on disk are left exactly where they
+    were, which is what makes `freeze` idempotent rather than merely repeatable, and what keeps
+    the md5 every run record already quotes from moving underneath it.
+
+    *An existing file holding something else is a refusal.* Re-running `freeze` after a code
+    change must not silently re-draw an input a half-finished run is already scoring against.
+    Deleting the file is the deliberate act that says the recipe really did change, and the
+    refusal names both md5s so the tables produced under the old one stay attributable to it.
+
+    *What counts as "something else" is the caller's to say.* ``holds`` is handed the committed
+    path and answers whether it holds what this call would write; the default reads the bytes,
+    which is right for an artifact whose serialization is a function of its content alone. It is
+    not right for parquet: the footer carries the writing library's own version string, so byte
+    equality there would answer "the same content, written by this pyarrow?" and a library
+    upgrade would refuse a `freeze` that had re-derived an identical artifact — a refusal about
+    the environment wearing the words of one about the recipe.
+
+    ``what`` is the noun the refusal uses for the thing that moved — a "contract", a "draw" —
+    because the person reading it is being told to delete a committed file, and whether that is
+    the right thing to do is a question about which one it is.
+    """
+    path = Path(path)
+    rendered: list[bytes] = []
+
+    def render() -> bytes:
+        """``body`` at most once: the byte comparison and the write want the same bytes."""
+        if not rendered:
+            rendered.append(body())
+        return rendered[0]
+
+    def same_bytes(committed: Path) -> bool:
+        return committed.read_bytes() == render()
+
+    same_content = same_bytes if holds is None else holds
+    if path.is_file():
+        committed_md5 = file_md5(path)
+        if same_content(path):
+            return path, committed_md5
+        raise FileExistsError(
+            f"{path} is already frozen at md5 {committed_md5}, holding a different {what} from "
+            f"the one this config produces, which would be written at md5 "
+            f"{hashlib.md5(render()).hexdigest()}. `freeze` does not overwrite a committed input "
+            f"whose content hash has moved (§3.4); delete it deliberately if the {what} really "
+            f"has changed, remembering that every result already scored against it quotes the "
+            f"old md5"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(render())
+    return path, file_md5(path)
 
 
 @dataclass(frozen=True)

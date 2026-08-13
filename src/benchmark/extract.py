@@ -644,23 +644,18 @@ def write_spec(cfg: BenchmarkConfig | None = None) -> Path:
     The refusal only ever fires on a *code* change, because :func:`build_spec`'s output does not
     depend on the box. That is the point of the split: mounting a checkpoint never puts a build
     session in the position of being told to delete a committed artifact that is still correct.
+
+    The guard itself is :func:`benchmark.artifacts.write_committed`, which every committed input
+    goes through. This one is compared **by bytes**, the default, because the spec's
+    serialization is a function of its content alone — the JSON this module writes has no
+    equivalent of the parquet footer :mod:`benchmark.masks` has to look past.
     """
     cfg = BenchmarkConfig() if cfg is None else cfg
-    target = spec_path(cfg)
-    body = build_spec(cfg).to_json()
-    if target.is_file():
-        existing = target.read_text()
-        if existing == body:
-            return target
-        raise FileExistsError(
-            f"{target} is already frozen at md5 "
-            f"{hashlib.md5(existing.encode('utf-8')).hexdigest()} and this config would write "
-            f"{hashlib.md5(body.encode('utf-8')).hexdigest()}. `freeze` does not overwrite a "
-            f"committed input whose content hash has moved (§3.4); delete it deliberately if "
-            f"the contract really has changed."
-        )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(body)
+    from .artifacts import write_committed
+
+    target, _ = write_committed(
+        spec_path(cfg), lambda: build_spec(cfg).to_json().encode("utf-8"), what="contract"
+    )
     return target
 
 
