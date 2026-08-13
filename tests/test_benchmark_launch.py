@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
-from benchmark import launch
+from benchmark import launch, prereg
 from benchmark.config import BenchmarkConfig
+
+PLAN = Path(__file__).resolve().parents[1] / prereg.PLAN_PATH
 
 #: What `freeze` will write, and therefore what `run` resolves. Written as bytes here, since
 #: #147 resolves artifacts by presence and content hash and reads none of their schemas.
@@ -261,19 +264,45 @@ def test_a_run_past_the_dry_run_refuses_rather_than_pretending(frozen, flags, ca
 
 
 def test_report_refuses_the_same_way(frozen, flags):
-    with pytest.raises(NotImplementedError, match="`report` renders nothing yet"):
+    with pytest.raises(NotImplementedError, match="renders nothing yet"):
         launch.main(["report", *flags])
 
 
-def test_freeze_refuses_after_doing_the_part_of_its_job_that_exists(frozen, flags):
-    """#149 built the tile stage, so `freeze` writes and *then* names what is still missing.
+# --- What `freeze` writes today -----------------------------------------------
 
-    The refusal is what keeps "the box is frozen" from being claimed by a partial run. What
-    `freeze` actually commits is asserted in `test_benchmark_tiles.py`, against a corpus — this
-    box has none, which is why the draw is the thing that fails here.
+
+def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, flags, capsys):
+    """#148's stage and #149's, through the one command — and neither of them exits 0.
+
+    A verb that wrote some of its five artifacts and returned 0 would read as a frozen box,
+    which is the failure this file exists to prevent. So the bar lands first, `freeze` says it
+    landed, and then #149's tile draw asks this box for a corpus it does not have. What the
+    tile stage commits when a corpus *is* there is `test_benchmark_tiles.py`'s.
     """
     with pytest.raises(FileNotFoundError, match="manifest.parquet"):
         launch.main(["freeze", *flags])
+    out = capsys.readouterr().out
+    assert prereg.BAR_NAME in out
+
+    bar = prereg.read_bar(box / "artifacts" / prereg.BAR_NAME, plan=PLAN)
+    assert bar.seam_break_deg == 0.15  # read from the artifact, not typed into the benchmark
+    assert bar.rules == 12
+
+
+def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box, flags, tmp_path):
+    """ADR-0013's coupling, through the command: §6 is load-bearing, and this is how it bears.
+
+    Editing a registered phrase out of the copy that ships breaks the freeze rather than
+    producing a bar nothing states — and the refusal names the entry that lost its anchor.
+    """
+    text = PLAN.read_text()
+    head, section = text[: text.index(prereg.SECTION)], text[text.index(prereg.SECTION):]
+    plan = tmp_path / "edited-plan.md"
+    plan.write_text(head + section.replace("clears\n     **100 per band**", "clears **80 per band**"))
+
+    with pytest.raises(ValueError, match="R8 lost its anchor"):
+        launch.main(["freeze", *flags, "--set", f'paths.plan_path="{plan}"'])
+    assert not (box / "artifacts" / prereg.BAR_NAME).exists()
 
 
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):

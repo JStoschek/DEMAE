@@ -25,7 +25,7 @@ from typing import Final
 
 from dataset.provenance import git_sha
 
-from . import arms
+from . import arms, prereg
 from .config import BenchmarkConfig
 
 #: What `freeze` writes into ``paths.artifacts_dir``. The train mask bank is **not** here — it
@@ -304,7 +304,7 @@ def resolve(cfg: BenchmarkConfig, arm: arms.Arm | None = None) -> Resolution:
         _committed("eval_masks", "eval masks", directory / "eval_masks.parquet"),
         _committed("mask_bank", "mask bank", cfg.paths.mask_bank_path),
         _committed("extractor_spec", "extractor spec", directory / "extractor_spec.json"),
-        _committed("prereg_bar", "prereg bar", directory / "task1-prereg-bar.json"),
+        _committed("prereg_bar", "prereg bar", directory / prereg.BAR_NAME),
     )
     return Resolution(
         config=cfg, arm=arm, checkpoint=_checkpoint_for(arm, cfg), inputs=inputs

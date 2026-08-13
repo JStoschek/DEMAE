@@ -68,7 +68,7 @@ from typing import Any, Final
 from dataset import config as dataset_config
 from dataset.centroids import K as STRATUM_COUNT
 
-from . import arms
+from . import arms, prereg
 
 #: Marks a field as *where the run happens* rather than *what it scores*: recorded in the
 #: config, excluded from :attr:`BenchmarkConfig.config_hash`. Here it marks one whole group —
@@ -487,6 +487,11 @@ class Paths(_Frozen):
     results_path: str = "data/task1/results.parquet"
     #: §3.3's fetched SRTMGL1N granules, for the real-void family's shapes.
     srtm_dir: str = "data/srtm_voids"
+    #: The plan, whose §6 the registered bar is anchored in (:mod:`benchmark.prereg`). A path
+    #: rather than a constant for the same reason the rest of this group is: it is where a file
+    #: sits on this box. It moves no hash — §6 is what the bar is *checked against*, not an
+    #: input the committed artifacts are a function of.
+    plan_path: str = str(prereg.PLAN_PATH)
     #: The Phase-1 release encoders. R5 is §4.2's release checkpoint and R4 its pre-registered
     #: secondary; ViT-S is §2.3's appendix backbone.
     demae_r5_checkpoint: str | None = ".release-work/release-R5-v2/encoder.pt"
