@@ -161,6 +161,10 @@ class Resolved:
     md5: str | None
     #: Why it is absent, in the words that say what to do about it.
     absent_note: str | None = None
+    #: Whether **this arm** reads it. Resolved and printed either way — what is on this box is a
+    #: fact about the box, not about the cell — but only a *required* input's absence stops a
+    #: run. See :func:`_required_for`.
+    required: bool = True
 
     @property
     def present(self) -> bool:
@@ -168,12 +172,18 @@ class Resolved:
         return self.md5 is not None
 
     def line(self) -> str:
-        """The resolution line's row for this input."""
+        """The resolution line's row for this input.
+
+        An input this arm does not read is *said* to be one rather than dropped, on the same rule
+        the unmounted checkpoint follows: a resolution line that silently omitted an artifact is
+        one a build session reads as resolved.
+        """
+        note = "" if self.required else "  (not read by this arm)"
         if self.path is None:
-            return f"{self.label:<16} {self.absent_note}"
+            return f"{self.label:<16} {self.absent_note}{note}"
         if self.md5 is None:
-            return f"{self.label:<16} {self.path}  — {self.absent_note}"
-        return f"{self.label:<16} {self.path}  md5 {self.md5}"
+            return f"{self.label:<16} {self.path}  — {self.absent_note}{note}"
+        return f"{self.label:<16} {self.path}  md5 {self.md5}{note}"
 
     def to_dict(self) -> dict:
         """What the run record files this input under: where it was, and what it hashed to."""
@@ -198,8 +208,17 @@ class Resolution:
 
     @property
     def missing(self) -> tuple[str, ...]:
-        """The committed inputs `freeze` has not written yet, by label."""
-        return tuple(item.label for item in self.inputs if not item.present)
+        """The committed inputs **this arm reads** that `freeze` has not written yet, by label.
+
+        Arm-aware, and that is what lets A1 run first (§4.5 step 2). §3.4's train mask bank is
+        1,000,000 rows a head trains against; A1 trains nothing, so a `run --arm A1` that refused
+        for want of it would gate *the first number in this benchmark* — the one every learned
+        arm is a residual over — on the artifact only the learned arms consume.
+
+        The unrequired inputs are still resolved and still printed, because "what is on this
+        box" is a fact about the box; what changes is only whether their absence stops a run.
+        """
+        return tuple(item.label for item in self.inputs if item.required and not item.present)
 
     # --- what a human reads
 
@@ -331,7 +350,33 @@ class Resolution:
         }
 
 
-def _committed(key: str, label: str, path: Path | str) -> Resolved:
+#: The committed inputs only a **training** arm reads: §3.1's head-train draw, the val draw its
+#: early stopping and LR pick are made on, and §3.4's train mask bank. Everything else — the
+#: test list, the eval mask list, the registered bar — is read by every arm that scores anything,
+#: and the extractor spec by every arm that runs an encoder.
+#:
+#: A set rather than a branch inside :func:`_required_for` so the membership is one readable
+#: line: the question "does A1 need the mask bank?" is answered by looking, which is the property
+#: that matters when the answer decides whether the benchmark's first number can be produced.
+TRAINING_ONLY_INPUTS: Final = frozenset({"head_train_tiles", "val_tiles", "mask_bank"})
+
+
+def _required_for(key: str, arm: arms.Arm) -> bool:
+    """Does this arm read this committed input?
+
+    Read off the registry's declared fields rather than off the arm's name: ``trains ==
+    "nothing"`` is what makes an arm inference-only (A1, A2, A9) and ``encoder is None`` is what
+    makes it contract-free (A1, A7). An arm added later inherits the right answer from what it
+    declares, which is the whole reason those are fields.
+    """
+    if key in TRAINING_ONLY_INPUTS:
+        return arm.trains != "nothing"
+    if key == "extractor_spec":
+        return arm.encoder is not None
+    return True
+
+
+def _committed(key: str, label: str, path: Path | str, *, required: bool = True) -> Resolved:
     """One artifact `freeze` owns — so its absence is "not frozen yet" rather than "missing"."""
     return Resolved(
         key=key,
@@ -339,6 +384,7 @@ def _committed(key: str, label: str, path: Path | str) -> Resolved:
         path=str(path),
         md5=file_md5(path),
         absent_note="not frozen yet (`python -m benchmark.launch freeze`)",
+        required=required,
     )
 
 
@@ -373,18 +419,21 @@ def resolve(cfg: BenchmarkConfig, arm: arms.Arm | None = None) -> Resolution:
     """Everything this cell reads, by content. Stats and hashes; opens no schema and no corpus."""
     arm = arms.get(cfg.arm) if arm is None else arm
     directory = Path(cfg.paths.artifacts_dir)
-    inputs = (
-        _committed(
-            "head_train_tiles",
+    at = {
+        "head_train_tiles": (
             "head-train list",
             directory / TILE_LIST_NAMES[cfg.size],
         ),
-        _committed("val_tiles", "val list", directory / VAL_TILES_NAME),
-        _committed("test_tiles", "test list", directory / TEST_TILES_NAME),
-        _committed("eval_masks", "eval masks", directory / EVAL_MASKS_NAME),
-        _committed("mask_bank", "mask bank", cfg.paths.mask_bank_path),
-        _committed("extractor_spec", "extractor spec", directory / "extractor_spec.json"),
-        _committed("prereg_bar", "prereg bar", directory / prereg.BAR_NAME),
+        "val_tiles": ("val list", directory / VAL_TILES_NAME),
+        "test_tiles": ("test list", directory / TEST_TILES_NAME),
+        "eval_masks": ("eval masks", directory / EVAL_MASKS_NAME),
+        "mask_bank": ("mask bank", cfg.paths.mask_bank_path),
+        "extractor_spec": ("extractor spec", directory / "extractor_spec.json"),
+        "prereg_bar": ("prereg bar", directory / prereg.BAR_NAME),
+    }
+    inputs = tuple(
+        _committed(key, label, path, required=_required_for(key, arm))
+        for key, (label, path) in at.items()
     )
     return Resolution(
         config=cfg, arm=arm, checkpoint=_checkpoint_for(arm, cfg), inputs=inputs

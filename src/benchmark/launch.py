@@ -24,13 +24,18 @@ the pre-flight a build session walks before renting anything. #148 gave ``freeze
 its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
 lists (:mod:`benchmark.tiles`), #156 the third, ADR-0012's extractor contract
 (:mod:`benchmark.extract`), and #150 the fourth, §3.2's eval mask list
-(:mod:`benchmark.masks`). **Nothing is scored here.**
+(:mod:`benchmark.masks`). #158 made ``run`` real for **A1**: §2.4's classical fill over the
+committed eval mask list, both of §8's norm-inversion gates, and the rows and run record that
+come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
-Every verb still raises past the work it has, and names the stage that has not been built —
-deliberately, because a verb that quietly returned 0 having done part of its job is precisely
-the shape of failure this module exists to prevent, and it is the shape that survived four
-tickets in Phase 1. It matters more once a verb writes real files than it did when none did: a
-``freeze`` that lands three of five artifacts and exits 0 is read as a frozen box.
+The two verbs that are still short of their stage raise past the work they have, and name what
+has not been built — deliberately, because a verb that quietly returned 0 having done part of
+its job is precisely the shape of failure this module exists to prevent, and it is the shape
+that survived four tickets in Phase 1. It matters more once a verb writes real files than it did
+when none did: a ``freeze`` that lands three of five artifacts and exits 0 is read as a frozen
+box. ``run`` returns 0 now because it finishes what it starts *for the arm it was asked for*;
+an arm whose input convention has no implementation yet names its own ticket rather than
+returning quietly (:data:`benchmark.evaluate.FILLERS`).
 
 ## Why the resolution line is printed before anything is spent
 
@@ -48,7 +53,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, extract, masks, prereg, tiles
+from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -88,11 +93,10 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     )
 
 
-#: The three verbs take one resolution and return an exit code — the shape they will have once
-#: they are built. Today every one of them raises instead, so ``NoReturn`` is the honest
-#: annotation and the uniform parameter is what keeps :data:`VERBS` a table rather than a
-#: cascade. `freeze` and `report` do not read the resolution yet; the command has already
-#: printed it.
+#: The three verbs take one resolution and return an exit code. ``run`` is the first one that
+#: does (#158) — `freeze` still stops short of §3.4's train mask bank and `report` renders
+#: nothing yet, so those two are annotated ``NoReturn`` and say which stage is missing. The
+#: uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
 
 
 def _freeze(resolution: Resolution) -> NoReturn:
@@ -150,11 +154,26 @@ def _freeze(resolution: Resolution) -> NoReturn:
     )
 
 
-def _run(resolution: Resolution) -> NoReturn:
-    """`run` — execute exactly one (arm, size, seed) cell, having refused a box it cannot."""
-    # Both refusals come before the stage refusal, and both are about *this box* rather than
-    # about what is built: a run cannot be scored against inputs that are not there, and
-    # discovering that after the encoder has loaded is discovering it on the clock.
+def _run(resolution: Resolution) -> int:
+    """`run` — execute exactly one (arm, size, seed) cell, having refused a box it cannot.
+
+    §4.5's step 2, and the first verb that produces a number. The order below is the argument:
+
+    1. **The box, before the clock.** A run cannot be scored against inputs that are not there,
+       and discovering that after an encoder has loaded is discovering it on the rented clock.
+       Both refusals are about *this box* rather than about what is built. What counts as a
+       missing input is the **arm's** question (:attr:`~benchmark.artifacts.Resolution.missing`),
+       which is what lets A1 run ahead of §3.4's train mask bank.
+    2. **The two §8 gates, before a single instance.** ``fill(identity-mask) == input`` and the
+       golden tile, both inside :func:`benchmark.evaluate.run_pass` so that no caller of the
+       pass can route around them. A gate consulted after 30,000 instances is a gate that costs
+       2.0–5.2 CPU-hours to ask.
+    3. **The rows, then the record.** :func:`benchmark.results.write` lands both, in that order,
+       for the reason stated there.
+
+    A1's numbers gate everything else (§4.5, user story 29), so the arms that are not built name
+    their ticket rather than failing as an unknown key — :data:`benchmark.evaluate.FILLERS`.
+    """
     missing = resolution.missing
     if missing:
         raise FileNotFoundError(
@@ -168,13 +187,31 @@ def _run(resolution: Resolution) -> NoReturn:
             f"arm {resolution.arm.name} reads the {resolution.arm.encoder} encoder and "
             f"{checkpoint.absent_note}"
         )
-    _unbuilt(
-        "run",
-        "scores nothing yet",
-        "exactly one (arm, size, seed) cell, appending its rows to the results parquet, having "
-        "asserted the extractor contract, the registered bar and the split containment on the "
-        "way in (ADR-0012, ADR-0013)",
+
+    cfg = resolution.config
+    scored = evaluate.run_pass(cfg, resolution.arm)
+    print(f"\n{'gates':<16} {evaluate.format_gates(scored.gates)}")
+
+    rows = results.rows_from(
+        scored.scored,
+        arm=cfg.arm,
+        init=resolution.arm.encoder,
+        size=cfg.size,
+        seed=cfg.seed,
+        run=results.run_id(resolution),
+        config_hash=cfg.config_hash,
     )
+    path, total, record = results.write(
+        rows,
+        resolution,
+        metrics=scored.bar.registered_metrics,
+        seconds=scored.seconds,
+        parameters=arms.parameter_counts(resolution.arm),
+        gates=scored.gates,
+    )
+    for line in results.format_written(path, rows=len(rows), total=total, record=record):
+        print(line)
+    return 0
 
 
 def _report(resolution: Resolution) -> NoReturn:

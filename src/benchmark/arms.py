@@ -481,6 +481,42 @@ def normalization_for(encoder_name: str) -> str:
     return diets.pop()
 
 
+def parameter_counts(arm: Arm) -> dict[str, int | None]:
+    """§6 item 4's two numbers for this arm: ``total`` and ``trainable``.
+
+    Both, and never one: A7's 17M reads as handicapped beside A4's 86.4M until you know that A7
+    trains **14x more** of it. That is the whole reason the plan asks for the pair, and it is why
+    this returns a mapping rather than an int — a single "parameters" number is the shape of the
+    misreading.
+
+    ``None`` is *not counted here yet*, and it is deliberate on :attr:`Encoder.params`' own rule:
+    a count this registry guessed would print as a measurement. Three cases are genuinely known
+    and are returned as numbers:
+
+    * **an arm with no encoder that trains nothing** — A1's classical interpolation, which has no
+      parameters at all, so both counts are a true 0 rather than an unknown;
+    * **an arm that trains nothing over a counted encoder** — A2 zero-shot, whose total is the
+      encoder's and whose trainable half is exactly 0;
+    * **the trainable half of any inference-only arm**, which is 0 whatever its encoder costs.
+
+    Everything else waits on the module that builds the trainable part — the shared head (#159),
+    A3's decoder, A7's UNet (#162) — and reports ``None`` until then rather than a plausible
+    number nothing measured. `run` records whatever is known, so A1's row carries its pair today
+    and A4's fills in when the head exists.
+    """
+    encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
+    trainable = 0 if arm.trains == "nothing" else None
+    if encoder is None:
+        # A1 and A7. A1 trains nothing and runs no encoder, so it genuinely has none; A7 trains
+        # a UNet this registry does not count.
+        total = 0 if arm.trains == "nothing" else None
+    elif arm.trains == "nothing":
+        total = encoder.params
+    else:
+        total = None
+    return {"total": total, "trainable": trainable}
+
+
 def get(name: str) -> Arm:
     """The registered arm, or a refusal naming the registry.
 

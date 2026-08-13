@@ -251,15 +251,21 @@ def test_a_config_file_names_only_the_knobs_its_run_moves(box, flags, capsys):
 # --- The far side of the seam -------------------------------------------------
 
 
-def test_a_run_past_the_dry_run_refuses_rather_than_pretending(frozen, flags, capsys):
-    """Every verb's implementation is a later ticket, and it says so out loud.
+def test_a_run_past_the_dry_run_reaches_its_inputs_rather_than_naming_a_stage(frozen, flags, capsys):
+    """#158 built `run`, so the one thing it no longer does is refuse as unbuilt.
 
-    The alternative — returning 0 having done nothing — is the failure this repo has a name
-    for. The resolution is still printed first, because what a refusal is *about* is the box
-    it refused on.
+    This box's committed inputs are placeholder *bytes* (see :data:`FROZEN`) — #147 resolves
+    artifacts by presence and content hash and reads none of their schemas, which is exactly what
+    let this file be written before any of them existed. So a run here fails **reading** them,
+    and that is the assertion: it got past the seam and into the inputs. What a run does on a box
+    whose artifacts are real is `tests/test_benchmark_a1.py`'s subject.
+
+    The resolution is still printed first, because what a failure is *about* is the box it
+    happened on.
     """
-    with pytest.raises(NotImplementedError, match="`run` scores nothing yet"):
-        launch.main(["run", *flags])
+    with pytest.raises(Exception) as exc:
+        launch.main(["run", "--arm", "A1", *flags])
+    assert "scores nothing yet" not in str(exc.value)
     assert "DEMAE Task 1" in capsys.readouterr().out
 
 

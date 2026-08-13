@@ -251,6 +251,65 @@ class Masks(_Frozen):
         return (("small", self.small_px), ("medium", self.medium_px), ("large", self.large_px))
 
 
+# --- §2.4 A1's classical fill -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Fill(_Frozen):
+    """A1's classical interpolation (plan §2.4) — see :mod:`benchmark.fill`.
+
+    Recipe rather than environment, and load-bearing for more than A1's own row: §1 feeds three
+    frozen arms the ``a1_fill_plus_mask`` convention, which *is* this fill's output, and §2.4 has
+    every learned arm predict a residual over it. So two variants are two different baselines
+    **and** two different inputs, and a results row has to say which one it was scored against.
+    """
+
+    #: A key of :data:`benchmark.fill.VARIANTS`. ``fillnodata`` is the ``gdal_fillnodata``-class
+    #: method §2.4 names; ``tps`` is the thin-plate-spline variant. Those are two names and not
+    #: the ticket's three — :mod:`benchmark.fill` carries the resolution.
+    variant: str = "fillnodata"
+    #: How far GDAL searches for a valid pixel, in pixels. The whole tile by default rather than
+    #: a radius: §3.2 caps a void at 40% of the tile and draws it interior, so every void pixel
+    #: has a reachable edge and a shorter radius could only produce an unfilled hole.
+    max_search_distance_px: float = float(dataset_config.TILE_PX)
+    #: GDAL's post-fill smoothing passes. **Zero**, inverting its own convenience default: a
+    #: smoothing pass moves pixels *outside* the void too, and §2.4's residual convention needs
+    #: "outside the void" to mean the original tile exactly.
+    smoothing_iterations: int = 0
+    #: The TPS variant's control-point budget off the void's boundary ring. Bounded because the
+    #: exact solve is O(N³) and §7 prices eval scoring as this benchmark's largest line; stated
+    #: here rather than buried in the solver because it is a property of the baseline.
+    tps_control_points: int = 256
+    #: Ridge term on the TPS kernel block. Zero is the interpolating spline — the fill passes
+    #: exactly through the ring — and anything above it trades that for conditioning.
+    tps_regularization: float = 0.0
+
+    def __post_init__(self) -> None:
+        # Imported here rather than at module scope so that `benchmark.fill` can annotate
+        # against this class without the two modules importing each other. The refusal is at
+        # *config* construction on purpose: "a typo'd override stops before the corpus is
+        # touched" has to hold for `--set fill.variant=tsp` as much as for `--arm A8`.
+        from .fill import VARIANTS
+
+        if self.variant not in VARIANTS:
+            raise ValueError(
+                f"unknown fill variant {self.variant!r}; registered: {sorted(VARIANTS)}"
+            )
+        if self.max_search_distance_px <= 0:
+            raise ValueError(
+                f"max_search_distance_px {self.max_search_distance_px} must be > 0"
+            )
+        if self.smoothing_iterations < 0:
+            raise ValueError(f"smoothing_iterations {self.smoothing_iterations} must be >= 0")
+        if self.tps_control_points < 3:
+            raise ValueError(
+                f"tps_control_points {self.tps_control_points} cannot span a thin-plate "
+                f"spline's affine part, which needs three non-collinear points"
+            )
+        if self.tps_regularization < 0:
+            raise ValueError(f"tps_regularization {self.tps_regularization} must be >= 0")
+
+
 # --- §4.1 The shared head -----------------------------------------------------
 
 
@@ -526,6 +585,7 @@ class Paths(_Frozen):
 _GROUPS: Final = {
     "tiles": Tiles,
     "masks": Masks,
+    "fill": Fill,
     "head": Head,
     "finetune": Finetune,
     "unet": Unet,
@@ -568,6 +628,7 @@ class BenchmarkConfig(_Frozen):
     seed: int = 0
     tiles: Tiles = field(default_factory=Tiles)
     masks: Masks = field(default_factory=Masks)
+    fill: Fill = field(default_factory=Fill)
     head: Head = field(default_factory=Head)
     finetune: Finetune = field(default_factory=Finetune)
     unet: Unet = field(default_factory=Unet)
