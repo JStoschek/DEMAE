@@ -271,14 +271,15 @@ def test_report_refuses_the_same_way(frozen, flags):
 # --- What `freeze` writes today -----------------------------------------------
 
 
-def test_freeze_writes_the_registered_bar_and_names_what_it_did_not_write(box, flags, capsys):
-    """#148's stage, through the one command — and the rest of `freeze` still says it is absent.
+def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, flags, capsys):
+    """#148's stage and #149's, through the one command — and neither of them exits 0.
 
-    A verb that wrote one of its five artifacts and returned 0 would read as a frozen box, which
-    is the failure this file exists to prevent. So the bar lands, `freeze` says it landed, and
-    then it names the four artifacts that are somebody else's ticket.
+    A verb that wrote some of its five artifacts and returned 0 would read as a frozen box,
+    which is the failure this file exists to prevent. So the bar lands first, `freeze` says it
+    landed, and then #149's tile draw asks this box for a corpus it does not have. What the
+    tile stage commits when a corpus *is* there is `test_benchmark_tiles.py`'s.
     """
-    with pytest.raises(NotImplementedError, match="the four tile lists"):
+    with pytest.raises(FileNotFoundError, match="manifest.parquet"):
         launch.main(["freeze", *flags])
     out = capsys.readouterr().out
     assert prereg.BAR_NAME in out

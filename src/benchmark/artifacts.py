@@ -37,6 +37,13 @@ TILE_LIST_NAMES: Final = {
     "1k": "head_train_1k.csv",
 }
 
+#: The other two §3.1 draws, which have no label-efficiency ladder and so no size key. Named
+#: here beside the ladder rather than typed twice: :mod:`benchmark.tiles` writes these files and
+#: this module resolves them, and a writer and a resolver that disagreed about a name would
+#: produce a `run` that reports "not frozen yet" about a file `freeze` had just written.
+VAL_TILES_NAME: Final = "val_tiles.csv"
+TEST_TILES_NAME: Final = "test_tiles.csv"
+
 
 def file_md5(path: Path | str | None) -> str | None:
     """The file's md5, or ``None`` if there is no path or nothing at it.
@@ -292,8 +299,8 @@ def resolve(cfg: BenchmarkConfig, arm: arms.Arm | None = None) -> Resolution:
             "head-train list",
             directory / TILE_LIST_NAMES[cfg.size],
         ),
-        _committed("val_tiles", "val list", directory / "val_tiles.csv"),
-        _committed("test_tiles", "test list", directory / "test_tiles.csv"),
+        _committed("val_tiles", "val list", directory / VAL_TILES_NAME),
+        _committed("test_tiles", "test list", directory / TEST_TILES_NAME),
         _committed("eval_masks", "eval masks", directory / "eval_masks.parquet"),
         _committed("mask_bank", "mask bank", cfg.paths.mask_bank_path),
         _committed("extractor_spec", "extractor spec", directory / "extractor_spec.json"),

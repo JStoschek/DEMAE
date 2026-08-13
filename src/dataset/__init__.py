@@ -31,6 +31,8 @@ The pipeline implements the locked Phase-0 design (ADRs 0001-0004). Stage map
 - :mod:`dataset.concurrency`— the bounded, order-preserving parallel-read primitive (#38)
 - :mod:`dataset.provenance` — git SHA + snapshot date stamped into every artifact
 - :mod:`dataset.loader`     — Phase-1 torch read path (imports torch lazily)
+- :mod:`dataset.containment`— the split's readers and their refusals, shared by every phase
+  that re-reads it: Phase 1's Dataset (#89) and Task 1's ``freeze`` (#149)
 
 Standing constraint across every stage: **elevation-only output, but architected
 channel-ready** — adding slope/curvature later is a config flag, not a rewrite.
