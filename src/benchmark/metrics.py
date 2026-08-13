@@ -9,6 +9,16 @@ Zevenbergen–Thorne kernel is the one the **0.0006°** divergence against
 kernel, hillshade SSIM and pooled signed bias left behind — all three were *measured out* of the
 set rather than dropped for convenience.
 
+One promotion is not like-for-like and should be said out loud: **the prototype graded aspect
+off the Horn gradient**, while §5 puts aspect, slope and curvature on the one ZT surface. The
+module follows §5, which is the binding document — but the separation figure R1's roster rests
+on for this column (1.46, orthogonal at −0.07 against RMSE) was measured on Horn's aspect and
+**nobody has re-measured it on ZT's**. What is known is the neighbouring measurement: the two
+kernels differ ~7% in level and rank instances 0.980 the same on *slope*. That makes a reversal
+unlikely rather than ruled out, and it is a footnote here rather than an amendment because
+nothing in R1 moves either way — the registered column is `aspect_error`, and §5 already names
+the kernel it comes off.
+
 ## Metres, and the one place an arm could have been scored in its own units
 
 Plan §2.1: *loss and metrics are always computed in metres after inverting DEMAE's per-tile
@@ -89,7 +99,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Iterable, Mapping
+from typing import Any, Final, Iterable, Mapping, NamedTuple
 
 import numpy as np
 
@@ -119,13 +129,68 @@ EROSION_PX: Final = 1
 # --- The Zevenbergen–Thorne surface -------------------------------------------
 
 
-def zt_coefficients(z: np.ndarray, px: PixelSize) -> dict[str, np.ndarray]:
-    """Zevenbergen & Thorne (1987) quadratic-surface coefficients ``D, E, F, G, H``, per pixel.
+class ZTSurface(NamedTuple):
+    """One array's Zevenbergen & Thorne (1987) coefficients, and the three derivatives §5 reads.
 
-    The interior only — the one-pixel border is NaN, where the 3×3 window does not fit. Rows and
-    columns carry their own spacing, because Copernicus's columns are up to ~1.55× wider on the
-    ground than its rows near 50° (ADR-0001 §1) and a single ``px`` would quietly rotate every
-    aspect poleward.
+    All three derivatives live here rather than as free functions over an array, because they are
+    three readings of **one** fitted surface (§5: *ZT also supplies profile curvature, so one
+    kernel serves all three derivatives*) and fitting it is what the work is. A `score` that
+    called three array-level helpers would fit the same quadratic six times per instance — twice
+    the pixels of the whole rest of the pass, ~4× more than it needs, on the line §7 prices as
+    the largest in this benchmark (2.0–5.2 CPU-hours of eval scoring).
+
+    Each field is the coefficient's per-pixel value, NaN on the one-pixel border where the 3×3
+    window does not fit.
+    """
+
+    D: np.ndarray
+    E: np.ndarray
+    F: np.ndarray
+    G: np.ndarray
+    H: np.ndarray
+
+    def slope_deg(self) -> np.ndarray:
+        """Per-pixel slope in degrees — ``arctan|∇z|``, NaN on the border.
+
+        **Numerically the corpus's own** :func:`dataset.metrics.slope_deg`: ZT's first
+        derivatives ``G`` and ``H`` are central differences by construction, so the two agree to
+        0.0006° at worst over 12,000 instances (p123 §5). That identity is the reason this kernel
+        was chosen and Horn was not — Horn sits ~7% lower in level and ranks instances 0.980 the
+        same, so it would have changed every printed number without changing a conclusion, at the
+        cost of making *benchmark slope* and *the `slope_mean` the ruggedness bands are cut on*
+        two different quantities.
+        """
+        return np.degrees(np.arctan(np.hypot(self.G, self.H)))
+
+    def aspect_rad(self) -> np.ndarray:
+        """Per-pixel aspect in radians, ``atan2(H, G)``, NaN on the border.
+
+        The zero direction never leaves this module: aspect is only ever *differenced* between
+        truth and fill (:func:`circular_error_rad`), so any consistent convention gives the same
+        circular error. What matters is that it comes off the same surface as slope, so the two
+        cannot disagree about what the local gradient is.
+        """
+        return np.arctan2(self.H, self.G)
+
+    def profile_curvature(self) -> np.ndarray:
+        """Profile curvature in 1/m: curvature along the direction of steepest slope.
+
+        **Undefined on flat ground**, where there is no steepest direction — NaN there rather
+        than a divide-by-zero, which matters because the flattest ruggedness band is a quarter of
+        the corpus and would otherwise fill an appendix column with garbage.
+        """
+        p = self.G**2 + self.H**2
+        with np.errstate(invalid="ignore", divide="ignore"):
+            kp = -2 * (self.D * self.G**2 + self.E * self.H**2 + self.F * self.G * self.H) / p
+        return np.where(p > 1e-12, kp, np.nan)
+
+
+def zt_surface(z: np.ndarray, px: PixelSize) -> ZTSurface:
+    """Fit the ZT quadratic to every interior pixel of ``z``.
+
+    Rows and columns carry their own spacing, because Copernicus's columns are up to ~1.55×
+    wider on the ground than its rows near 50° (ADR-0001 §1) and a single ``px`` would quietly
+    rotate every aspect poleward.
 
     The mask goes on **before** the differences, per ADR-0001 §3 and for
     :func:`dataset.metrics.slope_deg`'s reason: the ocean fill is painted, not measured, so the
@@ -138,61 +203,19 @@ def zt_coefficients(z: np.ndarray, px: PixelSize) -> dict[str, np.ndarray]:
     z1, z2, z3 = a[:-2, :-2], a[:-2, 1:-1], a[:-2, 2:]
     z4, z5, z6 = a[1:-1, :-2], a[1:-1, 1:-1], a[1:-1, 2:]
     z7, z8, z9 = a[2:, :-2], a[2:, 1:-1], a[2:, 2:]
-    inner = {
-        "D": ((z4 + z6) / 2 - z5) / dx**2,
-        "E": ((z2 + z8) / 2 - z5) / dy**2,
-        "F": (-z1 + z3 + z7 - z9) / (4 * dx * dy),
-        "G": (-z4 + z6) / (2 * dx),
-        "H": (z2 - z8) / (2 * dy),
-    }
-    out: dict[str, np.ndarray] = {}
-    for key, value in inner.items():
+    interior = (
+        ((z4 + z6) / 2 - z5) / dx**2,
+        ((z2 + z8) / 2 - z5) / dy**2,
+        (-z1 + z3 + z7 - z9) / (4 * dx * dy),
+        (-z4 + z6) / (2 * dx),
+        (z2 - z8) / (2 * dy),
+    )
+    coefficients = []
+    for value in interior:
         full = np.full(a.shape, np.nan)
         full[1:-1, 1:-1] = value
-        out[key] = full
-    return out
-
-
-def zt_slope_deg(z: np.ndarray, px: PixelSize) -> np.ndarray:
-    """Per-pixel slope in degrees off the ZT surface — ``arctan|∇z|``, NaN on the border.
-
-    **Numerically the corpus's own** :func:`dataset.metrics.slope_deg`: ZT's first derivatives
-    ``G`` and ``H`` are central differences by construction, so the two agree to 0.0006° at worst
-    over 12,000 instances (p123 §5). That identity is the reason this kernel was chosen and Horn
-    was not — Horn sits ~7% lower in level and ranks instances 0.980 the same, so it would have
-    changed every printed number without changing a conclusion, at the cost of making *benchmark
-    slope* and *the `slope_mean` the ruggedness bands are cut on* two different quantities.
-    """
-    c = zt_coefficients(z, px)
-    return np.degrees(np.arctan(np.hypot(c["G"], c["H"])))
-
-
-def zt_aspect_rad(z: np.ndarray, px: PixelSize) -> np.ndarray:
-    """Per-pixel aspect in radians off the same surface, ``atan2(H, G)``, NaN on the border.
-
-    The zero direction never leaves this module: aspect is only ever *differenced* between truth
-    and fill (:func:`circular_error_rad`), so any consistent convention gives the same circular
-    error. What does matter is that it comes off ZT rather than off a second kernel — §5 puts
-    slope, aspect and curvature on one quadratic surface precisely so the three cannot disagree
-    about what the local gradient is.
-    """
-    c = zt_coefficients(z, px)
-    return np.arctan2(c["H"], c["G"])
-
-
-def zt_profile_curvature(z: np.ndarray, px: PixelSize) -> np.ndarray:
-    """ZT profile curvature in 1/m: curvature along the direction of steepest slope.
-
-    **Undefined on flat ground**, where there is no steepest direction — NaN there rather than a
-    divide-by-zero, which matters because the flattest ruggedness band is a quarter of the
-    corpus and would otherwise fill an appendix column with garbage.
-    """
-    c = zt_coefficients(z, px)
-    g, h = c["G"], c["H"]
-    p = g**2 + h**2
-    with np.errstate(invalid="ignore", divide="ignore"):
-        kp = -2 * (c["D"] * g**2 + c["E"] * h**2 + c["F"] * g * h) / p
-    return np.where(p > 1e-12, kp, np.nan)
+        coefficients.append(full)
+    return ZTSurface(*coefficients)
 
 
 def circular_error_rad(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -353,6 +376,12 @@ def _requested(bar: prereg.Bar, metrics: Iterable[str] | None) -> tuple[str, ...
     if metrics is None:
         return registered
     wanted = tuple(dict.fromkeys(metrics))
+    if not wanted:
+        raise ValueError(
+            "no metrics requested. `metrics=None` scores the whole registered set; an empty "
+            f"selection scores nothing and would return an empty row — pass names from "
+            f"{registered} or leave it out."
+        )
     for name in wanted:
         if name in REFUSED:
             raise ValueError(f"{name!r} is not computed here: {REFUSED[name]}")
@@ -432,14 +461,18 @@ def score(
         # This instance's mean signed error, as a magnitude. The sign stops here — see REFUSED.
         out["bias_abs"] = float(abs(np.mean(err)))
 
-    # The derivatives. All three come off one ZT surface (§5), and the slope error is computed
-    # once for both masks — which is what makes the seam gap free rather than a third pass.
+    # The derivatives. All three come off **one** ZT surface per array (§5), fitted once here
+    # rather than per metric, and the slope error is computed once for both masks — which is what
+    # makes the seam gap free rather than a third pass.
     wants = set(wanted)
     slope_metrics = wants & {"slope_rmse", "slope_rmse_eroded", "seam_gap"}
+    derivatives = slope_metrics | (wants & {"aspect_error", "profile_curvature"})
+    if derivatives:
+        zt_truth, zt_fill = zt_surface(truth, px), zt_surface(filled, px)
     if slope_metrics or "aspect_error" in wants:
-        s_truth = zt_slope_deg(truth, px)
+        s_truth = zt_truth.slope_deg()
     if slope_metrics:
-        slope_err = zt_slope_deg(filled, px) - s_truth
+        slope_err = zt_fill.slope_deg() - s_truth
         slope_full = _finite_rmse(slope_err[void])
         eroded = erode(void)
         # An eroded mask can be empty — a void thinner than 3 px has no pixel whose kernel is
@@ -456,7 +489,7 @@ def score(
             # is why R1 registers it outside the ten graded candidates (#146).
             out["seam_gap"] = slope_full - slope_eroded
     if "aspect_error" in wants:
-        aspect_err = circular_error_rad(zt_aspect_rad(filled, px), zt_aspect_rad(truth, px))
+        aspect_err = circular_error_rad(zt_fill.aspect_rad(), zt_truth.aspect_rad())
         # Slope-weighted: a flat pixel has no aspect to get wrong, so weighting by sin(truth
         # slope) keeps the noise of an undefined direction out of the column p123 §3 measured as
         # the only orthogonal signal in the set.
@@ -466,7 +499,7 @@ def score(
             float(np.degrees(np.sum(w[ok] * e[ok]) / np.sum(w[ok]))) if ok.any() else float("nan")
         )
     if "profile_curvature" in wants:
-        k_err = zt_profile_curvature(filled, px) - zt_profile_curvature(truth, px)
+        k_err = zt_fill.profile_curvature() - zt_truth.profile_curvature()
         out["profile_curvature"] = _finite_rmse(k_err[void])
 
     return {name: out[name] for name in wanted}
@@ -541,7 +574,9 @@ class GoldenTile:
         return land_mask(self.truth) & ~self.void
 
 
-def build_golden(recipe: Mapping[str, Any] = GOLDEN_RECIPE) -> tuple[np.ndarray, ...]:
+def build_golden(
+    recipe: Mapping[str, Any] = GOLDEN_RECIPE,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(truth, filled, void)`` from the recipe — the fixture's arrays, as arithmetic."""
     rows, cols = recipe["shape"]
     row_i, col_j = np.mgrid[0:rows, 0:cols]

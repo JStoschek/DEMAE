@@ -37,6 +37,7 @@ import numpy as np
 import pytest
 
 from benchmark import metrics, prereg
+from benchmark.config import BenchmarkConfig
 from dataset import surfaces
 from dataset.geometry import band_pixel_spacing_m
 from dataset.metrics import slope_deg
@@ -101,7 +102,7 @@ def test_zt_slope_is_the_corpus_slope_over_a_surface_sample():
         surfaces.plateau((64, 64)),
         _tile() + rng.normal(0.0, 3.0, size=(64, 64)),
     ):
-        zt = metrics.zt_slope_deg(surface, PX)
+        zt = metrics.zt_surface(surface, PX).slope_deg()
         corpus = slope_deg(surface, PX)
         both = np.isfinite(zt) & np.isfinite(corpus)
         assert both.any()
@@ -112,7 +113,7 @@ def test_zt_slope_is_the_corpus_slope_under_anisotropic_pixels():
     """Rows and columns keep their own spacing — a kernel that shared one would pass at 30/30."""
     px = (30.9, 19.9)  # ~50 deg N: columns ~1.55x wider on the ground than rows
     z = surfaces.inclined_plane((48, 48), pixel_size=px, slope_deg=12.0, aspect_deg=70.0)
-    zt = metrics.zt_slope_deg(z, px)
+    zt = metrics.zt_surface(z, px).slope_deg()
     both = np.isfinite(zt) & np.isfinite(slope_deg(z, px))
     assert np.abs(zt[both] - slope_deg(z, px)[both]).max() < 0.0006
     assert zt[both].mean() == pytest.approx(12.0, abs=1e-9)
@@ -145,7 +146,7 @@ def test_zt_slope_is_the_corpus_slope_over_a_real_tile_sample():
             cache[sid] = np.load(next(SHARDS.glob(f"*{sid:05d}*.npy")), mmap_mode="r")
         z = np.asarray(cache[sid][int(row_index[i])], dtype=np.float64)
         px = band_pixel_spacing_m(float(lat[i]))
-        zt, corpus = metrics.zt_slope_deg(z, px), slope_deg(z, px)
+        zt, corpus = metrics.zt_surface(z, px).slope_deg(), slope_deg(z, px)
         both = np.isfinite(zt) & np.isfinite(corpus)
         worst = max(worst, float(np.abs(zt[both] - corpus[both]).max()))
     assert worst < 0.0006
@@ -291,6 +292,10 @@ def test_a_metric_outside_the_registered_set_raises(bar):
         metrics.score(truth, filled, void, PX, bar=bar, metrics=["rmse", "hillshade_ssim"])
     with pytest.raises(ValueError, match="outside the registered metric set"):
         metrics.score(truth, filled, void, PX, bar=bar, metrics=["slope_horn"])
+    # And an empty selection is refused rather than returning an empty row — a scored instance
+    # with no metrics in it is a row the parquet would carry and nothing would notice.
+    with pytest.raises(ValueError, match="no metrics requested"):
+        metrics.score(truth, filled, void, PX, bar=bar, metrics=[])
 
 
 def test_the_membership_gate_follows_the_bar_it_is_given(bar):
@@ -357,7 +362,8 @@ def test_aspect_error_is_circular_across_the_branch_cut(bar):
         filled[void] = other[void] - other[void].mean() + truth[void].mean()
         pixel = np.degrees(
             metrics.circular_error_rad(
-                metrics.zt_aspect_rad(filled, PX), metrics.zt_aspect_rad(truth, PX)
+                metrics.zt_surface(filled, PX).aspect_rad(),
+                metrics.zt_surface(truth, PX).aspect_rad(),
             )
         )
         scored = metrics.score(truth, filled, void, PX, bar=bar, metrics=["aspect_error"])
@@ -582,9 +588,10 @@ def test_the_golden_tiles_ripple_is_invisible_to_slope_and_caught_at_the_seam(go
 
     ring = golden.void & ~metrics.erode(golden.void)
     assert ring.sum() == 156 and golden.void.sum() == 1600
-    slope_err = metrics.zt_slope_deg(
-        golden.filled.astype(np.float64), golden.px
-    ) - metrics.zt_slope_deg(golden.truth.astype(np.float64), golden.px)
+    slope_err = (
+        metrics.zt_surface(golden.filled.astype(np.float64), golden.px).slope_deg()
+        - metrics.zt_surface(golden.truth.astype(np.float64), golden.px).slope_deg()
+    )
     assert np.abs(slope_err[metrics.erode(golden.void)]).max() == 0.0
     ring_rmse = math.sqrt(float(np.mean(slope_err[ring] ** 2)))
     assert scored["slope_rmse"] == pytest.approx(
@@ -592,25 +599,57 @@ def test_the_golden_tiles_ripple_is_invisible_to_slope_and_caught_at_the_seam(go
     )
 
 
+def test_the_golden_tiles_aspect_error_is_the_ring_diluted_over_the_void(golden, bar):
+    """The committed aspect number, re-derived rather than taken on trust.
+
+    It is the one column of the ten whose value is neither closed form nor structurally pinned
+    elsewhere, so without this it would be asserted only against itself. The derivation is the
+    fixture's own geometry: the ripple cancels out of a central difference, so aspect is exact on
+    every interior pixel; the truth is a plane, so the sin(slope) weight is one number and the
+    weighted mean collapses to the ring's total circular error over the whole void.
+    """
+    interior = metrics.erode(golden.void)
+    ring = golden.void & ~interior
+    aspect_err = np.degrees(
+        metrics.circular_error_rad(
+            metrics.zt_surface(golden.filled.astype(np.float64), golden.px).aspect_rad(),
+            metrics.zt_surface(golden.truth.astype(np.float64), golden.px).aspect_rad(),
+        )
+    )
+    assert np.abs(aspect_err[interior]).max() == 0.0
+    scored = metrics.score(golden.truth, golden.filled, golden.void, golden.px, bar=bar)
+    assert scored["aspect_error"] == pytest.approx(
+        aspect_err[ring].sum() / golden.void.sum(), rel=1e-12
+    )
+
+
 def test_the_golden_tiles_curvature_sees_what_slope_cannot(golden):
     """ZT's *second* differences do not cancel the ripple: +/- 4a/dx^2 on every interior pixel."""
     a, (dy, dx) = golden.recipe["ripple_m"], golden.px
     interior = metrics.erode(golden.void)
-    k_err = metrics.zt_profile_curvature(
-        golden.filled.astype(np.float64), golden.px
-    ) - metrics.zt_profile_curvature(golden.truth.astype(np.float64), golden.px)
+    k_err = (
+        metrics.zt_surface(golden.filled.astype(np.float64), golden.px).profile_curvature()
+        - metrics.zt_surface(golden.truth.astype(np.float64), golden.px).profile_curvature()
+    )
     assert np.abs(k_err[interior]) == pytest.approx(4 * a / dx**2, rel=1e-12)
     assert dy == dx  # the closed form above is the square-pixel case, which the recipe fixes
 
 
 def test_the_golden_tile_is_a_small_bucket_void_well_inside_the_tile(golden):
-    """§3.2's constraints, so the fixture is an instance the eval mask list could have drawn."""
+    """§3.2's constraints, so the fixture is an instance the eval mask list could have drawn.
+
+    Read off `BenchmarkConfig().masks` rather than typed here: §3.2's margin, cap and bucket
+    edges have one home, and a fixture checked against a second copy of them is a fixture that
+    stays "interior" after the generator's definition of interior has moved.
+    """
+    geometry = BenchmarkConfig().masks
     rows, cols = np.nonzero(golden.void)
     height, width = golden.void.shape
-    assert min(rows.min(), cols.min(), height - 1 - rows.max(), width - 1 - cols.max()) >= 8
-    assert golden.void.mean() <= 0.40
-    diameter = math.sqrt(4 * golden.void.sum() / math.pi)
-    assert 16 <= diameter <= 48
+    margin = min(rows.min(), cols.min(), height - 1 - rows.max(), width - 1 - cols.max())
+    assert margin >= geometry.edge_margin_px
+    assert golden.void.mean() <= geometry.max_area_frac
+    low, high = geometry.small_px
+    assert low <= math.sqrt(4 * golden.void.sum() / math.pi) <= high
 
 
 def test_the_golden_tile_refuses_a_sidecar_that_has_drifted_from_its_arrays(tmp_path, golden):
