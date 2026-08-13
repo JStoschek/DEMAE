@@ -735,6 +735,17 @@ GitHub issue #1.
   ([#136](https://github.com/JStoschek/DEMAE/issues/136)). The axis kept is the one carrying
   information: ruggedness varies ~40× across its bands, void size only ~3× across its buckets,
   so bands stay whole and buckets pool into a figure.
+- **Golden tile** — Task 1's committed scoring fixture (`artifacts/task1/golden-tile.npz` and
+  its sidecar, `benchmark.metrics.read_golden`): one tile, a known void, a **hand-checked** fill,
+  and the ten registered metrics it must score. It exists against the failure plan §8 lists as a
+  risk — a **norm-inversion bug**, which flatters or sabotages an arm by a scale factor and
+  raises nothing — so the fill is arithmetic rather than terrain: an offset plus a checkerboard
+  ripple over a plane of integer metres, which puts five of the ten columns in closed form and
+  makes the other five pinned observations with their structure stated. The ripple is *invisible
+  to a central difference*, so the eroded-mask slope reads exactly zero on a fill with a 4 m step
+  at its boundary — p123's finding as a fixture rather than as a paragraph. Asserted at **both
+  altitudes**, at the `benchmark.metrics.score` seam and again through the shipping command as
+  A1, which is what stops a gate from being a gate on one code path only.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution
