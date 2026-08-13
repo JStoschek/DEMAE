@@ -347,10 +347,10 @@ def frozen(tmp_path_factory):
     """One real `freeze` of the shipped corpus, shared by the class below.
 
     The `NotImplementedError` is the expected outcome and not a failure to write: `freeze`
-    commits §3.1's lists and then names the stages later tickets build.
+    commits §3.1's lists and then names the stage the last ticket builds.
     """
     directory = tmp_path_factory.mktemp("task1")
-    with pytest.raises(NotImplementedError, match="eval mask list"):
+    with pytest.raises(NotImplementedError, match="train mask bank"):
         launch.main(["freeze", "--artifacts-dir", str(directory)])
     return directory
 

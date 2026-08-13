@@ -22,8 +22,9 @@ uv run python -m benchmark.launch report              # the printed table, the C
 #147 shipped the command surface, the frozen run config, the resolution line and ``--dry-run``:
 the pre-flight a build session walks before renting anything. #148 gave ``freeze`` the first of
 its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
-lists (:mod:`benchmark.tiles`), and #156 the third, ADR-0012's extractor contract
-(:mod:`benchmark.extract`). **Nothing is scored here.**
+lists (:mod:`benchmark.tiles`), #156 the third, ADR-0012's extractor contract
+(:mod:`benchmark.extract`), and #150 the fourth, §3.2's eval mask list
+(:mod:`benchmark.masks`). **Nothing is scored here.**
 
 Every verb still raises past the work it has, and names the stage that has not been built —
 deliberately, because a verb that quietly returned 0 having done part of its job is precisely
@@ -47,7 +48,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, extract, prereg, tiles
+from . import arms, artifacts, extract, masks, prereg, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -97,7 +98,7 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 def _freeze(resolution: Resolution) -> NoReturn:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
 
-    Three of the five are built, and the order is each ticket's own argument rather than the
+    Four of the five are built, and the order is each ticket's own argument rather than the
     order they happened to land in.
 
     The **registered bar** goes first (#148) for the reason ADR-0013 gives: every threshold the
@@ -110,11 +111,17 @@ def _freeze(resolution: Resolution) -> NoReturn:
     test tile — so a stage that fails later leaves behind exactly the inputs the next attempt
     reproduces byte-for-byte.
 
-    **ADR-0012's extractor contract** goes last of the three (#156) but still ahead of the two
-    that are owed, because it is the one committed input whose *other* reader is Task 2: a
-    contract that only appeared once the mask bank did would be gated on work the task inheriting
-    it does not depend on. Unlike the bar it carries §3.4's guard, refusing to overwrite a
-    version of itself whose content hash has moved.
+    **ADR-0012's extractor contract** goes next (#156), ahead of the one that is owed, because it
+    is the one committed input whose *other* reader is Task 2: a contract that only appeared once
+    the mask bank did would be gated on work the task inheriting it does not depend on. Unlike
+    the bar it carries §3.4's guard, refusing to overwrite a version of itself whose content hash
+    has moved.
+
+    **§3.2's eval mask list** goes last of the four (#150), because it is a function of the test
+    list two stages above it — 30,000 rows is 5,000 test tiles x two synthetic families x three
+    buckets — and it reads that list back off disk rather than out of the draw, on the contract
+    family's rule that the committed file is what later phases re-read. It carries the same §3.4
+    guard the spec does, and the same generator config hash #151's bank will.
     """
     paths = resolution.config.paths
     bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
@@ -131,13 +138,15 @@ def _freeze(resolution: Resolution) -> NoReturn:
         f"  ADR-0012's contract, md5 {artifacts.file_md5(spec)} — raw int16 metres in, "
         f"{extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
     )
+    for line in masks.format_written(masks.freeze(resolution.config), resolution.config.masks):
+        print(line)
     _unbuilt(
         "freeze",
-        f"wrote {prereg.BAR_NAME}, §3.1's tile lists and {extract.SPEC_FILENAME}, and stopped — "
-        f"the rest of the freeze is not built",
-        "the eval mask list and the train mask bank, written beside them — idempotent, and "
-        "refusing to overwrite an artifact whose content hash has moved (§3.4). The bar needs no "
-        "such guard and `benchmark.prereg.write_bar` says why",
+        f"wrote {prereg.BAR_NAME}, §3.1's tile lists, {extract.SPEC_FILENAME} and "
+        f"{artifacts.EVAL_MASKS_NAME}, and stopped — the last of the freeze is not built",
+        "the train mask bank, written beside them — K = 50 draws per head-train tile from the "
+        "same generator and the same config hash, kept out of git and committed as an md5 "
+        "sidecar `run` refuses a mismatch against (§3.4, #151)",
     )
 
 
