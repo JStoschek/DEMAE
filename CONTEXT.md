@@ -112,6 +112,23 @@ GitHub issue #1.
   where nothing left in the column looks held out). It fails loudly rather than warning: a leak is
   invisible in the loss, the recon grids and the probe, and surfaces only in Phase 2 as an
   evaluation on regions the encoder has already seen — unrepairable without re-pretraining.
+  Phase 2 is that Phase 2: Task 1's `freeze` asserts the same invariant, against the same union,
+  before it commits a tile list ([#149](https://github.com/JStoschek/DEMAE/issues/149)), which is
+  why the checks live in `dataset.containment` rather than beside either caller — the Phase-1
+  Dataset imports torch and the benchmark's freeze path must not.
+- **Tile lists** — §3.1's **four draws in five files**, committed by Task 1's `freeze` and
+  re-read by every later stage: the 20,000-tile **head-train** draw from *train* geocells, the
+  **label-efficiency** draw whose top rung *is* that list and whose nested **1k ⊂ 5k** rungs are
+  their own files, 2,000 **val** tiles and 5,000 **test** tiles (plan §3.1,
+  [#149](https://github.com/JStoschek/DEMAE/issues/149)). Fifth member of the contract family the
+  selection list, the split assignment, the val panel and the probe set are in — same two-column
+  format, same rule: **the committed file is what later phases re-read**, not this code re-run.
+  All four draws are proportional over the k=20 strata, ordered by keyed hash rather than by any
+  RNG, and written sorted, so a redraw is byte-identical and the md5 the run record quotes is a
+  contract. The subsets are nested so C3's sweep measures *data volume* rather than draw luck —
+  and nesting is **asserted**, not assumed, because largest-remainder apportionment is not
+  monotone in the house size. Nothing here is a redistribution question: the module commits tile
+  lists and masks, **never tiles**.
 - **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
   one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
   budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the

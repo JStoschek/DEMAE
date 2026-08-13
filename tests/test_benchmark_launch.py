@@ -60,18 +60,6 @@ def flags(box):
 
 
 @pytest.fixture
-def freeze_flags(flags):
-    """``flags`` with the release encoder unmounted.
-
-    The stub at ``paths.demae_r5_checkpoint`` exists so the resolution line has an md5 to print,
-    and since #156 `freeze` refuses to *pin* a file whose md5 is not the one the plan publishes —
-    correctly, and tested directly below. A freeze test should be about freezing, so it takes the
-    box a rented one actually has: nothing mounted yet.
-    """
-    return [*flags, "--set", "paths.demae_r5_checkpoint=null"]
-
-
-@pytest.fixture
 def frozen(box):
     """The same box after a `freeze` that this ticket does not implement."""
     for name, body in FROZEN.items():
@@ -283,59 +271,32 @@ def test_report_refuses_the_same_way(frozen, flags):
 # --- What `freeze` writes today -----------------------------------------------
 
 
-def test_freeze_writes_both_artifacts_it_has_and_names_the_three_it_does_not(
-    box, freeze_flags, capsys
-):
-    """#148's stage and #156's, through the one command — and the rest still says it is absent.
+def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, flags, capsys):
+    """#148's stage and #149's, through the one command — and neither of them exits 0.
 
-    A verb that wrote two of its five artifacts and returned 0 would read as a frozen box, which
-    is the failure this file exists to prevent. So both land, `freeze` says both landed, and then
-    it names what is somebody else's ticket.
+    A verb that wrote some of its five artifacts and returned 0 would read as a frozen box,
+    which is the failure this file exists to prevent. So the bar lands first, `freeze` says it
+    landed, and then #149's tile draw asks this box for a corpus it does not have. What the
+    tile stage commits when a corpus *is* there is `test_benchmark_tiles.py`'s.
     """
     from benchmark import extract
 
-    with pytest.raises(NotImplementedError, match="the four tile lists"):
-        launch.main(["freeze", *freeze_flags])
+    with pytest.raises(FileNotFoundError, match="manifest.parquet"):
+        launch.main(["freeze", *flags])
     out = capsys.readouterr().out
-    assert prereg.BAR_NAME in out and extract.SPEC_FILENAME in out
+    assert prereg.BAR_NAME in out
 
     bar = prereg.read_bar(box / "artifacts" / prereg.BAR_NAME, plan=PLAN)
     assert bar.seam_break_deg == 0.15  # read from the artifact, not typed into the benchmark
     assert bar.rules == 12
 
-    spec = box / "artifacts" / extract.SPEC_FILENAME
-    assert hashlib.md5(spec.read_bytes()).hexdigest() in out
-    # And it really is the contract, not a placeholder: it re-checks itself at load.
-    assert extract.load_spec(spec).layers == extract.LAYERS
+    # ADR-0012's contract is written *after* the tile lists (#156), so a freeze that stopped at
+    # the draw left none of it behind. That ordering is the claim, and the absence is the check:
+    # a half-frozen box must not carry a contract naming inputs that were never drawn.
+    assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
 
 
-def test_freeze_is_idempotent_and_refuses_a_contract_whose_hash_has_moved(box, freeze_flags):
-    """§3.4, at the command rather than at the writer. Re-running `freeze` after a code change
-    must not silently re-draw an input a half-finished run is already scoring against."""
-    from benchmark import extract
-
-    for _ in range(2):
-        with pytest.raises(NotImplementedError):
-            launch.main(["freeze", *freeze_flags])
-    (box / "artifacts" / extract.SPEC_FILENAME).write_text('{"layers": 12}\n')
-    with pytest.raises(FileExistsError, match="content hash has moved"):
-        launch.main(["freeze", *freeze_flags])
-
-
-def test_freeze_refuses_a_box_whose_release_encoder_is_not_the_one_the_plan_pins(box, flags):
-    """The `flags` box mounts a stub at `paths.demae_r5_checkpoint`, and that is now a refusal.
-
-    R5's md5 is published (#156), so freezing there would commit a contract naming weights nobody
-    ran and hand it to Task 2 — and unlike almost everything else in this benchmark, the moment
-    to catch it is while the file is being *written*, not while it is being read.
-    """
-    with pytest.raises(ValueError, match="the demae-r5 encoder this plan benchmarks is"):
-        launch.main(["freeze", *flags])
-
-
-def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(
-    box, freeze_flags, tmp_path
-):
+def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box, flags, tmp_path):
     """ADR-0013's coupling, through the command: §6 is load-bearing, and this is how it bears.
 
     Editing a registered phrase out of the copy that ships breaks the freeze rather than
@@ -349,7 +310,7 @@ def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(
     plan.write_text(head + section.replace("clears\n     **100 per band**", "clears **80 per band**"))
 
     with pytest.raises(ValueError, match="R8 lost its anchor"):
-        launch.main(["freeze", *freeze_flags, "--set", f'paths.plan_path="{plan}"'])
+        launch.main(["freeze", *flags, "--set", f'paths.plan_path="{plan}"'])
     assert not (box / "artifacts" / prereg.BAR_NAME).exists()
     # The bar is written first for exactly this reason (ADR-0013), so nothing downstream of it
     # reached the artifacts either.

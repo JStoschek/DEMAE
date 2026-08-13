@@ -122,6 +122,37 @@ def band_quotas(
     return alloc
 
 
+def stratified_draw(labels, rank, n: int):
+    """Positions of up to ``n`` items, apportioned over ``labels``, lowest ``rank`` first.
+
+    :func:`band_quotas` decides *how many* come from each label and this decides *which*: the
+    lowest-ranked of that label, where ``rank`` is a keyed-hash order
+    (:func:`dataset.splits.tie_rank`) rather than anything an RNG produced. Both committed draws
+    over the k=20 strata are this — §10.3's probe set and Task 1's four tile draws — and one
+    implementation is what keeps them the same operation rather than two that resemble it.
+
+    Returns **fewer than ``n``** when the frame cannot supply it, because that is
+    :func:`band_quotas`' contract and the two callers disagree about what to do next: the probe
+    set stays usable on a thin debug tier, and a benchmark list short of its budget is refused.
+    Reading the count is the caller's job.
+
+    Taking the *lowest-ranked* rather than a fresh selection is also what makes a ladder of
+    budgets nested: a smaller ``n`` asks for fewer items from the same queue, never different
+    ones. Positions come back ascending, so they index the caller's own arrays unchanged.
+    """
+    import numpy as np
+
+    labels = np.asarray(labels)
+    # Keys are the labels as zero-padded strings: `band_quotas` breaks its own ties on the key
+    # name, so the padding is what keeps the apportionment independent of `str` ordering.
+    caps = {f"{label:03d}": int((labels == label).sum()) for label in np.unique(labels)}
+    chosen: list[int] = []
+    for key, quota in band_quotas(caps, n, allocation="proportional").items():
+        within = np.flatnonzero(labels == int(key))
+        chosen.extend(within[np.argsort(rank[within], kind="stable")][:quota].tolist())
+    return np.asarray(sorted(chosen), dtype=np.int64)
+
+
 # --- The sampler --------------------------------------------------------------
 
 
