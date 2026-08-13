@@ -75,9 +75,14 @@ The *value* check is what catches a terratorch upgrade retuning the pair the nam
 ``pos_emb[:, :, 1:15, 1:15]`` — rather than terratorch's bicubic resize, and carries it as a
 *value in the committed file* so a bicubic-derived contract has a different md5 from a re-derived
 one. That the shipped tensor really is the closed form it is cropped from is verified rather than
-assumed (ADR-0011's tamper-evidence consequence): ``encoder.pos_emb`` against a freshly built
-``build_2d_sincos_posemb(16, 16)``, and the crop against ``build_2d_sincos_posemb(14, 14)``.
-Getting it wrong is not a rounding error — 26% relative RMS on the embedding, with only 20 of 196
+assumed (ADR-0011's tamper-evidence consequence), in two checks that fail differently:
+``encoder.pos_emb`` against a freshly built ``build_2d_sincos_posemb(16, 16)``, which catches a
+*different tensor*; and that same freshly built form's **top-left** 14x14 slice against
+``build_2d_sincos_posemb(14, 14)``, which is Decision 2's premise — cropping is re-deriving,
+because the grid index is absolute — and which catches a terratorch that changed
+``build_2d_sincos_posemb`` itself while every name and shape survived. Neither compares the
+*centre* crop to a 14-grid closed form; that would fail by 23%, and deliberately, since the
+anchor is a declared one-token offset. Getting it wrong is not a rounding error — 26% relative RMS on the embedding, with only 20 of 196
 tokens still ranking their own correct embedding nearest — and the anchor is load-bearing too:
 the nine crops span 44% relative RMS, more than the error being fixed.
 
@@ -88,7 +93,12 @@ moments the timm path uses.
 Also here: ADR-0012 §6's *unmeasured half*. The fp32-versus-compute-dtype agreement is
 **measured on first run** (:meth:`Extractor.precision_agreement`) rather than inherited from the
 DEMAE family's 0.999968, which is a figure taken on MPS over DEMAE weights and says nothing about
-this encoder.
+this encoder. The measurement is
+[`p157-terramind-precision.md`](../../docs/research/p157-terramind-precision.md); what a run does
+with its own is **deliberately not wired here**. :mod:`benchmark.artifacts`' run record carries
+the spec's md5 and is `run`'s surface, not the extractor's — so this exposes the number and the
+verb that owns the record decides whether a results table quotes it. Stated rather than left as
+a method with one caller in a script.
 
 :attr:`ExtractorSpec.pending` is consequently **empty** and stays in the file. It is the shape
 this contract uses to say an encoder's half is owed rather than absent, and an empty block is a
@@ -153,6 +163,12 @@ STD_FLOOR: Final = 1e-6
 #: The checkpoint layouts :meth:`Extractor.encoder` can read — all three the registry declares.
 READABLE_FORMATS: Final = ("timm", "mmselfsup_rgb", "terratorch")
 
+#: The diets :func:`normalize` applies. Listed rather than sliced out of
+#: :data:`benchmark.arms.NORMALIZATIONS`, whose extra member is ``none`` — an arm with no encoder
+#: — and whose order is a table's, not a claim about what this module implements.
+#: ``test_the_implemented_diets_are_the_registrys_own`` pins the two together.
+IMPLEMENTED_NORMALIZATIONS: Final = ("per_tile", "terramind_v1")
+
 #: What an encoder's half of this contract owes when it is not yet built, keyed by the block name
 #: a refusal quotes. **Empty since #157**, and see the module docstring on why the field stays.
 PENDING: Final[dict[str, dict]] = {}
@@ -168,14 +184,12 @@ TERRAMIND_MODALITY: Final = "tok_dem@224"
 TERRAMIND_MEAN: Final = 670.665
 TERRAMIND_STD: Final = 951.272
 
-#: TerraMind's native token grid: the DEM tokenizer's recorded training args say
-#: ``input_size_min=256, input_size_max=256`` at patch 16, so ``pos_emb`` ships ``[1, D, 16, 16]``.
-TERRAMIND_NATIVE_GRID_PX: Final = 16
-
 #: ADR-0011 Decision 2's anchor — ``pos_emb[:, :, 1:15, 1:15]``, indices 1-14. Centre rather than
 #: top-left keeps the intervention single-purpose: bicubic both centres and stretches, and only
 #: the stretch is wrong, so top-left would remove the stretch *and* add a one-token translation.
-TERRAMIND_POS_EMB_ANCHOR: Final = (1, 1)
+#: The grid it is a crop *of* is :attr:`benchmark.arms.Encoder.pos_emb_native_grid_px`, declared
+#: per encoder; the anchor is here because ADR-0011 fixes one value of it for the whole plan.
+POS_EMB_CROP_ANCHOR: Final = (1, 1)
 
 #: The distributions this module reads the encoder's own weights out of, named so a refusal can
 #: say what to install rather than re-raising terratorch's ``ModuleNotFoundError``.
@@ -320,14 +334,19 @@ def pos_emb_block(encoder: arms.Encoder, *, grid_px: int) -> dict:
     rather than left ``None`` — a null here would read as *unspecified* where the honest claim is
     *specified, and it is the identity*.
     """
-    block: dict[str, Any] = {"derivation": encoder.pos_emb_derivation, "grid_px": grid_px}
+    block: dict[str, Any] = {
+        "derivation": encoder.pos_emb_derivation,
+        "grid_px": grid_px,
+        # The registry's, not a constant this function picks: 16 is a fact about TerraMind's
+        # 256 px training resolution, and `benchmark.arms.Encoder` pins the field against the
+        # derivation so the identity case cannot silently claim someone else's native grid.
+        "native_grid_px": encoder.pos_emb_native_grid_px or grid_px,
+    }
     if encoder.pos_emb_derivation == "as_published":
-        block["native_grid_px"] = grid_px
         return block
-    block["native_grid_px"] = TERRAMIND_NATIVE_GRID_PX
     block["adr"] = "ADR-0011"
     if encoder.pos_emb_derivation == "rederived_14x14_crop":
-        block["anchor"] = list(TERRAMIND_POS_EMB_ANCHOR)
+        block["anchor"] = list(POS_EMB_CROP_ANCHOR)
     return block
 
 
@@ -807,7 +826,8 @@ def normalize(raw: np.ndarray, mask: np.ndarray, *, normalization: str) -> np.nd
         return ((raw.astype(np.float32) - np.float32(mean)) / np.float32(std)).astype(np.float32)
     raise NotImplementedError(
         f"normalization {normalization!r} is not one this contract implements "
-        f"({', '.join(arms.NORMALIZATIONS[1:])}) — see {SPEC_FILENAME}'s `pending` block"
+        f"({', '.join(IMPLEMENTED_NORMALIZATIONS)}). §2.1's diets are the registry's, and an "
+        f"arm declaring one nothing applies would be fed whatever the last branch happened to do"
     )
 
 
@@ -840,7 +860,23 @@ def _checkpoint_depth(state) -> int:
     return 1 + max(indices) if indices else 0
 
 
-def derive_pos_emb(native, spec: dict):
+def _check_depth(state, entry: EncoderSpec, path: str) -> None:
+    """ADR-0012 §3's layer-count refusal, shared by both loaders because it is one claim.
+
+    Read off the checkpoint's own keys before a model is built, so a declared count that does not
+    match the weights is refused **by name** rather than surfacing as two dozen unmatched tensors
+    from a strict load — which names every tensor and not the one fact that is wrong.
+    """
+    depth = _checkpoint_depth(state)
+    if depth != entry.depth:
+        raise ValueError(
+            f"{path} has {depth} transformer blocks; {SPEC_FILENAME} declares "
+            f"{entry.depth} for {entry.name}. {ADR} §3 emits one intermediate per block, so "
+            f"a layer count that does not match the model loaded is refused."
+        )
+
+
+def derive_pos_emb(native, block: dict):
     """ADR-0011 Decision 2, as a function of the shipped ``[1, D, 16, 16]`` tensor and the spec.
 
     Pure and torch-only, so the thing the ADR is *about* can be checked without a checkpoint, and
@@ -864,15 +900,15 @@ def derive_pos_emb(native, spec: dict):
     """
     import torch.nn.functional as F
 
-    grid = spec["grid_px"]
-    derivation = spec["derivation"]
-    if tuple(native.shape[-2:]) != (spec["native_grid_px"],) * 2:
+    grid = block["grid_px"]
+    derivation = block["derivation"]
+    if tuple(native.shape[-2:]) != (block["native_grid_px"],) * 2:
         raise ValueError(
             f"this checkpoint's pos_emb is {tuple(native.shape[-2:])}; {SPEC_FILENAME} derives "
-            f"from a {spec['native_grid_px']}x{spec['native_grid_px']} grid"
+            f"from a {block['native_grid_px']}x{block['native_grid_px']} grid"
         )
     if derivation == "rederived_14x14_crop":
-        row, col = spec["anchor"]
+        row, col = block["anchor"]
         if row + grid > native.shape[-2] or col + grid > native.shape[-1]:
             raise ValueError(
                 f"a {grid}x{grid} crop anchored at {(row, col)} does not fit "
@@ -940,7 +976,9 @@ class Extractor:
             return self._build_timm(entry, path)
         raise NotImplementedError(
             f"{entry.name}'s checkpoint format {entry.checkpoint_format!r} is not one this "
-            f"contract reads ({', '.join(READABLE_FORMATS)}) — see {SPEC_FILENAME}'s `pending`"
+            f"contract reads ({', '.join(READABLE_FORMATS)}). A format arriving here is an "
+            f"encoder registered ahead of the loader that reads it — name it in "
+            f"{SPEC_FILENAME}'s `pending` block, which is what that block is for"
         )
 
     def _checked_path(self, entry: EncoderSpec) -> str:
@@ -986,13 +1024,7 @@ class Extractor:
         if entry.checkpoint_format == "mmselfsup_rgb":
             state = _timm_state_from_mmselfsup(state, entry)
 
-        depth = _checkpoint_depth(state)
-        if depth != entry.depth:
-            raise ValueError(
-                f"{path} has {depth} transformer blocks; {SPEC_FILENAME} declares "
-                f"{entry.depth} for {entry.name}. {ADR} §3 emits one intermediate per block, so "
-                f"a layer count that does not match the model loaded is refused."
-            )
+        _check_depth(state, entry, path)
         pos_embed = state.get("pos_embed")
         if pos_embed is None:
             raise ValueError(
@@ -1104,6 +1136,12 @@ class Extractor:
                 f"It is an extra rather than a core dependency — `{TERRAMIND_EXTRA}`."
             ) from None
 
+        # §7.2's constants, at *load* time. :func:`normalize` reads them again on every call —
+        # they are what it applies, so it has to — but a contract clause that only fired once a
+        # tile arrived would let `Extractor.encoder("A5")` succeed against a terratorch whose
+        # diet has moved, and "the encoder resolved" is what a `--dry-run` pre-flight reports.
+        terramind_constants()
+
         full, _ = read_state_dict(path)
         prefix = "encoder."
         state = {k[len(prefix):]: v for k, v in full.items() if k.startswith(prefix)}
@@ -1113,13 +1151,7 @@ class Extractor:
                 f"terratorch tokenizer, whose encoder half is what A5 and A9 read (p118 §8)"
             )
 
-        depth = _checkpoint_depth(state)
-        if depth != entry.depth:
-            raise ValueError(
-                f"{path} has {depth} transformer blocks; {SPEC_FILENAME} declares "
-                f"{entry.depth} for {entry.name}. {ADR} §3 emits one intermediate per block, so "
-                f"a layer count that does not match the model loaded is refused."
-            )
+        _check_depth(state, entry, path)
         native = state.get("pos_emb")
         if native is None:
             raise ValueError(
@@ -1141,7 +1173,10 @@ class Extractor:
         # built it, and a terratorch that switched to a learned or retuned embedding would miss
         # by orders of magnitude more.
         reference = build_2d_sincos_posemb(native_px, native_px, embed_dim=entry.width)
-        if not torch.allclose(native.float(), reference.float(), atol=1e-6):
+        # `rtol=0`: entries lie in [-1, 1], so the default 1e-5 relative term would widen this to
+        # ten times the tolerance ADR-0011 Amendment 2 states, on a check whose whole job is to
+        # separate float32 rounding (5.96e-8) from a different tensor.
+        if not torch.allclose(native.float(), reference.float(), atol=1e-6, rtol=0):
             raise ValueError(
                 f"{path}'s `{prefix}pos_emb` is not `build_2d_sincos_posemb"
                 f"({native_px}, {native_px})`. ADR-0011 rests on it being a closed form of the "

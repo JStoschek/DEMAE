@@ -493,3 +493,24 @@ def test_the_terramind_arms_declare_adr_elevens_re_derivation():
 def test_an_encoder_declaring_an_unregistered_derivation_is_refused():
     with pytest.raises(ValueError, match="unknown pos_emb derivation"):
         replace(arms.ENCODERS["terramind"], pos_emb_derivation="stretch_it")
+
+
+def test_an_encoder_declaring_an_unregistered_axis_order_is_refused():
+    # An unregistered order is a `pos_embed` nothing verifies, and that tensor is the one P102 §4
+    # says must be verified rather than trusted.
+    with pytest.raises(ValueError, match="unknown pos_encoding"):
+        replace(arms.ENCODERS["demae-r5"], pos_encoding="sincos2d_columnwise")
+
+
+def test_a_derivation_and_a_native_grid_that_disagree_are_refused():
+    """The two fields are one claim in halves, so a half on its own is a contradiction.
+
+    Left unchecked, an encoder declaring a crop with no native grid would be told its native grid
+    is the run's — i.e. that a 14x14 crop of a 14x14 tensor is the whole of it, which is the
+    identity wearing ADR-0011's name.
+    """
+    with pytest.raises(ValueError, match="names no native grid"):
+        replace(arms.ENCODERS["demae-r5"], pos_emb_native_grid_px=16)
+    with pytest.raises(ValueError, match="names the grid it derives"):
+        replace(arms.ENCODERS["terramind"], pos_emb_native_grid_px=None)
+    assert arms.ENCODERS["terramind"].pos_emb_native_grid_px == 16

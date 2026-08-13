@@ -91,6 +91,11 @@ afternoon.
   contract keeps handing back fp32.
 - **A9 is still unmeasured, deliberately.** It reads the same weights through a separate registry
   entry and gets its own figure on its own first run, for the reason this document exists.
+- **What a *run* does with its own figure is open, and is not this ticket's.** `Extractor`
+  exposes it (`precision_agreement(arm)`); `benchmark.artifacts`' run record — which already
+  carries the spec's md5 beside the table it produced — is the `run` verb's surface, so whether a
+  results table quotes the number is that verb's call. Named here rather than left as a method
+  whose only caller is the script above.
 
 ## 5. Sources
 

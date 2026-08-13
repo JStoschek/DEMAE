@@ -568,8 +568,17 @@ def test_a_tile_with_no_valid_pixels_is_refused_rather_than_divided_by_the_floor
 
 def test_a_normalization_this_contract_does_not_implement_says_so(tile):
     raw, valid = tile
-    with pytest.raises(NotImplementedError, match="pending"):
+    with pytest.raises(NotImplementedError, match="not one this contract implements"):
         normalize(raw[None], valid[None], normalization="none")
+
+
+def test_the_implemented_diets_are_the_registrys_own():
+    """The one member of §2.1's vocabulary this module does not implement is `none` — an arm with
+    no encoder, which never reaches `normalize` at all. Pinned rather than sliced out of the
+    registry, whose order is a table's and not a claim about what this module does."""
+    assert set(extract_module.IMPLEMENTED_NORMALIZATIONS) == set(arms.NORMALIZATIONS) - {"none"}
+    for encoder in arms.ENCODERS:
+        assert arms.normalization_for(encoder) in extract_module.IMPLEMENTED_NORMALIZATIONS
 
 
 @requires_corpus
@@ -1245,7 +1254,7 @@ def test_the_terramind_diet_ignores_the_mask_and_says_so(tile):
 
 def test_the_contract_declares_the_centre_anchored_crop():
     """AC 3. The value is in the *committed* file, not only in the code that writes it."""
-    from benchmark.extract import TERRAMIND_POS_EMB_ANCHOR
+    from benchmark.extract import POS_EMB_CROP_ANCHOR
 
     committed = json.loads((REPO / "artifacts" / "task1" / SPEC_FILENAME).read_text())
     for name in ("terramind", "terramind-tokenizer"):
@@ -1254,7 +1263,7 @@ def test_the_contract_declares_the_centre_anchored_crop():
             "derivation": "rederived_14x14_crop",
             "grid_px": 14,
             "native_grid_px": 16,
-            "anchor": list(TERRAMIND_POS_EMB_ANCHOR),
+            "anchor": list(POS_EMB_CROP_ANCHOR),
             "adr": "ADR-0011",
         }
     # Every other encoder declares the identity rather than saying nothing, so a reader of the
@@ -1498,6 +1507,151 @@ def test_the_timm_path_refuses_a_derivation_it_cannot_apply(tmp_path, vits_check
     forged = replace(spec, encoders={**spec.encoders, ENCODER: moved})
     with pytest.raises(NotImplementedError, match="the timm path does not apply"):
         Extractor(forged, cfg).encoder(ARM)
+
+
+# --- The forward pass, on a composition rather than on weights -----------------
+
+
+@pytest.fixture(scope="module")
+def synthetic_terramind(tmp_path_factory):
+    """A real `vit_b_enc` at random weights, saved the way the tokenizer ships one.
+
+    The same argument the module docstring makes for `demae-vits`, and it is stronger here
+    because it is what makes ADR-0012 Decision 4's owed test *unconditional*. Everything
+    Decision 4 names — twelve intermediates in block order, the canonical `(N, 196, D)` slice,
+    `cls` structurally absent, `output` bit-identical to block twelve — is a property of the
+    composition and not of what the weights happen to be, so a fresh clone with no 1.15 GB
+    download in its Hugging Face cache still runs it. `pos_emb` needs no fixing up: `vit_b_enc`
+    builds it from `build_2d_sincos_posemb` at construction, which is exactly what the loader
+    then verifies it against.
+
+    360 MB and about two seconds, once for the module. The real tokenizer below then checks the
+    same claims against the shipped weights, which is the part this cannot fake.
+    """
+    import torch
+
+    from terratorch.models.backbones.terramind.tokenizer.models.vit_models import vit_b_enc
+
+    model = vit_b_enc(in_channels=1, patch_size=16, resolution=256, patch_proj=True, post_mlp=True)
+    path = tmp_path_factory.mktemp("terramind") / "TerraMind_Tokenizer_DEM.pt"
+    torch.save({f"encoder.{k}": v for k, v in model.state_dict().items()}, path)
+    return path
+
+
+def test_the_terramind_composition_emits_every_block_with_no_cls(
+    tmp_path, synthetic_terramind, monkeypatch
+):
+    """AC 6, unconditionally: ADR-0012 Decision 4's list on the terratorch side.
+
+    `cls` is `None` here as a claim about the *architecture*, not as "we did not compute one":
+    TerraMind structurally has no CLS token, so a statistic pooled over it would compare one
+    model's token to the other's absence (ADR-0012 §5).
+    """
+    import torch
+
+    extractor = _terramind_extractor(tmp_path, synthetic_terramind, monkeypatch)
+    rng = np.random.default_rng(11)
+    raw = rng.normal(1500.0, 400.0, size=(2, 224, 224)).astype(np.int16)
+    out = extractor.extract(raw, land_mask(raw), arm="A5")
+
+    assert out.output.shape == (2, 196, 768)
+    assert out.output.dtype == torch.float32
+    assert len(out.intermediates) == LAYERS
+    assert all(block.shape == (2, 196, 768) for block in out.intermediates)
+    assert all(block.dtype == torch.float32 for block in out.intermediates)
+    assert out.cls is None
+    assert extractor.spec.encoders["terramind"].has_cls is False
+
+    # The relation on the un-normed side: `output` *is* block twelve, bit-identically, where on
+    # the DEMAE side a final norm stands between them. Both fields still exist, because a shared
+    # index would quietly compare one to the other.
+    assert torch.equal(out.output, out.intermediates[-1])
+    assert extractor.spec.encoders["terramind"].output_is_normed is False
+    # And they really are twelve *different* tensors, not one repeated.
+    assert not torch.allclose(out.intermediates[0], out.intermediates[-1])
+
+
+def test_the_sequence_is_the_encoders_own_row_major_flatten(
+    tmp_path, synthetic_terramind, monkeypatch
+):
+    """ADR-0012 §5's layout claim, pinned against the model rather than asserted.
+
+    `ViTEncoder` returns `[N, D, 14, 14]`; the contract's canonical form is `(N, 196, D)`
+    row-major. That is only the right unpacking if it is the exact inverse of the flatten the
+    encoder did on the way in — `rearrange(proj(x), "b d nh nw -> b (nh nw) d")` — because it is
+    that flatten the `pos_emb` grid is aligned to. Equality, not closeness.
+    """
+    import torch
+
+    extractor = _terramind_extractor(tmp_path, synthetic_terramind, monkeypatch)
+    model = extractor.encoder("A5")
+    rng = np.random.default_rng(12)
+    raw = rng.normal(1500.0, 400.0, size=(1, 224, 224)).astype(np.int16)
+    out = extractor.extract(raw, land_mask(raw), arm="A5")
+
+    x = normalize(raw, land_mask(raw), normalization="terramind_v1")
+    with torch.no_grad():
+        spatial = model(torch.from_numpy(x).unsqueeze(1))
+    assert tuple(spatial.shape) == (1, 768, 14, 14)
+    for token in (0, 13, 14, 195):  # first row's ends and the second row's start
+        row, col = divmod(token, 14)
+        assert torch.equal(out.output[0, token], spatial[0, :, row, col])
+
+
+def test_the_re_derivation_is_what_the_composition_actually_runs(
+    tmp_path, synthetic_terramind, monkeypatch
+):
+    """ADR-0011 Decision 2 as behaviour rather than as a field, and without the shipped weights.
+
+    Two things. The parameter the built encoder holds is the declared crop of what the file
+    shipped; and running the same tile under terratorch's default bicubic path gives *different*
+    features, so the intervention is real rather than a relabelling.
+    """
+    import torch
+    from torch import nn
+
+    from pretrain.init import read_state_dict
+
+    extractor = _terramind_extractor(tmp_path, synthetic_terramind, monkeypatch)
+    model = extractor.encoder("A5")
+    native = read_state_dict(synthetic_terramind)[0]["encoder.pos_emb"]
+    assert tuple(model.pos_emb.shape) == (1, 768, 14, 14)
+    assert model.pos_emb.requires_grad is False
+    assert torch.equal(model.pos_emb.detach().cpu(), native[:, :, 1:15, 1:15])
+
+    rng = np.random.default_rng(13)
+    raw = rng.normal(1500.0, 400.0, size=(1, 224, 224)).astype(np.int16)
+    crop_features = extractor.extract(raw, land_mask(raw), arm="A5").output
+
+    model.pos_emb = nn.Parameter(
+        extract_module.derive_pos_emb(
+            native, {"derivation": "bicubic_resize", "grid_px": 14, "native_grid_px": 16}
+        ).clone(),
+        requires_grad=False,
+    )
+    assert not torch.allclose(
+        crop_features, extractor.extract(raw, land_mask(raw), arm="A5").output
+    )
+
+
+def test_the_constants_are_checked_when_the_encoder_loads_not_when_a_tile_arrives(
+    tmp_path, synthetic_terramind, monkeypatch
+):
+    """§7.2 is a **load-time** check, so it has to fire before any tile exists.
+
+    `normalize` reads the pair again on every call — it is what it applies, so it must — but a
+    clause that only fired once a tile arrived would let `Extractor.encoder("A5")` resolve
+    against a terratorch whose diet has moved, and "the encoder resolved" is what `--dry-run`
+    reports before anything is rented.
+    """
+    from terratorch.models.backbones.terramind.model import terramind_register
+
+    extractor = _terramind_extractor(tmp_path, synthetic_terramind, monkeypatch)
+    monkeypatch.setitem(
+        terramind_register.v1_pretraining_mean, extract_module.TERRAMIND_MODALITY, [435.726]
+    )
+    with pytest.raises(ValueError, match="435.726"):
+        extractor.encoder("A5")
 
 
 # --- The real tokenizer, where a box mounts one --------------------------------

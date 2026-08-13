@@ -80,6 +80,14 @@ NORMALIZATIONS: Final = ("none", "per_tile", "terramind_v1")
 #: derivation the contract cannot express is an ablation nobody can run.
 POS_EMB_DERIVATIONS: Final = ("as_published", "rederived_14x14_crop", "bicubic_resize")
 
+#: What the closed form a checkpoint's position tensor is **checked against** can be. A tuple
+#: like its three siblings above rather than a free string, because #157 added a third value to
+#: a field that had two and no vocabulary — and an unregistered order is a checkpoint nothing
+#: verifies, which is the one tensor P102 §4 says must be verified rather than trusted.
+#: ``sincos2d`` and ``sincos2d_rowfirst`` are :data:`pretrain.model.AXIS_ORDERS`' two;
+#: ``sincos2d_terramind`` is terratorch's `build_2d_sincos_posemb`, which has its own oracle.
+POS_ENCODINGS: Final = ("sincos2d", "sincos2d_rowfirst", "sincos2d_terramind")
+
 
 @dataclass(frozen=True)
 class Encoder:
@@ -113,6 +121,12 @@ class Encoder:
     #: the committed contract: the nine possible crops span 44% relative RMS, more than the
     #: bicubic error being removed, so the anchor is as load-bearing as the derivation.
     pos_emb_derivation: str = "as_published"
+    #: The token grid this encoder's position tensor is **published at**, where that is not the
+    #: grid a 224 px tile implies. Declared per encoder rather than being a constant a derivation
+    #: implies: 16 is a fact about TerraMind's 256 px training resolution, and a second encoder
+    #: reaching this grid from a third one would otherwise be silently told it was 16 too.
+    #: ``None`` is the identity case and is checked against ``as_published`` below.
+    pos_emb_native_grid_px: int | None = None
     #: §2.3's table, where it gives one. ``None`` where no source in this plan counts them, and
     #: left ``None`` rather than inferred: §6 item 4 prints parameter counts, and a count this
     #: registry guessed would print as a measurement.
@@ -153,10 +167,26 @@ class Encoder:
     output_is_normed: bool = True
 
     def __post_init__(self) -> None:
+        if self.pos_encoding not in POS_ENCODINGS:
+            raise ValueError(
+                f"encoder {self.name}: unknown pos_encoding {self.pos_encoding!r}; "
+                f"registered: {sorted(POS_ENCODINGS)}"
+            )
         if self.pos_emb_derivation not in POS_EMB_DERIVATIONS:
             raise ValueError(
                 f"encoder {self.name}: unknown pos_emb derivation {self.pos_emb_derivation!r}; "
                 f"registered: {sorted(POS_EMB_DERIVATIONS)}"
+            )
+        # The two fields are one claim in two halves, and the halves have to agree: a derivation
+        # that is the identity has no *other* grid to name, and one that is not has nothing to
+        # derive from without it.
+        published = self.pos_emb_derivation == "as_published"
+        if published != (self.pos_emb_native_grid_px is None):
+            raise ValueError(
+                f"encoder {self.name}: {self.pos_emb_derivation!r} with "
+                f"pos_emb_native_grid_px={self.pos_emb_native_grid_px!r}. An `as_published` "
+                f"derivation names no native grid because it is the run's; every other one names "
+                f"the grid it derives *from* (ADR-0011)"
             )
 
 
@@ -227,6 +257,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # resize scored 0.9708 against #134's 0.99 materiality bar and was rejected; §4's
         # A5-at-20k ablation row evidences it.
         pos_emb_derivation="rederived_14x14_crop",
+        # 256 px at patch 16: the DEM tokenizer's recorded training args say
+        # `input_size_min=256, input_size_max=256`, so `pos_emb` ships [1, 768, 16, 16].
+        pos_emb_native_grid_px=16,
         checkpoint_field="terramind_checkpoint",
         params=90_172_416,
         checkpoint_format="terratorch",
@@ -263,6 +296,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d_terramind",
         pos_emb_derivation="rederived_14x14_crop",
+        pos_emb_native_grid_px=16,
         checkpoint_field="terramind_checkpoint",
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
