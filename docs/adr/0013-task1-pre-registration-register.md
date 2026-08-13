@@ -21,6 +21,21 @@
   four copies of the arithmetic were amended in the same change. **No rule's content changed and no metric entered or
   left the set** — this is a miscount repaired, and repaired **before any arm ran**, which is the only condition under
   which it was repairable. The counts still read **twelve** rules.
+- **Amended by:** Task 1 build session, 2026-08-12 ([issue #148](https://github.com/JStoschek/DEMAE/issues/148)) —
+  **R12's register row restated in §6's words**. The row read "negative result if A2 *loses to* A1 in a majority of
+  bands", while [§4.3](../research/task1-void-fill-plan.md) — R12's home — and §6's index both read "does **not beat**
+  A1 in a majority of the **four** bands". **A tie is not a loss**, so the row was *narrower than the rule it
+  summarises*: an A2 that tied A1 in three bands of four would have escaped the negative-result report under the row's
+  wording and not under §4.3's, which is the reading that would have been available to argue with once the numbers
+  existed. The row now reads §6's words. **No rule's content changes and no decision is re-opened** —
+  [#142](https://github.com/JStoschek/DEMAE/issues/142) decided the contingency, and this ADR's own #142 amendment line
+  above already states it correctly, so the row was a transcription slip against two internal copies rather than a
+  second reading of the rule. This is precisely the defect [Consequences](#consequences) anticipates — *"if it is ever
+  found to have changed a rule's content rather than its home, that is a defect in this ADR"* — it was found by the
+  build session committing Decision 8's numeric subset, and it was repaired **before any arm ran**, which is again the
+  only condition under which it was repairable. R12 stays **discursive**: it holds no value, and the only artifact
+  touched is the `statement` line `task1-prereg-bar.json` carries for a reader who arrives at the file rather than at
+  this ADR. The counts still read **twelve** rules.
 - **Context ticket:** "Decide whether the pre-registration gets its own ADR, now that it carries seven rules" ([issue #141](https://github.com/JStoschek/DEMAE/issues/141)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the twelve rules' own source tickets, cited per row in [The register](#the-register)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9 *(2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142) adds §4.3, R12's home, and §8's risk bullet as a marked site)*
@@ -158,7 +173,7 @@ Twelve rules. **R11 is asserted in ADR-0011 and pointed at here**, per the heade
 | R9b | **Refusal:** the FSQ diagnostic carries no threshold — the statistic has no natural scale, and one would imply it decides more than it can | §2.2 | ❌ by design | [#139](https://github.com/JStoschek/DEMAE/issues/139), [#140](https://github.com/JStoschek/DEMAE/issues/140) |
 | R10 | C3's low-label sweep is the pre-registered fallback claim; nulls reported with the prominence of wins | §6.7 | ❌ discursive | plan §6 |
 | R11 | Bicubic-vs-re-derived ablation row, A5 at 20k, dropped iff #134 returns ≥ 0.99 | **[ADR-0011](0011-terramind-posemb-rederived-at-14x14.md) D4–5** | ✅ `0.99` | [#134](https://github.com/JStoschek/DEMAE/issues/134) |
-| R12 | A2 carries no C-claim and is insulated from C1 both ways; the A2→A3 difference is joint, never "what task adaptation bought"; negative result if A2 loses to A1 in a majority of bands | §4.3, §6.8 | ❌ discursive | [#142](https://github.com/JStoschek/DEMAE/issues/142) |
+| R12 | A2 carries no C-claim and is insulated from C1 both ways; the A2→A3 difference is joint, never "what task adaptation bought"; negative result if A2 does not beat A1 in a majority of the four bands | §4.3, §6.8 | ❌ discursive | [#142](https://github.com/JStoschek/DEMAE/issues/142), [#148](https://github.com/JStoschek/DEMAE/issues/148) |
 
 R8 and R11 have **already fired**, and both are the argument for the whole arrangement. R8's floor was
 fixed at ~96 projected instances and met a measured 438 — 4.6× its projection — and still produced the

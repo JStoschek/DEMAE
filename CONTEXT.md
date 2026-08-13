@@ -678,7 +678,12 @@ GitHub issue #1.
   registration marker; §6 is the single deliberate duplicate, because it ships in the writeup
   verbatim, and the numeric subset is additionally committed to `task1-prereg-bar.json`, which
   **refuses to load if the §6 phrase it was registered in no longer appears** — the mechanism
-  borrowed intact from the **Pre-registered bar**. The two are the same discipline on
+  borrowed intact from the **Pre-registered bar**. `benchmark.prereg` holds it, and past that
+  module no threshold in the benchmark is typed as a literal. It carries **one link the Gate E
+  bar does not need**: this file is written by `freeze` rather than by hand, so its value and
+  its phrase come from one source and agreeing with each other proves nothing — every value
+  therefore renders an anchor (`0.15` renders `"above +0.15°"`) that must read in its own
+  registered phrase before that phrase is looked for in §6. The two are the same discipline on
   different objects and are deliberately not one term: Gate E's bar is *pass/fail* criteria
   for a gate, with Defect-versus-Finding classes and a stop condition; this register has no
   pass/fail at all. Entry **R9b** is a **refusal** — the FSQ diagnostic carries no threshold,

@@ -20,11 +20,11 @@ uv run python -m benchmark.launch report              # the printed table, the C
 ## What is built, and what is not
 
 #147 shipped the command surface, the frozen run config, the resolution line and ``--dry-run``:
-the pre-flight a build session walks before renting anything. #156 gave ``freeze`` the first of
-its five artifacts, ADR-0012's extractor contract (:mod:`benchmark.extract`). **Nothing is
-scored here.**
+the pre-flight a build session walks before renting anything. #148 gave ``freeze`` the first of
+its five artifacts, the registered bar (:mod:`benchmark.prereg`); #156 gave it the second,
+ADR-0012's extractor contract (:mod:`benchmark.extract`). **Nothing is scored here.**
 
-Past ``--dry-run`` every verb still raises and names the stage that has not been built —
+Every verb still raises past the work it has, and names the stage that has not been built —
 deliberately, because a verb that quietly returned 0 having done part of its job is precisely
 the shape of failure this module exists to prevent, and it is the shape that survived four
 tickets in Phase 1. It matters more once a verb writes real files than it did when none did: a
@@ -43,9 +43,10 @@ beside the table they produced.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, extract
+from . import arms, artifacts, extract, prereg
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -75,11 +76,12 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 
     Named rather than absent, and raising rather than returning 0, because the alternative is a
     command that reports success having done part of its job — which is the failure ADR-0009
-    exists to close and the one this repo has a name for.
+    exists to close and the one this repo has a name for. It matters most now that one verb has
+    started writing real artifacts: a `freeze` that lands two of five files and exits 0 is read
+    as a frozen box.
     """
     raise NotImplementedError(
-        f"`{verb}` {state}: #147 shipped the command surface, the frozen run config and the "
-        f"resolution line. What belongs here is {produces} — see the stage tickets under the "
+        f"`{verb}` {state}. What belongs here is {produces} — see the stage tickets under the "
         f"Task 1 map (#145) and `docs/task1-build-spec.md`."
     )
 
@@ -94,27 +96,39 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 def _freeze(resolution: Resolution) -> NoReturn:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
 
-    ADR-0012's extractor contract is written here (#156) and the rest of the freeze is still
-    owed. It is first rather than last because it is the one committed input whose *other*
-    reader is Task 2: a contract that only appeared once the mask bank did would be gated on
-    work the task inheriting it does not depend on. Like every artifact §3.4 governs it is
-    idempotent and refuses to overwrite a version of itself whose content hash has moved.
+    Two of the five are built, and the order they are written in is each ticket's own argument.
 
-    Still `NoReturn`, and that matters more now than when this verb wrote nothing: a `freeze`
-    that lands one of five artifacts and exits 0 is read as a frozen box.
+    **The registered bar first** (#148), for the reason ADR-0013 gives: every threshold the later
+    stages are drawn against is in it, and it refuses to be written at all once a rule it
+    registers has drifted from plan §6. A freeze that would produce artifacts measured against a
+    bar the plan no longer states should not reach the artifacts.
+
+    **ADR-0012's extractor contract second** (#156), and ahead of the three that are still owed
+    because it is the one committed input whose *other* reader is Task 2: a contract that only
+    appeared once the mask bank did would be gated on work the task inheriting it does not depend
+    on. Unlike the bar it carries §3.4's guard, refusing to overwrite a version of itself whose
+    content hash has moved.
     """
-    written = extract.write_spec(resolution.config)
-    print(f"\nwrote {written}")
+    paths = resolution.config.paths
+    bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
+    print(f"\nwrote {bar}")
     print(
-        f"{'':<16} ADR-0012's contract, md5 {artifacts.file_md5(written)} — raw int16 metres "
-        f"in, {extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
+        "  ADR-0013's register: twelve rules, seven with a number, each anchored in "
+        f"{prereg.SECTION} of {paths.plan_path}"
+    )
+    spec = extract.write_spec(resolution.config)
+    print(f"wrote {spec}")
+    print(
+        f"  ADR-0012's contract, md5 {artifacts.file_md5(spec)} — raw int16 metres in, "
+        f"{extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
     )
     _unbuilt(
         "freeze",
-        f"wrote {extract.SPEC_FILENAME} and stopped — the rest of the freeze is not built",
-        "the four tile lists, the eval mask list, the train mask bank and "
-        "`task1-prereg-bar.json`, written beside it — idempotent, and refusing to overwrite an "
-        "artifact whose content hash has moved (§3.4)",
+        f"wrote {prereg.BAR_NAME} and {extract.SPEC_FILENAME} and stopped — the rest of the "
+        f"freeze is not built",
+        "the four tile lists, the eval mask list and the train mask bank, written beside them — "
+        "idempotent, and refusing to overwrite an artifact whose content hash has moved (§3.4). "
+        "The bar needs no such guard and `benchmark.prereg.write_bar` says why",
     )
 
 

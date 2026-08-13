@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
-from benchmark import launch
+from benchmark import launch, prereg
 from benchmark.config import BenchmarkConfig
+
+PLAN = Path(__file__).resolve().parents[1] / prereg.PLAN_PATH
 
 #: What `freeze` will write, and therefore what `run` resolves. Written as bytes here, since
 #: #147 resolves artifacts by presence and content hash and reads none of their schemas.
@@ -273,29 +276,37 @@ def test_a_run_past_the_dry_run_refuses_rather_than_pretending(frozen, flags, ca
 
 
 def test_report_refuses_the_same_way(frozen, flags):
-    with pytest.raises(NotImplementedError, match="#147 shipped the command surface"):
+    with pytest.raises(NotImplementedError, match="renders nothing yet"):
         launch.main(["report", *flags])
 
 
-def test_freeze_writes_the_contract_it_has_and_then_names_the_four_it_does_not(
+# --- What `freeze` writes today -----------------------------------------------
+
+
+def test_freeze_writes_both_artifacts_it_has_and_names_the_three_it_does_not(
     box, freeze_flags, capsys
 ):
-    """#156 gave `freeze` its first artifact, and the refusal has to survive that.
+    """#148's stage and #156's, through the one command — and the rest still says it is absent.
 
-    A verb that lands one of five committed inputs and exits 0 reads as a frozen box, which is
-    the ADR-0009 shape this whole module exists to prevent — so it writes what it has, says so,
-    and still raises naming the rest.
+    A verb that wrote two of its five artifacts and returned 0 would read as a frozen box, which
+    is the failure this file exists to prevent. So both land, `freeze` says both landed, and then
+    it names what is somebody else's ticket.
     """
     from benchmark import extract
 
-    with pytest.raises(NotImplementedError, match="wrote extractor_spec.json and stopped"):
+    with pytest.raises(NotImplementedError, match="the four tile lists"):
         launch.main(["freeze", *freeze_flags])
     out = capsys.readouterr().out
-    written = box / "artifacts" / extract.SPEC_FILENAME
-    assert written.is_file()
-    assert hashlib.md5(written.read_bytes()).hexdigest() in out
+    assert prereg.BAR_NAME in out and extract.SPEC_FILENAME in out
+
+    bar = prereg.read_bar(box / "artifacts" / prereg.BAR_NAME, plan=PLAN)
+    assert bar.seam_break_deg == 0.15  # read from the artifact, not typed into the benchmark
+    assert bar.rules == 12
+
+    spec = box / "artifacts" / extract.SPEC_FILENAME
+    assert hashlib.md5(spec.read_bytes()).hexdigest() in out
     # And it really is the contract, not a placeholder: it re-checks itself at load.
-    assert extract.load_spec(written).layers == extract.LAYERS
+    assert extract.load_spec(spec).layers == extract.LAYERS
 
 
 def test_freeze_is_idempotent_and_refuses_a_contract_whose_hash_has_moved(box, freeze_flags):
@@ -320,6 +331,29 @@ def test_freeze_refuses_a_box_whose_release_encoder_is_not_the_one_the_plan_pins
     """
     with pytest.raises(ValueError, match="the demae-r5 encoder this plan benchmarks is"):
         launch.main(["freeze", *flags])
+
+
+def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(
+    box, freeze_flags, tmp_path
+):
+    """ADR-0013's coupling, through the command: §6 is load-bearing, and this is how it bears.
+
+    Editing a registered phrase out of the copy that ships breaks the freeze rather than
+    producing a bar nothing states — and the refusal names the entry that lost its anchor.
+    """
+    from benchmark import extract
+
+    text = PLAN.read_text()
+    head, section = text[: text.index(prereg.SECTION)], text[text.index(prereg.SECTION):]
+    plan = tmp_path / "edited-plan.md"
+    plan.write_text(head + section.replace("clears\n     **100 per band**", "clears **80 per band**"))
+
+    with pytest.raises(ValueError, match="R8 lost its anchor"):
+        launch.main(["freeze", *freeze_flags, "--set", f'paths.plan_path="{plan}"'])
+    assert not (box / "artifacts" / prereg.BAR_NAME).exists()
+    # The bar is written first for exactly this reason (ADR-0013), so nothing downstream of it
+    # reached the artifacts either.
+    assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
 
 
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):

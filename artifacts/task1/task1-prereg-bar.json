@@ -1,0 +1,194 @@
+{
+  "artifact": "task1-prereg-bar.json",
+  "asserted_in": "docs/adr/0013-task1-pre-registration-register.md",
+  "anchored_in": "docs/research/task1-void-fill-plan.md ## 6. Fairness checklist",
+  "purpose": "The numeric subset of ADR-0013's register of twelve rules, committed by `benchmark.launch freeze` before any arm runs. Every entry carries its value and the exact §6 phrase it was registered in; `benchmark.prereg.read_bar` refuses a bar whose phrase no longer appears in §6, and names the entry that lost its anchor. Five discursive rules and one refusal are recorded here without values, because mechanising them would look like enforcement while checking nothing.",
+  "rules": 12,
+  "mechanised": 7,
+  "entries": [
+    {
+      "rule": "R1",
+      "statement": "Metric set: ten candidates graded, of which five are headline columns; the derived seam gap is the sixth printed column and was never one of the ten; four appendix, nothing else.",
+      "home": "§5",
+      "source": "#123, #146",
+      "counted": true,
+      "value": {
+        "graded": [
+          "rmse",
+          "nmad",
+          "bias_abs",
+          "slope_rmse",
+          "aspect_error"
+        ],
+        "derived": [
+          "seam_gap"
+        ],
+        "appendix": [
+          "mae",
+          "p95",
+          "profile_curvature",
+          "slope_rmse_eroded"
+        ]
+      },
+      "registered_in": "the metric set is five headline columns plus the derived seam gap — six printed — and four appendix ones, nothing else",
+      "units": "metric keys, as the results parquet and the printed table name them"
+    },
+    {
+      "rule": "R2",
+      "statement": "The pretraining-corpus caveat is symmetric — unavailable to explain a DEMAE loss unless also priced as a discount on a DEMAE win.",
+      "home": "§2.3, §6.4",
+      "source": "#122",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "symmetry is a property of how a sentence is used in an argument, not a quantity; a tick-box asserting it would look like enforcement while checking nothing"
+    },
+    {
+      "rule": "R3",
+      "statement": "R5 is the headline unconditionally; an R4 win is reported prominently but never becomes C1's number.",
+      "home": "§0, §2.3",
+      "source": "#122",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "the rule governs which number a sentence in the memo is about; both rows are computed either way, so there is no constant a run could read"
+    },
+    {
+      "rule": "R4",
+      "statement": "TerraMind's 20 DEM-tokenizer epochs carry their per-modality citation wherever stated — not the paper's 100, which is its S-2/S-1 figure.",
+      "home": "§2.3, §6.4, §10",
+      "source": "#138",
+      "counted": true,
+      "value": 20,
+      "registered_in": "TerraMind's 20 DEM-tokenizer epochs carry their per-modality citation wherever stated, not the paper's 100",
+      "units": "epochs over the DEM modality"
+    },
+    {
+      "rule": "R5",
+      "statement": "The printed table's shape: the size buckets pool, the blob family is headline, C4 prints as a rank block, and 66 (row, band) cells × 6 columns = 396 printed numbers.",
+      "home": "§5, §9",
+      "source": "#136, #146",
+      "counted": true,
+      "value": {
+        "pooled_axis": "size buckets",
+        "headline_family": "blob",
+        "c4_form": "rank block",
+        "printed_cells": 66,
+        "printed_columns": 6,
+        "printed_numbers": 396
+      },
+      "registered_in": "the size buckets pool, the blob family is headline, and C4 prints as a rank block",
+      "units": "axes, and the printed grid they leave"
+    },
+    {
+      "rule": "R6",
+      "statement": "Exactly four arm pairs carry a bootstrap CI mark, named in advance, of the 55 computed.",
+      "home": "§5, §9",
+      "source": "#136",
+      "counted": true,
+      "value": {
+        "marked_pairs": [
+          {
+            "pair": [
+              "A4-R5",
+              "A5"
+            ],
+            "claim": "C1",
+            "size": null
+          },
+          {
+            "pair": [
+              "A4-R5",
+              "A6"
+            ],
+            "claim": "C1",
+            "size": null
+          },
+          {
+            "pair": [
+              "A3",
+              "A1"
+            ],
+            "claim": "C2",
+            "size": null
+          },
+          {
+            "pair": [
+              "A4-R5",
+              "A7"
+            ],
+            "claim": "C3",
+            "size": "20k"
+          }
+        ],
+        "computed": 55
+      },
+      "registered_in": "exactly four arm pairs carry a bootstrap CI mark, named in advance, of the 55 computed",
+      "units": "arm pairs marked in print, of C(11,2) computed into the parquet"
+    },
+    {
+      "rule": "R7",
+      "statement": "A seam gap above +0.15° is a seam break; |gap| ≤ 0.15° is not.",
+      "home": "§5",
+      "source": "#136",
+      "counted": true,
+      "value": 0.15,
+      "registered_in": "a seam gap above +0.15° counts as a seam break",
+      "units": "degrees of full-minus-eroded slope RMSE"
+    },
+    {
+      "rule": "R8",
+      "statement": "Real-medium+ is unstratified unless the realised histogram clears 100 per band; a (row, band) cell below it prints a count and no metric.",
+      "home": "§3.3, §5",
+      "source": "#121",
+      "counted": true,
+      "value": 100,
+      "registered_in": "real-medium+ is unstratified unless the realised histogram clears 100 per band",
+      "units": "instances per (row, band) cell"
+    },
+    {
+      "rule": "R9",
+      "statement": "The GSD caveat is symmetric, and is stated as a bandwidth shift rather than a resolution handicap.",
+      "home": "§2.2, §6.3",
+      "source": "#139",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "same shape as R2 — the rule constrains how a caveat may be deployed in argument, and the shift it is about is already measured on the tokenizer's own FSQ quantizer"
+    },
+    {
+      "rule": "R9b",
+      "statement": "A refusal: the FSQ diagnostic carries no threshold, because the statistic has no natural scale and one would imply it settles what the shift costs.",
+      "home": "§2.2",
+      "source": "#139, #140",
+      "counted": false,
+      "value": null,
+      "unmechanised_because": "irreducibly — the entry *is* the absence of a threshold, and #140 already committed the enforcement it can have: `threshold`, `verdict` and `ablation_row` are forbidden as record keys and the limit rides as a record field"
+    },
+    {
+      "rule": "R10",
+      "statement": "C3's low-label sweep is the pre-registered fallback claim; nulls are reported with the prominence of wins.",
+      "home": "§6.7",
+      "source": "plan §6",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "it fixes which claim the memo falls back to, not a number the sweep must clear"
+    },
+    {
+      "rule": "R11",
+      "statement": "The bicubic-vs-re-derived ablation row, A5 at 20k, is dropped iff the materiality check returns ≥ 0.99. It returned 0.9708, so the row stays.",
+      "home": "ADR-0011 D4-5",
+      "source": "#134",
+      "counted": true,
+      "value": 0.99,
+      "registered_in": "dropped iff the materiality check returns ≥ 0.99",
+      "units": "cosine similarity between the bicubic and re-derived pos_emb"
+    },
+    {
+      "rule": "R12",
+      "statement": "A2 carries no C-claim and is insulated from C1 in both directions; the A2→A3 difference is a joint quantity; A2 is a negative result if it does not beat A1 in a majority of the four bands.",
+      "home": "§4.3, §6.8",
+      "source": "#142",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "its trigger is an *ordering* against A1 rather than a level, so there is no constant to hold — the same reason its template R10 is discursive"
+    }
+  ]
+}
