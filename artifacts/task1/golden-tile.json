@@ -1,0 +1,51 @@
+{
+  "artifact": "golden-tile.json",
+  "arrays": "golden-tile.npz",
+  "purpose": "§8's golden tile: a committed tile with a known void and a hand-checked fill, plus the ten registered metrics it must score. It gates every arm's eval against a norm-inversion bug, which is the failure that silently flatters or sabotages an arm rather than raising. Asserted at both altitudes — at the `benchmark.metrics.score` seam (#155) and through `python -m benchmark.launch` as A1 (#158).",
+  "recipe": {
+    "shape": [
+      224,
+      224
+    ],
+    "px": [
+      30.0,
+      30.0
+    ],
+    "base_m": 1200,
+    "rise_row_m": 4,
+    "rise_col_m": 3,
+    "void": {
+      "row0": 60,
+      "row1": 100,
+      "col0": 90,
+      "col1": 130
+    },
+    "offset_m": 4.0,
+    "ripple_m": 1.5
+  },
+  "expected": {
+    "rmse": 4.272001872658765,
+    "nmad": 2.2239,
+    "bias_abs": 4.0,
+    "slope_rmse": 0.8382083507784281,
+    "aspect_error": 1.6647640819834144,
+    "seam_gap": 0.8382083507784281,
+    "mae": 4.0,
+    "p95": 5.5,
+    "profile_curvature": 0.006653015769429325,
+    "slope_rmse_eroded": 0.0
+  },
+  "derivations": {
+    "rmse": "Closed form. Every void pixel's error is b ± a with b = 4.0 m and a = 1.5 m, half at each sign, so the mean square is b² + a² and RMSE = sqrt(18.25) = 4.272001872658765 m.",
+    "nmad": "Closed form. The 800/800 split puts the median error exactly at b = 4.0 m, so every deviation from it is a = 1.5 m and NMAD = 1.4826 · 1.5 = 2.2239 m — Höhle & Höhle Eq. 2 with its own median, on a fill built so the median is not the mean by accident.",
+    "bias_abs": "Closed form. The ripple cancels over the 800/800 split, leaving this instance's mean signed error at exactly the offset, b = 4.0 m. Reported as a magnitude: the sign stops at `score` (§5's refusal of the pooled mean signed error).",
+    "slope_rmse": "Pinned, with its structure asserted. The checkerboard ripple cancels exactly out of a central difference, so the slope error is **zero on all 1,444 interior pixels** and non-zero only on the 156-pixel boundary ring, where a filled neighbour is differenced against a true one across the 4 m step. RMSE over the ring alone is 2.6844151142831314°; over the full 1,600-pixel void it is that number × sqrt(156/1600) = 0.8382083507784281°. The ring's own value is a pinned observation — it is the sum over sixteen boundary classes (four edges and four corners, each at two parities) and has no compact form.",
+    "aspect_error": "Pinned, with the same structure. Aspect off ZT is unchanged wherever the ripple cancels, so the circular error is zero on all 1,444 interior pixels; the truth surface is a plane, so the sin(slope) weight is constant and the weighted mean is the ring's error diluted over the whole void — 1.6647640819834144°.",
+    "seam_gap": "Closed form, by construction: full-mask minus eroded-mask slope RMSE, and the eroded term is 0, so the gap **is** slope_rmse = 0.8382083507784281°. Above R7's +0.15°, so this fill is a seam break — which is what it was built to be.",
+    "mae": "Closed form. |b + a| and |b − a| average to b = 4.0 m because b > a, so MAE reads the offset and is blind to the ripple RMSE and NMAD both see.",
+    "p95": "Closed form. |Δh| takes two values, 2.5 m and 5.5 m, at 800 each, so every quantile above the median is the larger one: b + a = 5.5 m.",
+    "profile_curvature": "Pinned, with its interior in closed form. ZT's second differences do not cancel the ripple: D and E each read −2aσ/dx², giving a profile curvature of ±4a/dx² = ±1/150 m⁻¹ on every interior pixel, whose RMSE over the eroded mask is exactly 0.006666666666666667. The ring pulls the full-mask value slightly below it, to 0.006653015769429325 m⁻¹. This is the column that sees what slope cannot.",
+    "slope_rmse_eroded": "Closed form, and exactly zero — bitwise, because the truth is integer metres and the fill differs from it by exact binary fractions, so ZT's central differences over an all-filled 3×3 are the truth's own to the last bit. p123 §4's finding as a fixture: a contamination control that reads 0.000 on a fill sitting 4 m off with a broken seam is the evidence that eroding the ring hides the seam rather than removing a free ride."
+  },
+  "arrays_md5": "ebfbb862386122a343a741db2249cec6"
+}
