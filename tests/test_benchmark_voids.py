@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import math
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -342,6 +343,54 @@ def test_a_component_that_cannot_be_placed_on_a_tile_is_counted_as_attrition():
     assert catalog.failed_placement == 1
 
 
+def test_a_components_shape_is_its_own_pixels_cropped_to_its_bounding_box():
+    """#153's transplant pastes these arrays, so they are the component and not a window on it."""
+    num = _num(blobs=[(100, 100, 20, 30), (300, 300, 25, 25)])
+    mask = voids.PLAN_PREDICATE.mask(num)
+    found = voids.components("N28E086", mask)
+
+    shapes = voids.shapes(mask, found)
+
+    assert set(shapes) == {component.label for component in found}
+    for component in found:
+        shape = shapes[component.label]
+        assert shape.dtype == np.bool_
+        assert shape.shape == (component.bbox_h, component.bbox_w)
+        assert int(shape.sum()) == component.area_px
+
+
+def test_a_shape_drops_a_neighbour_sharing_its_bounding_box():
+    """A crop is a box and a component is not, so the box is masked by label rather than taken.
+
+    The L and the square below are disjoint and 8-separated, and the square sits **inside** the
+    L's bounding box. A shape cut by slicing alone would hand the transplant both voids fused
+    into one — which is a perfectly plausible real shape, of a component that does not exist.
+    """
+    ell = [(100, 100, 30, 5), (125, 100, 5, 60)]
+    square = [(100, 120, 20, 20)]
+    mask = voids.PLAN_PREDICATE.mask(_num(blobs=[*ell, *square]))
+    found = {c.label: c for c in voids.components("N28E086", mask)}
+    assert len(found) == 2, "the fixture's two voids have to stay separate components"
+
+    shapes = voids.shapes(mask, found.values())
+
+    ell_px = 30 * 5 + 5 * 60 - 5 * 5  # the two bars share their corner
+    biggest = max(found.values(), key=lambda c: c.area_px)
+    assert biggest.area_px == ell_px
+    assert (biggest.bbox_h, biggest.bbox_w) == (30, 60)
+    # The square lies wholly inside that box, so a sliced crop would come back 400 px heavier.
+    assert int(shapes[biggest.label].sum()) == ell_px
+    assert int(shapes[biggest.label].sum()) != ell_px + 20 * 20
+
+
+def test_asking_for_a_shape_no_component_carries_is_refused():
+    mask = voids.PLAN_PREDICATE.mask(_num(blobs=[(100, 100, 20, 30)]))
+    (component,) = voids.components("N28E086", mask)
+
+    with pytest.raises(voids.VoidError, match="label"):
+        voids.shapes(mask, [replace(component, label=component.label + 99)])
+
+
 # ---------------------------------------------------------------------------------------
 # The band — from GLO-30 at the void's own coordinates, and from nowhere else
 # ---------------------------------------------------------------------------------------
@@ -522,6 +571,71 @@ def test_the_glo30_reader_refuses_a_wrong_pixel_size():
         voids.read_surface("N28E086", open_fn=lambda _url: _FakeCog(step=2.0 / voids.GLO_PX))
 
     assert "arc-second" in str(excinfo.value)
+
+
+def test_a_transient_read_blip_is_retried_rather_than_losing_the_whole_freeze(monkeypatch):
+    """§3.3 reads one COG per source granule, so a blip 2 minutes in must not cost the stage.
+
+    Observed against the live bucket: `TIFFReadEncodedTile() failed` on one tile of one cell,
+    aborting a `freeze` that had already committed the tile lists and the extractor spec. The
+    retry is the corpus's own (`dataset.materialize.READ_ATTEMPTS`), not a second policy.
+    """
+    import rasterio
+
+    from dataset.materialize import READ_ATTEMPTS
+
+    opened: list[str] = []
+
+    def flaky(url, *_args, **_kw):
+        opened.append(url)
+        if len(opened) < READ_ATTEMPTS:
+            raise rasterio.errors.RasterioIOError("TIFFReadEncodedTile() failed")
+        return _FakeCog()
+
+    monkeypatch.setattr(rasterio, "open", flaky)
+    monkeypatch.setattr(voids.time, "sleep", lambda _s: None)
+
+    surface = voids.read_surface("N28E086")
+
+    assert len(opened) == READ_ATTEMPTS, "the read is retried, not attempted once"
+    assert surface.shape == (2, 2)
+
+
+def test_a_surface_that_will_not_read_at_all_is_refused_by_name(monkeypatch):
+    import rasterio
+
+    from dataset.materialize import READ_ATTEMPTS
+
+    opened: list[str] = []
+
+    def dead(url, *_args, **_kw):
+        opened.append(url)
+        raise rasterio.errors.RasterioIOError("connection reset")
+
+    monkeypatch.setattr(rasterio, "open", dead)
+    monkeypatch.setattr(voids.time, "sleep", lambda _s: None)
+
+    with pytest.raises(voids.VoidError, match="transport rather than the data"):
+        voids.read_surface("N28E086")
+    assert len(opened) == READ_ATTEMPTS
+
+
+def test_a_lattice_refusal_is_not_retried(monkeypatch):
+    """Three ways of reading the same wrong answer is not a retry. Only the transport is."""
+    import rasterio
+
+    opened: list[str] = []
+
+    def wrong_shape(url, *_args, **_kw):
+        opened.append(url)
+        return _FakeCog(width=2400)
+
+    monkeypatch.setattr(rasterio, "open", wrong_shape)
+    monkeypatch.setattr(voids.time, "sleep", lambda _s: None)
+
+    with pytest.raises(voids.LatticeMismatch):
+        voids.read_surface("N28E086")
+    assert len(opened) == 1
 
 
 # ---------------------------------------------------------------------------------------
