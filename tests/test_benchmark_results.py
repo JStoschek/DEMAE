@@ -137,6 +137,32 @@ def test_the_run_id_moves_when_an_input_this_row_is_answerable_to_moves(tmp_path
     assert results.run_id(artifacts.resolve(moved_recipe)) != before
 
 
+def test_the_run_id_does_not_move_for_an_artifact_this_arm_never_read(tmp_path):
+    """The day #151 first writes a train mask bank, no A1 row's identity may move.
+
+    A1 trains nothing, so the bank is not one of its inputs — and an id that moved for a reason
+    the rows do not share would announce a change to a computation whose every input was
+    identical. The record still carries the bank by md5; what it does not do is *hash* it.
+    """
+    before = results.run_id(artifacts.resolve(config(tmp_path)))
+
+    (tmp_path / "bank.parquet").write_bytes(b"one million rle rows, at last")
+    resolution = artifacts.resolve(config(tmp_path))
+
+    assert results.run_id(resolution) == before
+    # ...and it is still recorded, so provenance did not lose the fact that a bank now exists.
+    assert resolution.to_dict()["artifacts"]["mask_bank"]["md5"] is not None
+
+
+def test_the_run_id_does_move_for_the_same_artifact_when_the_arm_reads_it(tmp_path):
+    """The other half: A4-R5 trains a head against the bank, so its identity is answerable to it."""
+    training = config(tmp_path).replace(arm="A4-R5")
+    before = results.run_id(artifacts.resolve(training))
+
+    (tmp_path / "bank.parquet").write_bytes(b"one million rle rows, at last")
+    assert results.run_id(artifacts.resolve(training)) != before
+
+
 def test_the_record_lives_beside_the_parquet_and_is_appended_never_replaced(tmp_path):
     """A cell scored twice is a fact about how the table was produced — see `benchmark.results`."""
     path = tmp_path / "results.parquet"

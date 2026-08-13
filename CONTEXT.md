@@ -746,6 +746,29 @@ GitHub issue #1.
   at its boundary — p123's finding as a fixture rather than as a paragraph. Asserted at **both
   altitudes**, at the `benchmark.metrics.score` seam and again through the shipping command as
   A1, which is what stops a gate from being a gate on one code path only.
+- **The classical fill (A1)** — Task 1's baseline arm and, just as importantly, an *input*:
+  §1 feeds three of the frozen arms the `a1_fill_plus_mask` convention, which is this fill's
+  output with the void mask beside it, and §2.4 has every learned arm predict a **residual** over
+  it — so a head that learns nothing scores exactly A1 and the table stays legible. Two variants,
+  not the three the plan first named: `rasterio.fill.fillnodata` **is** GDAL's `GDALFillNodata`,
+  so the class of method and this project's way of calling it were being counted twice
+  ([#158](https://github.com/JStoschek/DEMAE/issues/158)); the second variant is a thin-plate
+  spline, measured ahead by a median of 0.2 m and winning 55% of paired instances, which is why
+  the choice is a config knob rather than a second committed baseline. Every variant **writes
+  inside the void and nowhere else** — enforced in `benchmark.fill` rather than trusted of each
+  interpolator, because three separate things lean on it: the scoring path's units check, the
+  residual convention above, and the `fill(identity-mask) == input` gate.
+- **Results parquet / run record** — Task 1's two output artifacts, and the split between what a
+  run *produced* and what it *read*. The **parquet** is one row per `(arm, init, size, seed,
+  family, bucket, band, tile_id, instance)` carrying every registered metric — appendix as well
+  as headline — plus the void's area, its equivalent diameter and the committed mask's RLE hash;
+  it is what makes **The printed table** a pure function of a file rather than of a rerun. The
+  **run record** beside it is the provenance: the recipe and its hash, §3.4's artifact hash, the
+  git SHA, and every committed input by md5 — each also flagged with whether *this arm read it*,
+  so a null md5 cannot be read two ways. The two have deliberately opposite write rules:
+  re-running a cell **replaces** its rows, because two passes over one cell would double-count
+  every tile they agree on in every aggregate; the record is **append-only**, so the fact that a
+  cell was scored twice survives that replacement.
 - **Channel-ready** — the pipeline emits a single elevation channel now but is
   architected so slope/curvature channels are a Phase-3 config flag, not a rewrite.
 - **GSD** — Ground Sample Distance (metres/pixel); 30 m for GLO-30. Multi-resolution

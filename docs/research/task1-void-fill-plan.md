@@ -101,7 +101,7 @@ two weak transfer rows it replaces.
 
 | # | Arm | Encoder | Trained part | Input convention |
 |---|-----|---------|--------------|------------------|
-| A1 | Bilinear/spline fill | none | none | classical `gdal_fillnodata`-class interpolation; also rasterio `fillnodata`, and a thin-plate-spline variant |
+| A1 | Bilinear/spline fill | none | none | classical `gdal_fillnodata`-class interpolation, in **two** variants: rasterio `fillnodata` (the default) and a thin-plate spline — see the amendment below |
 | A2 | DEMAE zero-shot | DEMAE frozen (R5 ViT-B; R4 ViT-B secondary) | none | native MAE inpainting: void-touching patches dropped, decoder reconstructs, non-void pixels composited back |
 | A3 | DEMAE fine-tuned | DEMAE, all weights (R5 ViT-B; R4 ViT-B secondary) | encoder + decoder | native token dropping on void-shaped masks (§4.2) |
 | A4 | DEMAE frozen + head | DEMAE frozen (R5 ViT-B; R4 ViT-B secondary; ViT-S as the §2.3 appendix row) | head only | voided tile pre-filled by A1 + void mask channel at the head (§2.4) |
@@ -109,6 +109,22 @@ two weak transfer rows it replaces.
 | A6 | ImageNet-MAE frozen + head | timm/MAE ViT-B frozen, 1-channel patch embed collapsed (same recipe as `pretrain.init`) | head only (identical) | same pre-filled input |
 | A7 | UNet from scratch | none (UNet) | everything | voided tile + mask channel, residual over the A1 fill |
 | A9 | TerraMind tokenizer pass-through (reference row) | full tokenizer: encode, FSQ, diffusion decode | none | A1-pre-filled tile through the full VQ pipeline; shows the 5-d bottleneck's cost |
+
+**A1's variants are two methods, not three** *(amended 2026-08-13 —
+[#158](https://github.com/JStoschek/DEMAE/issues/158))*. This row read
+"classical `gdal_fillnodata`-class interpolation; also rasterio `fillnodata`,
+and a thin-plate-spline variant", which names three things and describes two:
+`rasterio.fill.fillnodata` **is** a binding of GDAL's own `GDALFillNodata`, so
+"the `gdal_fillnodata`-class fill" is the class of method and "rasterio
+`fillnodata`" is this project's way of calling it. `benchmark.fill.VARIANTS`
+therefore registers `fillnodata` and `tps`, and no third entry: two names on one
+code path would give the results parquet a variant column whose two values are
+bit-identical, which reads as a comparison and is not one. The choice between the
+two remains unimportant to the ceiling — §9's risk row measured TPS ahead of
+`fillnodata` by a median of 0.2 m, winning 55% of paired instances — so the
+default is `fillnodata` and the spline is a config knob (`fill.variant`) rather
+than a second committed baseline. No registered rule moves: R1 grades metrics and
+R5 fixes the printed table, neither of which mentions A1's method.
 
 A4 vs A5 vs A6 is the heart of the benchmark: identical head, identical data,
 identical masks and seeds, only the frozen representation differs. A2/A3 are

@@ -186,8 +186,16 @@ class Resolved:
         return f"{self.label:<16} {self.path}  md5 {self.md5}{note}"
 
     def to_dict(self) -> dict:
-        """What the run record files this input under: where it was, and what it hashed to."""
-        return {"path": self.path, "md5": self.md5}
+        """What the run record files this input under: where it was, what it hashed to, and
+        whether this arm read it at all.
+
+        ``required`` is in here rather than only on the printed line, and it has to be: without
+        it a null ``md5`` has two readings that a reader cannot tell apart — *this arm does not
+        read it* and *`freeze` never wrote it*. An A1 record filed before #151 lands carries a
+        null mask-bank md5 for the first reason, and a table whose provenance cannot say which
+        one it was is exactly the ambiguity this module exists to remove.
+        """
+        return {"path": self.path, "md5": self.md5, "required": self.required}
 
 
 @dataclass(frozen=True)
@@ -370,7 +378,7 @@ def _required_for(key: str, arm: arms.Arm) -> bool:
     declares, which is the whole reason those are fields.
     """
     if key in TRAINING_ONLY_INPUTS:
-        return arm.trains != "nothing"
+        return not arm.is_inference_only
     if key == "extractor_spec":
         return arm.encoder is not None
     return True

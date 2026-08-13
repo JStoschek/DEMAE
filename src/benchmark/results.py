@@ -250,7 +250,7 @@ def read_rows(path: Path | str):
 
 
 def run_id(resolution: Resolution) -> str:
-    """A stable name for *this run of this cell against these inputs*.
+    """A stable name for *this run of this cell against the inputs it actually read*.
 
     A hash of the provenance payload rather than a timestamp or a counter, so that re-running an
     unchanged cell against unchanged artifacts under unchanged code produces the **same** id.
@@ -258,11 +258,22 @@ def run_id(resolution: Resolution) -> str:
     record they point at is the one that was already there, rather than a second identity for a
     computation that did not change.
 
-    It moves when anything a results row is answerable to moves — the recipe, any committed
-    input's md5, the checkpoint, or the git SHA — which is the whole list :meth:`Resolution.
-    to_dict` carries.
+    It moves when anything a results row is answerable to moves — the recipe, the checkpoint, the
+    git SHA, and the md5 of every committed input **this arm reads**.
+
+    That last qualifier is load-bearing rather than tidy. :meth:`Resolution.to_dict` records every
+    artifact on the box, read or not, because that is what provenance is; hashing all of them
+    would mean that the day #151 first writes a train mask bank, every A1 row's ``run_id`` moves
+    — announcing a change to a computation whose every input was identical. An id that moves for
+    a reason the rows do not share is worse than no id, because it is quoted in a table.
     """
-    payload = json.dumps(resolution.to_dict(), sort_keys=True, separators=(",", ":"))
+    resolved = resolution.to_dict()
+    resolved["artifacts"] = {
+        key: entry
+        for key, entry in resolved["artifacts"].items()
+        if entry.get("required", True)
+    }
+    payload = json.dumps(resolved, sort_keys=True, separators=(",", ":"))
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=8).hexdigest()
 
 
@@ -377,7 +388,7 @@ def write(
 
 
 def rows_from(
-    scored: Iterable[Mapping[str, Any]],
+    scored: Iterable[Any],
     *,
     arm: str,
     init: str | None,
@@ -386,24 +397,30 @@ def rows_from(
     run: str,
     config_hash: str,
 ) -> list[ResultRow]:
-    """Turn a pass's per-instance dicts into rows, filling the cell's constant columns once."""
+    """Turn a pass's :class:`benchmark.evaluate.Scored` instances into rows.
+
+    The cell's constant columns — the arm, its init, the size, the seed and the run's identity —
+    are filled in once here rather than carried on every instance the pass produced. That is the
+    split the two modules are for: the pass scores a fill and knows nothing about which cell
+    asked for it, and this module owns what a row *is*.
+    """
     return [
         ResultRow(
             arm=arm,
             init=init,
             size=size,
             seed=seed,
-            family=item["family"],
-            bucket=item["bucket"],
-            band=item["band"],
-            tile_id=item["tile_id"],
-            instance=int(item.get("instance", 0)),
-            void_area_px=int(item["void_area_px"]),
-            void_eqdiam_px=float(item["void_eqdiam_px"]),
-            mask_rle_md5=item["mask_rle_md5"],
+            family=item.family,
+            bucket=item.bucket,
+            band=item.band,
+            tile_id=item.tile_id,
+            instance=item.instance,
+            void_area_px=item.void_area_px,
+            void_eqdiam_px=item.void_eqdiam_px,
+            mask_rle_md5=item.mask_rle_md5,
             run_id=run,
             config_hash=config_hash,
-            metrics=item["metrics"],
+            metrics=item.metrics,
         )
         for item in scored
     ]

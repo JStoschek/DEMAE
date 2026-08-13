@@ -223,28 +223,52 @@ FILLERS: Final[dict[str, Callable[[Tile, np.ndarray, BenchmarkConfig], np.ndarra
 def identity_gate(tile: Tile, cfg: BenchmarkConfig) -> dict[str, Any]:
     """``fill(identity-mask) == input`` — the first of §8's two norm-inversion gates.
 
-    Run against a **real corpus tile** through the **real fill**, rather than against a synthetic
-    array: what it is holding shut is this pipeline, and a fixture would only prove the fill.
-    Equality is exact — see :mod:`benchmark.fill` on why that is available rather than a
-    tolerance — and inexactness is a refusal rather than a warning, because every way this can
-    fail produces a full pass of plausible numbers.
+    Run against a **real corpus tile**, because what is being held shut is this pipeline reading
+    this corpus, and a synthetic array would only prove the arithmetic.
+
+    ## Where the gate is aimed, and why it is not aimed at `fill`
+
+    :func:`benchmark.fill.fill` ends by restoring every pixel outside the void from its input.
+    With an empty void that is the whole tile, so ``fill(identity-mask) == input`` is true **by
+    construction** there and a gate pointed at it would assert a tautology — it would pass on a
+    variant that returned noise. So the gate is pointed one level down, at the **variant's own
+    output**, before the restore. That is a claim that can fail: a variant that rescales, that
+    recentres, or that round-trips through a dtype too narrow for the corpus's metres returns
+    something else, and GDAL's fill is only identity-preserving here because a tile is int16
+    metres — a fact about the corpus, not about the method.
+
+    The composed :func:`~benchmark.fill.fill` is checked too, second, so the restore itself is
+    covered. Both are exact rather than approximate; see :mod:`benchmark.fill`.
+
+    ## What this gate does not prove
+
+    Not mask polarity — there is no mask to invert when the mask is empty. That check belongs
+    where a *committed* mask is decoded, and it is :func:`score_instance`'s area cap.
     """
     empty = np.zeros(tile.raw_i16.shape, dtype=bool)
-    filled = fill.fill(tile.raw_i16, empty, recipe=cfg.fill)
     expected = np.asarray(tile.raw_i16, dtype=fill.DTYPE)
-    if not np.array_equal(filled, expected):
-        worst = int(np.nanargmax(np.abs(filled - expected)))
+
+    def refuse(got: np.ndarray, what: str) -> None:
+        worst = int(np.argmax(np.abs(np.asarray(got, dtype=np.float64) - expected)))
         raise ValueError(
-            f"fill(identity-mask) != input on {tile.tile_id}: with no void to fill, the "
-            f"{cfg.fill.variant} fill returned {filled.ravel()[worst]} where the tile holds "
-            f"{expected.ravel()[worst]} metres. §8's gate. Every arm's output is a residual over "
-            f"this fill (§2.4), so a fill that moves untouched ground moves every arm's row by "
-            f"the same amount and no column would say so"
+            f"fill(identity-mask) != input on {tile.tile_id}: with no void to fill, {what} "
+            f"returned {np.ravel(got)[worst]} where the tile holds {expected.ravel()[worst]} "
+            f"metres. §8's gate. Every learned arm's output is a residual over this fill (§2.4), "
+            f"so a fill that moves untouched ground moves every arm's row by the same amount and "
+            f"no column would say so"
         )
+
+    variant = fill.VARIANTS[cfg.fill.variant](tile.raw_i16, empty, cfg.fill)
+    if not np.array_equal(variant, expected):
+        refuse(variant, f"the {cfg.fill.variant} variant")
+    composed = fill.fill(tile.raw_i16, empty, recipe=cfg.fill)
+    if not np.array_equal(composed, expected):
+        refuse(composed, "the composed fill")
     return {
         "tile_id": tile.tile_id,
         "variant": cfg.fill.variant,
         "pixels": int(expected.size),
+        "checked": ["variant", "composed"],
     }
 
 
@@ -306,14 +330,43 @@ def golden_gate(cfg: BenchmarkConfig, bar: prereg.Bar) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Instance:
-    """One committed eval instance: which tile, which mask, and where in the row key it sits."""
+    """One committed eval instance: which tile, which mask, and where in the row key it sits.
+
+    The committed row's fifth column, ``seed``, is deliberately **not** carried. It is what
+    :func:`benchmark.masks.draw_from_seed` reproduces the mask *from*, and this pass does not
+    reproduce anything — it reads the committed RLE. What a results row needs is the mask's
+    *identity*, and that is :attr:`Scored.mask_rle_md5`, which pins the actual bytes rather than
+    the recipe that would regenerate them.
+    """
 
     tile_id: str
     family: str
     bucket: str
     mask_rle: str
-    seed: int
     instance: int
+
+
+@dataclass(frozen=True)
+class Scored:
+    """One scored instance, as the pass hands it on — everything but the cell it belongs to.
+
+    A dataclass rather than a dict, so the whole chain from ``Instance`` through ``Scored`` to
+    :class:`benchmark.results.ResultRow` is typed end to end: the pass knows nothing about the
+    arm, the size or the seed, and the results module fills those in once
+    (:func:`benchmark.results.rows_from`) rather than eleven string keys being re-indexed on the
+    way past.
+    """
+
+    tile_id: str
+    family: str
+    bucket: str
+    band: str
+    instance: int
+    void_area_px: int
+    void_eqdiam_px: float
+    mask_rle_md5: str
+    #: R1's roster by name, straight from :func:`benchmark.metrics.score`.
+    metrics: dict[str, float]
 
 
 def read_instances(cfg: BenchmarkConfig) -> list[Instance]:
@@ -361,7 +414,6 @@ def read_instances(cfg: BenchmarkConfig) -> list[Instance]:
                 family=key[1],
                 bucket=key[2],
                 mask_rle=column["mask_rle"][i],
-                seed=int(column["seed"][i]),
                 instance=seen.get(key, 0),
             )
         )
@@ -383,7 +435,7 @@ def score_instance(
     arm: arms.Arm,
     bands: voids.Bands,
     bar: prereg.Bar,
-) -> dict[str, Any]:
+) -> Scored:
     """One instance, end to end: decode the mask, fill it, score it, and say what it was.
 
     The band comes off the **tile's** ``slope_mean`` rather than the void's own terrain, on
@@ -396,22 +448,34 @@ def score_instance(
             f"the committed mask for {instance.tile_id} decodes to {void.shape} and the tile is "
             f"{tile.raw_i16.shape}"
         )
-    filled = FILLERS[arm.input_convention](tile, void, cfg)
-    scored = metrics.score(
-        np.asarray(tile.raw_i16, dtype=np.float64), filled, void, tile.px, bar=bar
-    )
+    # §3.2's area cap, re-checked on the *decoded* mask — the polarity guard the identity gate
+    # cannot be. `freeze` checks every draw against this cap and never trims, so a committed mask
+    # over it did not come from the generator: an inverted decode is the way that happens, and it
+    # turns a 3% void into a 97% one, which scores a plausible table nothing refuses.
     area = int(void.sum())
-    return {
-        "tile_id": instance.tile_id,
-        "family": instance.family,
-        "bucket": instance.bucket,
-        "band": bands.label(bands.of(tile.slope_mean)),
-        "instance": instance.instance,
-        "void_area_px": area,
-        "void_eqdiam_px": masks.equivalent_diameter(area),
-        "mask_rle_md5": results.mask_rle_md5(instance.mask_rle),
-        "metrics": scored,
-    }
+    cap = cfg.masks.max_area_frac * void.size
+    if area > cap:
+        raise ValueError(
+            f"the committed mask for {instance.tile_id} ({instance.family}/{instance.bucket}) "
+            f"decodes to {area:,} px, {area / void.size:.1%} of the tile, over §3.2's "
+            f"{cfg.masks.max_area_frac:.0%} cap. Every draw is checked against that cap at "
+            f"`freeze` and none is ever trimmed, so this mask did not come from the generator — "
+            f"the usual cause is a decode that inverted the void"
+        )
+    filled = FILLERS[arm.input_convention](tile, void, cfg)
+    return Scored(
+        tile_id=instance.tile_id,
+        family=instance.family,
+        bucket=instance.bucket,
+        band=bands.label(bands.of(tile.slope_mean)),
+        instance=instance.instance,
+        void_area_px=area,
+        void_eqdiam_px=masks.equivalent_diameter(area),
+        mask_rle_md5=results.mask_rle_md5(instance.mask_rle),
+        metrics=metrics.score(
+            np.asarray(tile.raw_i16, dtype=np.float64), filled, void, tile.px, bar=bar
+        ),
+    )
 
 
 def format_gates(gates: dict[str, Any]) -> str:
@@ -436,7 +500,7 @@ def format_gates(gates: dict[str, Any]) -> str:
 class Pass:
     """What one cell's eval produced: the scored instances, the gates, and what it cost."""
 
-    scored: list[dict[str, Any]]
+    scored: list[Scored]
     gates: dict[str, Any]
     seconds: float
     bar: prereg.Bar

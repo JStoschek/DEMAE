@@ -347,6 +347,19 @@ class Arm:
         """The feature width the shared head's first projection absorbs — §4.1's only delta."""
         return None if self.encoder is None else ENCODERS[self.encoder].width
 
+    @property
+    def is_inference_only(self) -> bool:
+        """Does this arm train anything? A1, A2 and A9 do not.
+
+        A property rather than ``trains == "nothing"`` spelled at each site, because three
+        separate questions are asked of it — what a row's trainable parameter count is, whether
+        §3.4's train mask bank is an input, and whether §3.1's head-train and val draws are — and
+        an inference-only arm added later has to get the same answer to all three. The string
+        comparison in four places is one typo away from an arm that silently trains nothing and
+        is still refused for want of a bank.
+        """
+        return self.trains == "nothing"
+
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:
     return name, Arm(name=name, **kwargs)
@@ -505,12 +518,12 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     and A4's fills in when the head exists.
     """
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
-    trainable = 0 if arm.trains == "nothing" else None
+    trainable = 0 if arm.is_inference_only else None
     if encoder is None:
         # A1 and A7. A1 trains nothing and runs no encoder, so it genuinely has none; A7 trains
         # a UNet this registry does not count.
-        total = 0 if arm.trains == "nothing" else None
-    elif arm.trains == "nothing":
+        total = 0 if arm.is_inference_only else None
+    elif arm.is_inference_only:
         total = encoder.params
     else:
         total = None

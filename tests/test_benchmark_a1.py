@@ -25,6 +25,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -238,6 +239,14 @@ def test_the_run_record_carries_the_recipe_and_the_md5s_it_was_launched_with(sco
     # Named even where absent: the two the ticket calls out by name are in the record whether or
     # not this box has them, so "which spec, which bank" is answerable off the record alone.
     assert "extractor_spec" in artifacts and "mask_bank" in artifacts
+    # And a null md5 says *which* kind of null it is. Without `required` the two readings — this
+    # arm does not read it, and `freeze` never wrote it — are indistinguishable in the record.
+    assert artifacts["mask_bank"] == {
+        "path": artifacts["mask_bank"]["path"],
+        "md5": None,
+        "required": False,
+    }
+    assert artifacts["eval_masks"]["required"] is True
     assert json.dumps(record), "a results table is answerable to plain JSON"
 
 
@@ -333,21 +342,46 @@ def test_a_missing_golden_tile_stops_the_run_rather_than_skipping_the_gate(box, 
         launch.main(["run", "--arm", "A1", *flags])
 
 
-def test_an_inverted_mask_is_what_the_identity_gate_catches(box, flags, monkeypatch):
-    """The gate's actual subject: a pipeline that decoded the void to the wrong polarity.
+def test_the_identity_gate_catches_a_variant_that_moves_untouched_ground(box, flags, monkeypatch):
+    """The gate's actual subject, and the reason it is aimed below `fill` rather than at it.
 
-    Simulated at the one seam the gate covers — if `fill` treats "no void" as "all void", the
-    whole tile is interpolated and the equality fails loudly, which is the alternative to a full
-    pass of plausible numbers.
+    `fill` restores every pixel outside the void from its input, so with an empty void it returns
+    the input *by construction* — a gate pointed there would pass on a variant returning noise.
+    Pointed at the variant, it fails: this one rescales by a hair, which is what a units or dtype
+    bug looks like, and the alternative to failing is a full pass of plausible numbers.
     """
-    from benchmark import fill as fill_module
-
-    monkeypatch.setattr(
-        fill_module,
-        "fill",
-        lambda tile, void, **kw: np.zeros(np.shape(tile), dtype=np.float32),
+    monkeypatch.setitem(
+        evaluate.fill.VARIANTS,
+        "fillnodata",
+        lambda tile, void, recipe: np.asarray(tile, dtype=np.float32) * 1.0001,
     )
-    with pytest.raises(ValueError, match=r"fill\(identity-mask\) != input"):
+    with pytest.raises(ValueError, match=r"fill\(identity-mask\) != input.*fillnodata variant"):
+        launch.main(["run", "--arm", "A1", *flags])
+    assert not (box / "results.parquet").exists(), "it scored something before refusing"
+
+
+def test_an_inverted_mask_is_caught_where_a_committed_mask_is_decoded(box, flags):
+    """The polarity guard the identity gate cannot be — there is no mask to invert when it runs.
+
+    §3.2 caps a void at 40% of the tile and `freeze` checks every draw against that cap without
+    ever trimming, so a decoded mask over it did not come from the generator. An inverted decode
+    turns a 3% void into a 97% one, which fills almost the whole tile and scores a table nothing
+    else would refuse.
+    """
+    committed = pq.read_table(box / "artifacts" / EVAL_MASKS_NAME)
+    inverted = [
+        masks.encode_rle(~masks.decode_rle(rle))
+        for rle in committed.column("mask_rle").to_pylist()
+    ]
+    pq.write_table(
+        committed.set_column(
+            committed.schema.get_field_index("mask_rle"),
+            "mask_rle",
+            pa.array(inverted, type=pa.string()),
+        ),
+        box / "artifacts" / EVAL_MASKS_NAME,
+    )
+    with pytest.raises(ValueError, match="over §3.2's 40% cap"):
         launch.main(["run", "--arm", "A1", *flags])
 
 
