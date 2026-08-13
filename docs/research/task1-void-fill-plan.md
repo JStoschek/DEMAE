@@ -581,7 +581,10 @@ sees is a committed input rather than a reproduction of the generator's RNG.
   160 overshot by **0.14 px**. The top is lowered to 158 rather than clamped,
   so no draw is ever silently trimmed and the two constraints are satisfiable
   with margin; the change is 1.2% of the large bucket's diameter range and no
-  measured quantity moves. **The boundaries are set by the 40% area cap and the
+  *reported* quantity moves. (It does move two measured ones, both descriptive
+  and both in the next bullet: the blob retry rate and the top decile's
+  placement freedom were counted against the 160 px top and are re-measured
+  there — [#150](https://github.com/JStoschek/DEMAE/issues/150).) **The boundaries are set by the 40% area cap and the
   equivalent-diameter geometry, and by nothing external.** This bullet used to
   add that the two upper buckets "still bracket Diff-DEM's published protocol";
   that clause is deleted with the A8 arm
@@ -615,7 +618,13 @@ sees is a committed input rather than a reproduction of the generator's RNG.
   that bucket is terrain, not placement. Blob draws also retry **1.44×** there
   against 1.00 in every other cell. Neither is fatal, and both are reasons the
   large bucket carries less independent information per instance than its
-  instance count suggests.
+  instance count suggests. **Both figures were taken at the 160 px top the
+  size-bucket bullet above then lowered to 158**, so re-measured on the shipped
+  generator at the settled boundaries they are a median of **1,100** placements
+  (min 100) and **1.337×** retries in the top decile, 1.158× over the large
+  bucket as a whole ([#150](https://github.com/JStoschek/DEMAE/issues/150)).
+  The conclusion is the one stated here and is unchanged; what moved is the
+  size-bucket bullet's claim that *no* measured quantity moved with the top.
 - **The real-void family (iii) carries no bucket axis.** Two cells measured at
   true 1 arc-second returned 139 and 175 components in 16 to 48 px, 2 and 6 in
   64 to 96, and **zero** in 128 to 160. The full 24-granule draw is steeper still
