@@ -23,8 +23,9 @@ uv run python -m benchmark.launch report              # the printed table, the C
 the pre-flight a build session walks before renting anything. #148 gave ``freeze`` the first of
 its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
 lists (:mod:`benchmark.tiles`), #156 the third, ADR-0012's extractor contract
-(:mod:`benchmark.extract`), and #150 the fourth, §3.2's eval mask list
-(:mod:`benchmark.masks`). **Nothing is scored here.**
+(:mod:`benchmark.extract`), #150 the fourth, §3.2's eval mask list (:mod:`benchmark.masks`), and
+#151 the fifth, §3.4's train mask bank and the md5 sidecar git carries in its place. **Nothing
+is scored here.**
 
 Every verb still raises past the work it has, and names the stage that has not been built —
 deliberately, because a verb that quietly returned 0 having done part of its job is precisely
@@ -98,8 +99,8 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 def _freeze(resolution: Resolution) -> NoReturn:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
 
-    Four of the five are built, and the order is each ticket's own argument rather than the
-    order they happened to land in.
+    All five are built, and the order is each ticket's own argument rather than the order they
+    happened to land in.
 
     The **registered bar** goes first (#148) for the reason ADR-0013 gives: every threshold the
     later stages are drawn against is in it, and it refuses to be written at all once a rule it
@@ -117,11 +118,19 @@ def _freeze(resolution: Resolution) -> NoReturn:
     the bar it carries §3.4's guard, refusing to overwrite a version of itself whose content hash
     has moved.
 
-    **§3.2's eval mask list** goes last of the four (#150), because it is a function of the test
-    list two stages above it — 30,000 rows is 5,000 test tiles x two synthetic families x three
-    buckets — and it reads that list back off disk rather than out of the draw, on the contract
-    family's rule that the committed file is what later phases re-read. It carries the same §3.4
-    guard the spec does, and the same generator config hash #151's bank will.
+    **§3.2's eval mask list** goes next (#150), because it is a function of the test list two
+    stages above it — 30,000 rows is 5,000 test tiles x two synthetic families x three buckets —
+    and it reads that list back off disk rather than out of the draw, on the contract family's
+    rule that the committed file is what later phases re-read. It carries the same §3.4 guard the
+    spec does, and the same generator config hash the bank does.
+
+    **§3.4's train mask bank** goes last (#151), because it is the same function of the
+    *head-train* list and because it is the expensive one: 1,000,000 draws is twenty minutes,
+    against every other stage's seconds. A stage that fails above it therefore costs nothing to
+    retry, and the bank's own guard reads the committed sidecar before it draws rather than
+    after — it is the one artifact here whose refusal would otherwise arrive twenty minutes
+    late. It is also the one that is **not** committed as bytes: 104 MB cannot go in git, so
+    what lands in ``artifacts_dir`` is the sidecar holding its md5.
     """
     paths = resolution.config.paths
     bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
@@ -140,13 +149,18 @@ def _freeze(resolution: Resolution) -> NoReturn:
     )
     for line in masks.format_written(masks.freeze(resolution.config), resolution.config.masks):
         print(line)
+    for line in masks.format_bank_written(masks.freeze_bank(resolution.config)):
+        print(line)
     _unbuilt(
         "freeze",
-        f"wrote {prereg.BAR_NAME}, §3.1's tile lists, {extract.SPEC_FILENAME} and "
-        f"{artifacts.EVAL_MASKS_NAME}, and stopped — the last of the freeze is not built",
-        "the train mask bank, written beside them — K = 50 draws per head-train tile from the "
-        "same generator and the same config hash, kept out of git and committed as an md5 "
-        "sidecar `run` refuses a mismatch against (§3.4, #151)",
+        f"wrote {prereg.BAR_NAME}, §3.1's tile lists, {extract.SPEC_FILENAME}, "
+        f"{artifacts.EVAL_MASKS_NAME} and the train mask bank, and stopped — the last of the "
+        f"freeze is not built",
+        "the dataset card, written beside them — the four tile lists, both mask artifacts and "
+        "the generator's config hash, each with its md5, plus the three sets of data terms and "
+        "the sentence a reader would otherwise have to infer: the module commits tile lists and "
+        "masks and never tiles, and the 104 MB bank is not in this repository (§3.4, #154). The "
+        "eval mask list is still short its real-void rows meanwhile (#153)",
     )
 
 
@@ -162,6 +176,10 @@ def _run(resolution: Resolution) -> NoReturn:
             f"{'is' if len(missing) == 1 else 'are'} not on this box. Run "
             f"`python -m benchmark.launch freeze` first (§4.5 step 1; it is CPU-only and local)."
         )
+    # §3.4's one input that is committed as a hash rather than as bytes, so presence is not
+    # enough: a 104 MB parquet at the configured path is *a* bank, and the only thing that says
+    # it is this run's is the md5 the sidecar commits.
+    masks.assert_bank_matches(resolution.config)
     checkpoint = resolution.checkpoint
     if checkpoint is not None and not checkpoint.present:
         raise FileNotFoundError(

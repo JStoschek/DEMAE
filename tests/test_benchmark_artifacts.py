@@ -93,7 +93,7 @@ def test_the_callers_predicate_is_what_decides_and_the_bytes_are_only_the_defaul
 def test_a_holding_artifact_never_renders_the_body(tmp_path):
     """The no-op path costs nothing but the predicate — which is why the body is a callable.
 
-    #151's bank sidecar is written beside a 740 MB bank and #150's mask list is 30,000 rows
+    #151's bank sidecar is written beside a 104 MB bank and #150's mask list is 30,000 rows
     through pyarrow; serializing either only to discover the file already holds it would make the
     idempotent path the expensive one.
     """

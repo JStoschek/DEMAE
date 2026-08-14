@@ -129,6 +129,18 @@ GitHub issue #1.
   and nesting is **asserted**, not assumed, because largest-remainder apportionment is not
   monotone in the house size. Nothing here is a redistribution question: the module commits tile
   lists and masks, **never tiles**.
+- **Train mask bank** — §3.4's second mask artifact: **K = 50 draws per head-train tile**,
+  written once by Task 1's `freeze` and read by every arm, seed and hyperparameter config, so
+  the mask sequence a run sees is a committed input rather than a reproduction of the
+  generator's RNG (plan §3.2/§3.4, [#151](https://github.com/JStoschek/DEMAE/issues/151)).
+  Distinct from the **eval mask list**, which is one row per *scored* instance over the test
+  draw; the two carry the same generator and the same generator config hash, which is what
+  makes the determinism contract one contract rather than two. It is the one committed input
+  **committed as a hash rather than as bytes** — 1,000,000 rows is too big for git, so what git
+  carries is `train_mask_bank.json`, a sidecar holding the bank's md5, a parquet-independent
+  hash of the draw and that config hash, and `run` **refuses a bank whose md5 has moved** rather
+  than reading it. Nothing about that failure is loud otherwise: a head trained against a
+  re-drawn bank converges normally and prints a table exactly as wide as a good one.
 - **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
   one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
   budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the

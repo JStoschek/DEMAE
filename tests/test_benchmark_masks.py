@@ -426,16 +426,28 @@ def frozen(tmp_path_factory):
     """One real `freeze` of the shipped corpus, and what it said — shared by the class below.
 
     The `NotImplementedError` is the expected outcome and not a failure to write: `freeze` now
-    commits §3.1's lists and §3.2's eval mask list, and then names the stage #151 builds.
+    commits §3.1's lists, §3.2's eval mask list and #151's train mask bank, and then names the
+    stage #154 builds.
 
     Its console output is captured here rather than re-frozen under `capsys` for one test: 5,000
     test tiles is 30,000 draws and half a minute, and this suite is the gate before every push.
+    The bank stage below it is held to K = 1 for the same reason — §3.2's K = 50 over 20,000
+    head-train tiles is 1,000,000 draws and twenty minutes, and what this file is about is the
+    eval mask list. `tests/test_benchmark_bank.py` is where the bank's own shape is asserted.
     """
     directory = tmp_path_factory.mktemp("task1")
+    bank = tmp_path_factory.mktemp("bank") / "train_mask_bank.parquet"
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
-        with pytest.raises(NotImplementedError, match="train mask bank"):
-            launch.main(["freeze", "--artifacts-dir", str(directory)])
+        with pytest.raises(NotImplementedError, match="dataset card"):
+            launch.main(
+                [
+                    "freeze",
+                    "--artifacts-dir", str(directory),
+                    "--set", "masks.bank_draws_per_tile=1",
+                    "--set", f'paths.mask_bank_path="{bank}"',
+                ]
+            )
     return directory, said.getvalue()
 
 

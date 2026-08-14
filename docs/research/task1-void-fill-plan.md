@@ -303,7 +303,7 @@ Decisions:
   its metres would not be comparable to any other row in the table. It would put
   **DEMAE** off its native regime in order to put TerraMind on its own. And it
   would need a 10 m tile variant, masks redrawn at that geometry, and §3.4's mask
-  bank rebuilt for it — 740 MB and 33 minutes for the 30 m geometry alone. What
+  bank rebuilt for it — 104 MB and 21 minutes for the 30 m geometry alone. What
   replaces it is the caveat and diagnostic above. Settles
   [#139](https://github.com/JStoschek/DEMAE/issues/139).
 - **Ablation row (A5 only, 20k training size): bicubic vs re-derived `pos_emb`.**
@@ -844,9 +844,23 @@ shippable under all three sets of terms.
   needs an R4 host and there are ~1,250 in the test draw, so a host carries ~7
   different real void shapes (§5's bootstrap resamples tiles for this reason).
 - **Train mask bank** (parquet: `tile_id, epoch, family, bucket, mask_rle,
-  seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **740 MB** of RLE
-  measured on the generator's own output. Generated once in **33 min** of one
-  CPU core, then read by every arm, seed and config.
+  seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **104 MB** as the
+  zstd parquet `freeze` writes, measured on the shipped generator's own output.
+  (This bullet used to say 740 MB, which is the *uncompressed* RLE payload rather
+  than the artifact — [#151](https://github.com/JStoschek/DEMAE/issues/151). The
+  rule that keeps it out of git is the corpus shards' rule and not a size
+  threshold, so nothing turns on which figure it is.) Generated once in
+  **21.1 min** of one CPU core, then read by every arm, seed and config.
+  Each tile's K draws are **apportioned** over §3.2's six (family, bucket) cells
+  rather than sampled across them, and ordered per tile — so no tile trains on a
+  lopsided geometry mix, and no epoch trains every tile on one cell
+  ([#151](https://github.com/JStoschek/DEMAE/issues/151)). It is the one committed
+  input that is committed **as a hash rather than as bytes**: 104 MB cannot go in
+  git, so `freeze` writes `train_mask_bank.json` beside the tile lists carrying the
+  bank's md5, a parquet-independent hash of the draw itself and the generator config
+  hash, and `run` refuses a bank whose md5 has moved rather than reading it. The
+  determinism contract is preserved — the mask sequence a run sees is still a
+  committed input, its *hash* rather than its bytes.
 - **Extractor spec** (`extractor_spec.json`, [ADR-0012](../adr/0012-frozen-feature-extractor-contract.md),
   [#137](https://github.com/JStoschek/DEMAE/issues/137)) — the frozen-feature
   contract as a file rather than as prose: per-arm normalization, the emitted
@@ -904,19 +918,22 @@ One head spec, frozen across arms; only the input channel width differs
   time, which §3.2 does not intend.
 - **What replaces the cache is a mask bank, not nothing, and it is 40× smaller.**
   Deleting the feature cache made mask generation a per-epoch cost that nobody had
-  priced. Measured, a draw averages **2.00 ms** — but that mean spans 240×: a rectangle
-  is 0.037 ms and a large blob is 8.86 ms (30.9 ms worst case), because the blob family
-  dilates a random walk to a target area. §7's table implies **34.4M training tile
-  presentations**; drawn on the fly that is **19.1 CPU-hours**, against the program's
-  2.56 GPU-hours and the 1.6–4.1 h eval line §7 already calls its largest. (That 34.4M
-  was counted against §7's table *before* §2.3's rewrite cut the ViT-S cells to one seed
-  and took R4 out of the label sweep — it is an upper bound, not a current figure.) Per epoch over
-  20k tiles it is **40 s** of one core against a **4.6 s** GPU step (head 1.0 s + inline
-  ViT-B 3.58 s) — the loader running **8.7×** the GPU it feeds, and still at parity with
-  eight workers. The bank collapses 34.4M draws to **1M**: 33 minutes once, 740 MB, and
-  per-epoch variation is preserved *exactly*, since 50 committed masks per tile is what
-  50 on-the-fly epochs would have produced. It is the same trade that killed the feature
-  cache, read the other way round — cache the artifact that is cheap to store and
+  priced. Measured on the shipped generator, a draw averages **0.947 ms** — but that mean
+  spans two orders of magnitude: a rectangle is a fraction of it and a large blob dominates
+  it, because the blob family dilates a random walk to a target area. §7's table implies
+  **31.2M training tile presentations**; drawn on the fly that is **8.2 CPU-hours**, against
+  the program's 2.42 GPU-hours and the 1.9–5.1 h eval line §7 already calls its largest.
+  (Every figure in this bullet was re-derived by
+  [#151](https://github.com/JStoschek/DEMAE/issues/151): the count was counted against §7's
+  table *before* §2.3's rewrite and [#147](https://github.com/JStoschek/DEMAE/issues/147), and
+  the 2.00 ms/draw primitive beside it was p121's prototype rather than the shipped generator.
+  The old readings were 34.4M, 19.1 CPU-h, 2.56 GPU-h and a 1.6–4.1 h eval line.) Per
+  epoch over 20k tiles it is **19 s** of one core against a **4.6 s** GPU step (head 1.0 s +
+  inline ViT-B 3.58 s) — the loader running **4.1×** the GPU it feeds, and still at parity with
+  eight workers. The bank collapses 31.2M draws to **1M**: 21.1 minutes once,
+  104 MB, and per-epoch variation is preserved *exactly*, since 50 committed masks
+  per tile is what 50 on-the-fly epochs would have produced. It is the same trade that killed
+  the feature cache, read the other way round — cache the artifact that is cheap to store and
   expensive to recompute, not the one that is the reverse.
 - The *eval* side is unchanged throughout — the committed mask list fixes each test
   instance's input exactly as it always did.
@@ -1519,7 +1536,7 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 | **GPU total** | | **145.1 min = 2.42 h** | **$0.97** at $0.4016/hr *(was 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147))* |
 | **A9 (TerraMind full tokenizer)** | **40k** instances | **unpriced** | diffusion decode; at 1 s/instance it is 11.1 GPU-h, 4.5x the whole table above. **§7 is not final until this is measured.** |
 | Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
-| Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)). **The 34.4M predates §2.3's rewrite** and is not re-derived here — see the note below the table |
+| Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **21.1 min** | **Measured by `freeze` itself**, 2026-08-13: 1,000,000 rows, **104 MB**, 21.1 min of one core, and two independent freezes produced the same md5, draw hash and byte count. The draw is **0.947 ms** on the shipped generator against the 2.00 ms p121 measured on the prototype, [#150](https://github.com/JStoschek/DEMAE/issues/150)'s one-pass dilation having roughly halved it. **Drawn on the fly instead this line would be 8.2 CPU-h** at that primitive (17.3 at p121's), since this table's own counts total **31.2M** training tile presentations — both re-derived below ([#151](https://github.com/JStoschek/DEMAE/issues/151)) |
 
 The 38 scored passes are 22 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
 cells (A4-R5, A4-R4, A5, A6) at 3 seeds; the ViT-S appendix cell at 1 seed; A7 at 3 seeds
@@ -1540,6 +1557,11 @@ rather than asserted. The one number that could still move the total is A9's.
 
 **Why no feature cache** (the §4.1 amendment, priced): precomputing frozen features is
 *cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
+*(both counted before [#147](https://github.com/JStoschek/DEMAE/issues/147); the no-cache
+total is now 2.42 h and the cached figure beside it was not re-derived, so this pair is
+flagged rather than half-corrected —
+[#151](https://github.com/JStoschek/DEMAE/issues/151). The $0.50 the bullet turns on moves by
+cents either way.)*
 and against that it costs 30.3 GiB, 7.9 TB of re-reads, and a design constraint §4.1 did
 not name: a cached feature fixes the A1-filled input, hence the mask, so head training
 would see **one void per tile for all 50 epochs**, contradicting §3.2's per-epoch masks.
@@ -1547,23 +1569,59 @@ Run the encoder inline.
 
 **Why a mask bank instead** ([#121](https://github.com/JStoschek/DEMAE/issues/121)):
 deleting the feature cache made mask generation a per-epoch cost, and it had never been
-priced. It is **2.00 ms/draw**, so the 34.4M presentations this table's own counts imply
-come to **19.1 CPU-h** — larger than the eval line above and 7.5× the whole GPU program.
-Per epoch over 20k tiles that is 40 s of one core against a 4.6 s GPU step, so on-the-fly
-masks make head training **loader-bound**, which is the exact property the deleted cache
-was supposed to buy. Banking K = 50 draws per tile cuts 34.4M draws to 1M — **33 min once,
-740 MB** — with per-epoch variation preserved exactly, because 50 committed masks per tile
-is what 50 on-the-fly epochs produce. Both decisions are the same trade read consistently:
-cache what is cheap to store and expensive to recompute, not the reverse.
+priced. On the shipped generator it is **0.947 ms/draw**, so the 31.2M presentations this
+table's own counts imply come to **8.2 CPU-h** — still larger than the low end of the eval
+line above and 3.4× the whole GPU program at that total's present 2.42 h. Per epoch over 20k tiles that is 19 s of one core
+against a 4.6 s GPU step, so on-the-fly masks make head training **loader-bound** by 4.1×,
+which is the exact property the deleted cache was supposed to buy. Banking K = 50 draws per
+tile cuts 31.2M draws to 1M — **21.1 min once, 104 MB** — with per-epoch variation preserved
+exactly, because 50 committed masks per tile is what 50 on-the-fly epochs produce. Both
+decisions are the same trade read consistently: cache what is cheap to store and expensive to
+recompute, not the reverse.
 
-**Open, from the #121/#122 merge (2026-08-11):** the 34.4M presentation count above was
+**Re-derived 2026-08-13 ([#151](https://github.com/JStoschek/DEMAE/issues/151)), closing the
+#121/#122 merge's open note.** The 34.4M presentation count this section used to print was
 derived from §7's table *as it stood before* §2.3's rewrite, which cut the ViT-S appendix
-cells to a single seed and took R4 out of the label-efficiency sweep — and
-[#147](https://github.com/JStoschek/DEMAE/issues/147) has since dropped A6-S, so it is one
-cell-seed staler still. Every 34.4M / 19.1
-CPU-h / 1M / 33 min / 740 MB figure in this section is therefore an **upper bound** and
-wants re-deriving against the current cell counts. The bank-vs-on-the-fly conclusion is
-not in doubt — the margin is 7.5× — but the printed numbers are stale.
+cells to a single seed and took R4 out of the label-efficiency sweep, and before
+[#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S. Against the table above
+it is **31.2M**, and the arithmetic is published for the reason p121 published the original —
+so the next rewrite of §2.3 can re-derive it rather than re-measure it:
+
+| line | presentations | against p121's count |
+|---|---|---|
+| Head tuning on A6 (12 configs x 50 ep x 20k) | 12,000,000 | unchanged |
+| Head training A4/A5/A6 (4 cells x 3 seeds + 1 appendix cell x 1 seed, x 50 ep x 20k) | 13,000,000 | **15,000,000** — 15 cell-seeds to 13 |
+| A7 UNet (3 seeds x 50 ep x 20k, + 2 x 50 ep x 6k) | 3,600,000 | unchanged |
+| Label-efficiency sweep (3 cells x 2 seeds x 50 ep x 6k) | 1,800,000 | **3,000,000** — 5 cells to 3 |
+| A3 fine-tune (R5 ViT-B + R4 ViT-B, 20 ep x 20k) | 800,000 | unchanged |
+| **total** | **31,200,000** | **34,400,000** |
+
+At p121's 2.00 ms/draw that is **17.3 CPU-h** against its 19.1, and **7.2×** the 2.42 h GPU
+program rather than 7.5×. Both ratios name the total they divide by, because that total has
+moved twice already and a bare multiple is how this section went stale the first time.
+
+**The count was not the only stale half — the primitive moved too, and further.** §7 costs
+every line as a measured primitive times a count, and this ticket was chartered against the
+count alone. Re-measured by `freeze` on the shipped generator, a draw is **0.947 ms** (30,000
+eval draws in 28.4 s over the same six cells), not p121's 2.00 ms:
+[#150](https://github.com/JStoschek/DEMAE/issues/150) replaced the prototype's iterated 3x3
+dilation with one distance transform. So the honest on-the-fly figure is **8.2 CPU-h**, and the
+per-epoch loader cost is **19 s** against the 4.6 s GPU step rather than 40 s — **4.1×
+loader-bound rather than 8.7×**. Both halves of a "primitive times count" line went stale
+together, which is the general lesson worth carrying to the rest of this table: `freeze` and
+`run` should print the primitives they actually spend.
+
+**The bank's own row count does not move with any of this.** It is 20,000 head-train tiles
+times K = 50 whatever the pass count does, so 1,000,000 was never a stale number — only the
+ratio it is quoted against, which is **31.2×** in draws and **23×** in CPU time at the shipped
+primitive. Its measured cost moved downwards on both axes: **21.1 min** against the projected
+33, and **104 MB** against 740 — the latter never having been the artifact's size at all, but
+the uncompressed RLE payload before zstd.
+
+**The conclusion is unchanged and was never in doubt**, at 7.2× or at 3.4×: a loader running
+four times the GPU it feeds is loader-bound, and 21 minutes once against 8.2 CPU-h every time
+is the same trade the feature cache was deleted over, read the other way round. What this
+re-derivation buys is that the *numbers* on the page are now the ones the command prints.
 
 §9.4's Task-2 reuse constraint is **not** merely unaffected by these two decisions, as the
 #120 amendment said — it was independently wrong, and #121 rewrote it. Task 1's encoder
@@ -1632,8 +1690,11 @@ every table, so the corrected figures are the ones to print.
   ([#142](https://github.com/JStoschek/DEMAE/issues/142)).
 - **Spot-instance reclaim: not a risk this benchmark has.** Heads checkpoint
   every epoch to the synced directory like every other run in this repo, but
-  §7's measured total is 2.56 GPU-hours with a 46-minute longest job, so there
-  is nothing long-running to lose. *(The clause that used to close this bullet —
+  §7's measured total is 2.42 GPU-hours with a 46-minute longest job, so there
+  is nothing long-running to lose. *(2.56 until
+  [#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S; corrected
+  here by [#151](https://github.com/JStoschek/DEMAE/issues/151), which found the
+  same stale total quoted in §4.1.)* *(The clause that used to close this bullet —
   "features are memmapped so nothing long-running is unresumable" — went with
   the feature cache in §4.1.)*
 

@@ -1,4 +1,14 @@
-"""§3.2's void-mask generator, the RLE codec and the committed eval mask list (#150).
+"""§3.2's void-mask generator, the RLE codec and §3.4's two mask artifacts (#150, #151).
+
+One generator, two committed artifacts, one determinism contract:
+
+- **the eval mask list** — one row per scored instance over the test draw, committed as bytes;
+- **the train mask bank** — K = 50 draws per head-train tile, committed as a *hash*, because
+  1,000,000 rows is 104 MB and cannot go in git.
+
+They carry the same :data:`GENERATOR` and the same generator config hash, which is what makes
+that contract one contract rather than two (§3.4). What keeps their draws apart is
+:data:`BANK_TAG`, and the bank half starts at :class:`BankRow`.
 
 Promoted from `prototypes/p119_fill_headroom_proto.py`'s generator and the `p121_{masks,bank}.py`
 probes, which are the code plan §3.2's measured constraint numbers were run against. Promotion is
@@ -45,8 +55,12 @@ codec whose inverse needs an out-of-band shape leaves that failure available.
 A draw is 1.9 ms in the prototype and 1.2 ms here, the difference being :func:`_dilate_to_area`:
 iterated 3x3 dilation is the taxicab distance transform thresholded at a radius, so the same set
 comes out of one pass instead of ~36. `tests/test_benchmark_masks.py` asserts the two are the
-same set rather than similar ones. It is worth having twice — this generator also writes #151's
-1,000,000-row bank, where the same factor is 20 minutes.
+same set rather than similar ones.
+
+That factor is worth more than it looked. Over §3.2's six cells `freeze` measures **0.947 ms**
+a draw, against p121's 2.00 — which is half of why plan §7's on-the-fly line was re-derived
+from 19.1 CPU-h to **8.2** (#151), the other half being a presentation count that had gone
+stale for unrelated reasons. And it is what makes the bank **21.1 min** rather than 33.
 
 The eval mask list is 30,000 draws, ~40 s, and one file: 5,000 test tiles x §3.2's two synthetic
 families x three buckets, one void per tile per instance, every eval tile appearing once per
@@ -57,9 +71,11 @@ bucket in both families so bucket scores are computed over identical tile sets. 
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Final
@@ -70,7 +86,14 @@ from scipy.ndimage import distance_transform_cdt, distance_transform_edt, label
 from dataset.config import TILE_PX
 from pretrain.artifact import read_tile_strata
 
-from .artifacts import EVAL_MASKS_NAME, TEST_TILES_NAME, write_committed
+from .artifacts import (
+    EVAL_MASKS_NAME,
+    MASK_BANK_SIDECAR_NAME,
+    TEST_TILES_NAME,
+    TILE_LIST_NAMES,
+    file_md5,
+    write_committed,
+)
 from .config import BenchmarkConfig, Masks
 
 #: The generator's identity, and the first component of every seed. A change here is a change to
@@ -126,6 +149,14 @@ def stable_seed(*parts: object) -> int:
 def seed_for(tile_id: str, family: str, bucket: str, geometry: Masks) -> int:
     """The seed one (tile, family, bucket) draw is committed under — the row's fifth column."""
     return stable_seed(GENERATOR, geometry.seed, tile_id, family, bucket)
+
+
+#: What keeps the bank's draws apart from the eval list's. The two artifacts share a generator
+#: and a config hash by design (§3.4), so the *only* thing separating their streams is what goes
+#: into the seed. §3.1's splits already put the two tile sets in different geocells, which means
+#: a shared draw is unreachable today — the tag is here so that it stays unreachable for a
+#: structural reason rather than as a consequence of a check living in another module.
+BANK_TAG: Final = "bank"
 
 
 # --- The RLE codec ------------------------------------------------------------
@@ -547,21 +578,34 @@ def eval_rows(tile_ids: Iterable[str], geometry: Masks | None = None) -> list[Ma
     return rows
 
 
-def _table(rows: Sequence[MaskRow], metadata: Mapping[str, str]):
-    """The five columns as an Arrow table, with the generator's provenance in the schema.
+def _schema(
+    columns: Sequence[str], integers: Sequence[str], metadata: Mapping[str, str]
+):
+    """An Arrow schema for one of §3.4's two mask artifacts, with its provenance in the metadata.
 
-    The column types are stated once, here, and :data:`COLUMNS` is read off :class:`MaskRow` —
-    #146's lesson applied to a schema rather than a metric roster: a second home for a list is
-    what lets the two copies drift.
+    Both go through here. They are different shapes — the eval list's five columns and the
+    bank's six — but "text unless it is one of these, plus the generator's provenance" is one
+    rule, and #146's lesson is that a rule with two homes is a rule two homes can drift on.
     """
     import pyarrow as pa
 
-    schema = pa.schema(
-        [(name, pa.int64() if name == INTEGER_COLUMN else pa.string()) for name in COLUMNS],
+    return pa.schema(
+        [(name, pa.int64() if name in integers else pa.string()) for name in columns],
         metadata={key: str(value) for key, value in metadata.items()},
     )
+
+
+def _columns_of(rows: Sequence, columns: Sequence[str]) -> dict[str, list]:
+    """The rows as Arrow's column-per-key mapping, read off the row class rather than retyped."""
+    return {name: [getattr(row, name) for row in rows] for name in columns}
+
+
+def _table(rows: Sequence[MaskRow], metadata: Mapping[str, str]):
+    """The eval list's five columns as an Arrow table."""
+    import pyarrow as pa
+
     return pa.table(
-        {name: [getattr(row, name) for row in rows] for name in COLUMNS}, schema=schema
+        _columns_of(rows, COLUMNS), schema=_schema(COLUMNS, (INTEGER_COLUMN,), metadata)
     )
 
 
@@ -596,9 +640,7 @@ def _is_the_same_draw(path: Path, rows: Sequence[MaskRow], metadata: Mapping[str
     stored = committed.schema.metadata or {}
     if {key: stored.get(key.encode(), b"").decode() for key in metadata} != dict(metadata):
         return False
-    return committed.to_pydict() == {
-        name: [getattr(row, name) for row in rows] for name in COLUMNS
-    }
+    return committed.to_pydict() == _columns_of(rows, COLUMNS)
 
 
 def write_eval_masks(
@@ -678,4 +720,515 @@ def format_written(written: EvalMaskList, geometry: Masks) -> list[str]:
         f"families x {len(geometry.buckets)} buckets, drawn in {written.seconds:.1f} s",
         f"{'':<16} generator {GENERATOR}, artifacts {written.artifact_hash} — §3.4's one "
         f"determinism contract, and the hash the train mask bank carries",
+    ]
+
+
+# --- The train mask bank ------------------------------------------------------
+#
+# §3.4's second mask artifact, and the only committed input that is **not committed as bytes**.
+# K = 50 draws per head-train tile is 1,000,000 rows and 104 MB, which cannot go in git on the
+# same rule the corpus's shards follow — so what git carries is a sidecar holding the bank's md5
+# and the generator config hash, and `run` refuses a bank whose md5 has moved rather than reading
+# it. The determinism contract survives intact: the mask sequence a run sees is still a committed
+# input, its *hash* rather than its bytes.
+#
+# Everything here is streamed. The eval list materializes its 30,000 rows and compares them to
+# what is committed (:func:`_is_the_same_draw`); at 1,000,000 rows of RLE text that would be
+# several GB of Python objects, so the bank is written a row group at a time and identified by a
+# rolling hash over the rows instead.
+
+
+@dataclass(frozen=True)
+class BankRow:
+    """One banked training void — §3.4's six columns, in their committed order."""
+
+    tile_id: str
+    #: Which of the K draws this is, 0-based. §4.1 reads epoch ``e`` of 50 and §4.2 the first 20,
+    #: so the column is an index into the sequence rather than a label on it.
+    epoch: int
+    family: str
+    bucket: str
+    mask_rle: str
+    seed: int
+
+
+#: The six columns, in the order §3.4 states them — read off :class:`BankRow` for the reason
+#: :data:`COLUMNS` is read off :class:`MaskRow`.
+BANK_COLUMNS: Final = tuple(f.name for f in fields(BankRow))
+
+#: The two that are not text. ``epoch`` is an index and ``seed`` is the 63-bit draw key.
+BANK_INTEGER_COLUMNS: Final = ("epoch", "seed")
+
+#: Rows per parquet row group. 20,000 rows is ~15 MB of RLE — big enough that the footer's
+#: per-group overhead is noise over 50 groups, small enough that the writer's working set stays
+#: a fraction of the 104 MB artifact.
+BANK_ROW_GROUP: Final = 20_000
+
+
+def bank_seed_for(tile_id: str, epoch: int, family: str, bucket: str, geometry: Masks) -> int:
+    """The seed one banked draw is committed under — the row's sixth column.
+
+    ``epoch`` is in the key, which is what makes the K rows for a tile K *different* voids
+    rather than one void written K times. :data:`BANK_TAG` is in it for the reason stated there.
+    """
+    return stable_seed(GENERATOR, geometry.seed, BANK_TAG, tile_id, epoch, family, bucket)
+
+
+def bank_cells(tile_id: str, geometry: Masks) -> list[tuple[str, str]]:
+    """Which (family, bucket) each of this tile's K epochs draws from.
+
+    **Apportioned, not sampled.** The K draws are dealt over §3.2's six cells as evenly as they
+    divide — eight or nine each at K = 50 — and only then ordered. Sampling instead would leave
+    a tile whose fifty draws happened to hold fourteen large blobs and two small rectangles, and
+    a head trained on that tile has seen a different curriculum from its neighbour for no reason
+    anything downstream records. §3.1's tile lists are apportioned for the same reason.
+
+    The order is per **tile**, not per epoch. A bank that dealt the cells in a fixed order would
+    make epoch 0 blob/small for every tile at once, so each epoch would train on one geometry —
+    a curriculum nobody chose, and one the epoch column makes invisible.
+
+    Which cells carry the remainder is drawn per tile too, so the imbalance K leaves over does
+    not land on the same two cells 20,000 times.
+    """
+    cells = [
+        (family, bucket)
+        for family in geometry.synthetic_families
+        for bucket, _ in geometry.buckets
+    ]
+    draws = geometry.bank_draws_per_tile
+    rng = np.random.default_rng(
+        stable_seed(GENERATOR, geometry.seed, BANK_TAG, "cells", tile_id)
+    )
+    base, extra = divmod(draws, len(cells))
+    counts = np.full(len(cells), base, dtype=int)
+    counts[rng.permutation(len(cells))[:extra]] += 1
+    dealt = [cell for cell, count in zip(cells, counts) for _ in range(count)]
+    return [dealt[position] for position in rng.permutation(draws)]
+
+
+def bank_rows(tile_ids: Iterable[str], geometry: Masks | None = None) -> Iterator[BankRow]:
+    """§3.2's K draws per head-train tile, streamed in the order they are committed in.
+
+    A generator rather than a list: the real bank is 1,000,000 rows of RLE text, and the caller
+    that writes it never holds more than one row group of them (:func:`write_bank`). The order
+    is tile then epoch — a total order, so two runs that agree on the draw produce the same rows
+    and the same hash whatever they were iterated on.
+    """
+    geometry = Masks() if geometry is None else geometry
+    for tile_id in sorted(tile_ids):
+        for epoch, (family, bucket) in enumerate(bank_cells(tile_id, geometry)):
+            seed = bank_seed_for(tile_id, epoch, family, bucket, geometry)
+            drawn = draw_from_seed(seed, family=family, bucket=bucket, geometry=geometry)
+            yield BankRow(
+                tile_id=tile_id,
+                epoch=epoch,
+                family=family,
+                bucket=bucket,
+                mask_rle=drawn.mask_rle,
+                seed=seed,
+            )
+
+
+def _batched(rows: Iterator[BankRow], size: int) -> Iterator[list[BankRow]]:
+    """``itertools.batched``, which this project's floor of Python 3.11 does not have."""
+    batch: list[BankRow] = []
+    for row in rows:
+        batch.append(row)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+#: Bytes of BLAKE2b in the draw hash. 16 is the width :mod:`benchmark.config` uses for a config
+#: hash, and this is the same kind of claim about the same kind of thing.
+DRAW_HASH_BYTES: Final = 16
+
+
+def _digest_line(row: BankRow) -> bytes:
+    """One row, as the draw hash sees it: every committed column, in the committed order."""
+    return ("|".join(str(getattr(row, name)) for name in BANK_COLUMNS) + "\n").encode()
+
+
+@dataclass(frozen=True)
+class WrittenBank:
+    """A bank on disk, by content and by cost."""
+
+    path: Path
+    rows: int
+    #: What it takes on this box. Not a property of the draw — see :class:`BankSidecar`.
+    size_bytes: int
+    md5: str
+    #: BLAKE2b over the rows themselves, and therefore the same number under any parquet writer.
+    draw_hash: str
+    seconds: float
+
+
+def write_bank(
+    rows: Iterator[BankRow],
+    path: Path | str,
+    *,
+    metadata: Mapping[str, str],
+    expect_draw_hash: str | None = None,
+) -> WrittenBank:
+    """Stream the bank to ``path``, hashing the rows as they go.
+
+    Written to a neighbouring ``.partial`` and moved into place at the end, so a freeze that is
+    interrupted — or one that draws something ``expect_draw_hash`` refuses — leaves the bank a
+    box already has exactly where it was. Twenty minutes of generation is long enough that being
+    interrupted partway is a real state rather than a theoretical one, and a half-written parquet
+    at ``paths.mask_bank_path`` is a file `run` would resolve, hash and refuse for the wrong
+    reason.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    schema = _schema(BANK_COLUMNS, BANK_INTEGER_COLUMNS, metadata)
+
+    digest = hashlib.blake2b(digest_size=DRAW_HASH_BYTES)
+    written = 0
+    started = time.perf_counter()
+    try:
+        with pq.ParquetWriter(partial, schema, compression="zstd") as writer:
+            for batch in _batched(rows, BANK_ROW_GROUP):
+                for row in batch:
+                    digest.update(_digest_line(row))
+                writer.write_table(pa.table(_columns_of(batch, BANK_COLUMNS), schema=schema))
+                written += len(batch)
+        seconds = time.perf_counter() - started
+        draw_hash = digest.hexdigest()
+        if expect_draw_hash is not None and draw_hash != expect_draw_hash:
+            raise FileExistsError(
+                f"{MASK_BANK_SIDECAR_NAME} commits draw hash {expect_draw_hash} and this config "
+                f"draws {draw_hash} over the same {written:,} rows. The shape of the draw "
+                f"agreed, so what moved is the generator itself rather than a knob — which §3.4 "
+                f"does not let a `freeze` overwrite. Delete the sidecar deliberately if the draw "
+                f"really has changed, remembering that every result already trained against it "
+                f"quotes the old md5"
+            )
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    os.replace(partial, path)
+    return WrittenBank(
+        path=path,
+        rows=written,
+        size_bytes=path.stat().st_size,
+        md5=file_md5(path),
+        draw_hash=draw_hash,
+        seconds=seconds,
+    )
+
+
+# --- The committed sidecar ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BankDraw:
+    """What the bank *is*, before a single mask of it exists.
+
+    Every field here is a function of the config and the committed head-train list, so two boxes
+    freezing one config agree on all six without either having drawn anything. That is what makes
+    it the thing §3.4's guard reads: the refusal has to arrive before the twenty minutes, not
+    after (:func:`_refuse_a_moved_draw`).
+
+    Deliberately **not** here: ``md5`` and ``size_bytes``, which describe *this box's encoding* of
+    the draw rather than the draw. A parquet footer carries the writing library's own version
+    string, so a guard that compared those would refuse a re-derivation of the identical
+    1,000,000 masks the day pyarrow was upgraded — #150's lesson one level up. Nor ``draw_hash``,
+    which is the draw exactly but is only knowable once it has been paid for.
+    """
+
+    generator: str
+    artifact_hash: str
+    rows: int
+    tiles: int
+    draws_per_tile: int
+    columns: str
+
+    @classmethod
+    def of(cls, cfg: BenchmarkConfig, *, tiles: int) -> BankDraw:
+        """What this config's bank would be, over a head-train list of ``tiles`` tiles."""
+        return cls(
+            generator=GENERATOR,
+            artifact_hash=cfg.artifact_hash,
+            rows=tiles * cfg.masks.bank_draws_per_tile,
+            tiles=tiles,
+            draws_per_tile=cfg.masks.bank_draws_per_tile,
+            columns=",".join(BANK_COLUMNS),
+        )
+
+    def to_dict(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+
+@dataclass(frozen=True)
+class BankSidecar:
+    """What git carries about a bank it does not carry: the draw, and this box's encoding of it.
+
+    The split is the point. :class:`BankDraw` and ``draw_hash`` are the draw — identical on every
+    box that freezes this config, and what §3.4's guard is about. ``md5`` and ``size_bytes`` are
+    what the draw came out as *here*, which is what `run` checks the file against and what a run
+    record quotes.
+
+    **Why this is not written through** :func:`benchmark.artifacts.write_committed`, which every
+    other committed input goes through: that function's contract is *this file already holds what
+    I would write, or it is a refusal*, and two of these fields are allowed to move without the
+    artifact having changed. A re-freeze under a newer pyarrow re-derives the same 1,000,000
+    masks at a different md5, and the right outcome is to record the new md5, not to refuse and
+    not to leave the old one pointing at a bank that no longer hashes to it. So the refusal is
+    kept — in §3.4's own words, and reading the draw rather than the file — while the write is
+    local. It is the same split ``write_committed`` documents, at the one artifact where *what
+    counts as the same artifact* also decides what counts as a legitimate rewrite.
+    """
+
+    draw: BankDraw
+    draw_hash: str
+    md5: str
+    size_bytes: int
+
+    @property
+    def megabytes(self) -> float:
+        """What `freeze` prints. MB rather than bytes because 103,653,977 is not a size."""
+        return self.size_bytes / 1e6
+
+    def to_dict(self) -> dict:
+        """Flat JSON: the draw's six fields beside the three this box measured.
+
+        Flat rather than nested because a human comparing a sidecar to what `freeze` printed
+        should not have to know which half a field lives in.
+        """
+        return {
+            **self.draw.to_dict(),
+            "draw_hash": self.draw_hash,
+            "md5": self.md5,
+            "size_bytes": self.size_bytes,
+        }
+
+    def render(self) -> str:
+        """The committed bytes: sorted keys and a trailing newline, as the extractor spec is."""
+        return json.dumps(self.to_dict(), sort_keys=True, indent=2) + "\n"
+
+
+def read_sidecar(path: Path | str) -> BankSidecar:
+    """Read the committed sidecar, refusing anything that is not one.
+
+    Every way the file can fail to be a sidecar is a refusal rather than a partial read, on the
+    rule the RLE codec follows: a bank resolved against half a sidecar is a bank nobody checked.
+
+    Absence is separated out from unreadability because they call for opposite things. No
+    sidecar is the ordinary pre-`freeze` state and the fix is to freeze; a sidecar that will not
+    parse is a committed file that has been damaged, and re-freezing over it is the one thing
+    §3.4 does not want done by reflex.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is not on this box, and it is what says which bank this is. The bank "
+            f"itself is deliberately not in git (§3.4) but this file is — "
+            f"`python -m benchmark.launch freeze` writes both"
+        )
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{path} is not a readable {MASK_BANK_SIDECAR_NAME}: {exc}") from None
+    drawn = [f.name for f in fields(BankDraw)]
+    measured = ["draw_hash", "md5", "size_bytes"]
+    missing = sorted(set(drawn + measured) - set(payload))
+    if missing:
+        raise ValueError(f"{path} is missing sidecar field(s) {missing}")
+    return BankSidecar(
+        draw=BankDraw(**{name: payload[name] for name in drawn}),
+        **{name: payload[name] for name in measured},
+    )
+
+
+def _refuse_a_moved_draw(path: Path, committed: BankSidecar, drawn: BankDraw) -> None:
+    """§3.4's refusal, before the generation rather than after it.
+
+    Named field by field, because the person reading this is being told to delete a committed
+    file and whether that is the right thing to do is a question about *what* moved: a bank
+    redrawn under a new geometry is a different benchmark, and a bank whose tile count moved is
+    usually a head-train list that was redrawn underneath it.
+    """
+    was = committed.draw.to_dict()
+    detail = ", ".join(
+        f"{name} {was[name]!r} -> {value!r}"
+        for name, value in drawn.to_dict().items()
+        if was[name] != value
+    )
+    if not detail:
+        return
+    raise FileExistsError(
+        f"{path} is already frozen at md5 {committed.md5}, describing a different draw from the "
+        f"one this config produces ({detail}). `freeze` does not overwrite a committed input "
+        f"whose content hash has moved (§3.4); delete it deliberately if the draw really has "
+        f"changed, remembering that every result already trained against it quotes the old md5"
+    )
+
+
+@dataclass(frozen=True)
+class TrainMaskBank:
+    """What `freeze` left on this box, and whether it had to draw it.
+
+    Holds the sidecar rather than restating it, so there is one description of the bank and the
+    committed file is it — the alternative was this class copying nine fields out of that one and
+    the two drifting on the tenth.
+    """
+
+    path: Path
+    sidecar_path: Path
+    #: What the sidecar says — the draw, its hash, and this box's md5 and size. Held rather than
+    #: copied out field by field, so there is one description of the bank and the committed file
+    #: is it.
+    committed: BankSidecar
+    seconds: float
+    #: ``False`` when the committed sidecar already described the bank on disk. Idempotence here
+    #: has to mean *not spending the twenty minutes again*, so it is reported rather than implied.
+    generated: bool
+
+
+def freeze_bank(cfg: BenchmarkConfig) -> TrainMaskBank:
+    """`freeze`'s bank stage: K draws per head-train tile, and the sidecar git keeps instead.
+
+    Reads the **committed 20k list** rather than the one ``--size`` names, and rather than
+    re-drawing the tiles. Both for the same reason: the bank is an input every cell shares
+    (§3.4), the label-efficiency rungs are nested prefixes of the one committed draw (§3.1), and
+    a bank that moved with ``--size`` would be a second determinism contract.
+
+    Three outcomes, and the order they are decided in is what keeps the expensive one last:
+
+    *The committed sidecar describes the bank on disk.* Nothing is drawn and nothing is written.
+
+    *The committed sidecar describes a different draw.* Refused, having read one small JSON file
+    — not after twenty minutes of generation (:func:`_refuse_a_moved_draw`).
+
+    *There is no sidecar, or the bank is gone or is not the one the sidecar describes.* Drawn,
+    checked against the committed draw hash if there is one, and the sidecar written with the
+    md5 the bank came out as here.
+    """
+    directory = Path(cfg.paths.artifacts_dir)
+    head_train = directory / TILE_LIST_NAMES["20k"]
+    if not head_train.is_file():
+        raise FileNotFoundError(
+            f"{head_train} is not on this box, and §3.2 banks K draws per head-train tile. "
+            f"`python -m benchmark.launch freeze` writes §3.1's lists before it reaches this "
+            f"stage, so this is a partly-frozen box rather than a missing step"
+        )
+    tile_ids = [tile_id for tile_id, _ in read_tile_strata(head_train, what="head-train list")]
+
+    bank_path = Path(cfg.paths.mask_bank_path)
+    sidecar_path = directory / MASK_BANK_SIDECAR_NAME
+    drawing = BankDraw.of(cfg, tiles=len(tile_ids))
+
+    committed = read_sidecar(sidecar_path) if sidecar_path.is_file() else None
+    if committed is not None:
+        _refuse_a_moved_draw(sidecar_path, committed, drawing)
+        if bank_path.is_file() and file_md5(bank_path) == committed.md5:
+            return TrainMaskBank(
+                path=bank_path,
+                sidecar_path=sidecar_path,
+                committed=committed,
+                seconds=0.0,
+                generated=False,
+            )
+
+    written = write_bank(
+        bank_rows(tile_ids, cfg.masks),
+        bank_path,
+        metadata=drawing.to_dict(),
+        expect_draw_hash=None if committed is None else committed.draw_hash,
+    )
+    sidecar = BankSidecar(
+        draw=drawing,
+        draw_hash=written.draw_hash,
+        md5=written.md5,
+        size_bytes=written.size_bytes,
+    )
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path.write_text(sidecar.render())
+    return TrainMaskBank(
+        path=written.path,
+        sidecar_path=sidecar_path,
+        committed=sidecar,
+        seconds=written.seconds,
+        generated=True,
+    )
+
+
+def assert_bank_matches(cfg: BenchmarkConfig) -> str:
+    """What `run` does before it spends anything: refuse a bank whose md5 has moved (§3.4).
+
+    Returns the bank's md5, which is what the run record quotes it by.
+
+    A **refusal** rather than a warning, and before the encoder is loaded, because every way
+    this can be wrong is silent: a head trained against a re-drawn bank converges normally and
+    prints a table exactly as wide as a good one. The generator config hash is checked beside
+    the md5 so that the mid-change state — a sidecar that has moved with the old bank still on
+    disk — is caught by the thing that moved rather than by waiting for the redraw.
+
+    It hashes the bank itself rather than reading the md5
+    :func:`benchmark.artifacts.resolve` computed moments earlier, which is a second pass over
+    104 MB and deliberate. A safety check whose correctness depends on being handed the right
+    snapshot is one a future caller can hold wrong; this one takes a config and answers about
+    the disk. The cost is ~0.2 s, once, ahead of a run measured in minutes.
+    """
+    sidecar_path = Path(cfg.paths.artifacts_dir) / MASK_BANK_SIDECAR_NAME
+    bank_path = Path(cfg.paths.mask_bank_path)
+    committed = read_sidecar(sidecar_path)
+
+    drawn = committed.draw
+    if drawn.generator != GENERATOR or drawn.artifact_hash != cfg.artifact_hash:
+        raise ValueError(
+            f"{sidecar_path} describes a bank drawn by {drawn.generator} under artifact_hash "
+            f"{drawn.artifact_hash}; this run is {GENERATOR} under {cfg.artifact_hash}. The "
+            f"two mask artifacts carry one generator config hash (§3.4), so a run cannot be "
+            f"trained against this bank and scored against this eval mask list"
+        )
+
+    observed = file_md5(bank_path)
+    if observed is None:
+        raise FileNotFoundError(
+            f"{bank_path} is not on this box. The bank is {drawn.rows:,} rows and is "
+            f"deliberately not in git (§3.4) — `python -m benchmark.launch freeze` regenerates "
+            f"it from the committed sidecar's draw, which is what the sidecar is for"
+        )
+    if observed != committed.md5:
+        raise ValueError(
+            f"{bank_path} has md5 {observed}; {sidecar_path.name} commits {committed.md5}. "
+            f"§3.4 refuses a bank whose md5 has moved rather than reading it: the mask sequence "
+            f"a run sees is a committed input, and a head trained against a re-drawn bank "
+            f"converges normally and prints a table exactly as wide as a good one. Delete the "
+            f"bank and re-freeze to redraw it from the committed sidecar"
+        )
+    return observed
+
+
+def format_bank_written(bank: TrainMaskBank) -> list[str]:
+    """What `freeze` says it committed — and what it cost, since #151 re-derives that line.
+
+    The row count, the byte size and the generation time are printed because plan §7's 1M /
+    33 min / 740 MB were derived on the p121 prototype against a pass count §2.3 has since
+    rewritten. A figure a command prints every time it runs does not go stale in a document.
+    """
+    committed, draw = bank.committed, bank.committed.draw
+    # Minutes past two of them: the real artifact takes a third of an hour, and "1,265.4 s" is a
+    # number a reader has to divide before it means anything.
+    took = (
+        f"{bank.seconds:.1f} s" if bank.seconds < 120 else f"{bank.seconds / 60:.1f} min"
+    )
+    drawn = f"drawn in {took}" if bank.generated else "already frozen — nothing was redrawn"
+    return [
+        f"{'committed':<16} {draw.rows:,} train mask bank rows into {bank.path}",
+        f"{'':<16} {bank.path.name:<21} md5 {committed.md5}",
+        f"{'':<16} {draw.tiles:,} head-train tiles x K = {draw.draws_per_tile}, "
+        f"{committed.megabytes:,.0f} MB, {drawn}",
+        f"{'':<16} {bank.sidecar_path.name:<21} draw {committed.draw_hash} — the bank is not in "
+        f"git (§3.4); this sidecar is, and `run` refuses a bank whose md5 has moved",
+        f"{'':<16} generator {GENERATOR}, artifacts {draw.artifact_hash} — the same contract "
+        f"the eval mask list carries",
     ]

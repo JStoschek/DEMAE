@@ -348,10 +348,24 @@ def frozen(tmp_path_factory):
 
     The `NotImplementedError` is the expected outcome and not a failure to write: `freeze`
     commits §3.1's lists and then names the stage the last ticket builds.
+
+    ``masks.bank_draws_per_tile`` is held to 1 and the bank is pointed at a temporary path,
+    because `freeze` runs every stage before the one that raises and #151's bank is 20,000
+    tiles x K = 50 — 1,000,000 draws and twenty minutes, written to ``paths.mask_bank_path``,
+    which defaults to a real location under ``data/``. What this file is about is §3.1's tile
+    lists; `tests/test_benchmark_bank.py` is where the bank's own shape is asserted.
     """
     directory = tmp_path_factory.mktemp("task1")
-    with pytest.raises(NotImplementedError, match="train mask bank"):
-        launch.main(["freeze", "--artifacts-dir", str(directory)])
+    bank = tmp_path_factory.mktemp("bank") / "train_mask_bank.parquet"
+    with pytest.raises(NotImplementedError, match="dataset card"):
+        launch.main(
+            [
+                "freeze",
+                "--artifacts-dir", str(directory),
+                "--set", "masks.bank_draws_per_tile=1",
+                "--set", f'paths.mask_bank_path="{bank}"',
+            ]
+        )
     return directory
 
 
@@ -417,8 +431,18 @@ class TestAgainstTheShippedCorpus:
     def test_a_redraw_reproduces_the_committed_bytes_and_says_what_it_wrote(
         self, frozen, tmp_path, capsys
     ):
+        # K = 1 and a temporary bank path for the reason the `frozen` fixture gives: `freeze`
+        # runs every stage before the one that raises, and the bank's default path is a real
+        # location under `data/`.
         with pytest.raises(NotImplementedError):
-            launch.main(["freeze", "--artifacts-dir", str(tmp_path)])
+            launch.main(
+                [
+                    "freeze",
+                    "--artifacts-dir", str(tmp_path),
+                    "--set", "masks.bank_draws_per_tile=1",
+                    "--set", f'paths.mask_bank_path="{tmp_path / "bank.parquet"}"',
+                ]
+            )
         out = capsys.readouterr().out
         for path in frozen.glob("*.csv"):
             md5 = file_md5(path)
