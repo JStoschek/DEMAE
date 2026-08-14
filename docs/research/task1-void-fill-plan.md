@@ -856,9 +856,22 @@ shippable under all three sets of terms.
 
 - **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
   row per eval instance, 30,000 synthetic rows plus the real-void family's
-  **9,978** (§5), so ~40k rows. The real rows repeat `tile_id`: every one of them
-  needs an R4 host and there are ~1,250 in the test draw, so a host carries ~7
-  different real void shapes (§5's bootstrap resamples tiles for this reason).
+  **9,273**, so ~39.3k rows. *(Amended 2026-08-13 —
+  [#153](https://github.com/JStoschek/DEMAE/issues/153). This line read "9,978"
+  until the build wrote the file. **9,978 is §3.3's scored-component count**, and
+  it includes the 705 components that placed cleanly and fell in the gaps between
+  the sub-rows — which the very next clause of §3.3, and §5's histogram sentence,
+  **exclude** from the published rows. The rows are the published instances,
+  8,824 + 438 + 11 = **9,273**, and the 705 are recorded as a count in the
+  artifact's metadata rather than as rows in it. Nothing moves but the arithmetic:
+  no registered rule states either figure, and §3.3's two counts were already two
+  names. This is the same conflation `benchmark.voids` warns about in its own
+  docstring — one word, "scored", for two questions.)* The real rows repeat
+  `tile_id`: every one of them needs a host in its own band and the test draw
+  holds **1,111 clean R4 tiles** (measured; ~1,250 was the estimate), so a host
+  carries **8.3 real void shapes on average** — median 8, at most 23, since each
+  void picks its host off its own keyed seed rather than being dealt round-robin.
+  §5's bootstrap resamples tiles for this reason.
 - **Train mask bank** (parquet: `tile_id, epoch, family, bucket, mask_rle,
   seed`) — K = 50 draws per head-train tile, 1,000,000 rows, **740 MB** of RLE
   measured on the generator's own output. Generated once in **33 min** of one
@@ -1315,12 +1328,14 @@ A1 from truth cannot separate the arms either.
   because p125's per-cell yields came from two Cascades cells tamer than the draw
   #126 settled on. What was pre-registered was the threshold, not the outcome,
   and that is what it was for. **Bootstrap over tiles, not instances**: 8,824
-  real-small instances land on ~1,250 R4 test tiles, so ~7 instances share each
-  tile's terrain and a per-instance resample would overstate precision by up to
-  √7. §5's bootstrap already resamples test tiles, which is the correct cluster;
-  this is a note against changing it. One knock-on: §7's **32k eval instances**
-  predates #126's reshaping and #135's counts — the total is **30,000 synthetic +
-  9,978 real = ~40k**, which moves the two eval lines by ~25% and no conclusion.
+  real-small instances land on **1,111 clean R4 test tiles** (measured — #153), so
+  ~8 instances share each tile's terrain and a per-instance resample would
+  overstate precision by up to √8. §5's bootstrap already resamples test tiles,
+  which is the correct cluster; this is a note against changing it. One knock-on:
+  §7's **32k eval instances** predates #126's reshaping and #135's counts — the
+  total is **30,000 synthetic + 9,273 real = ~39.3k** (the real half is the
+  published instances, not the 9,978 scored components — see "The two mask
+  artifacts" above), which moves the two eval lines by ~23% and no conclusion.
 - **The printed table** *(pre-registered 2026-08-11 —
   [#136](https://github.com/JStoschek/DEMAE/issues/136); registered rule **R5**,
   asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.

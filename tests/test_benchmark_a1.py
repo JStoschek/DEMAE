@@ -77,10 +77,13 @@ def box(tmp_path):
     )
     # §3.2's own writer over §3.2's own generator: the eval mask list this scores against is the
     # artifact `freeze` would have committed for this test list, not a hand-rolled stand-in.
+    # §3.3's half is deliberately absent — A1 scores whatever rows the list holds, and building
+    # the real family here would want 24 granules and a GLO-30 read per cell (#153).
     masks.write_eval_masks(
         masks.eval_rows(tile_ids),
         directory / EVAL_MASKS_NAME,
         artifact_hash=BenchmarkConfig().artifact_hash,
+        real=masks.RealFamily.none(),
     )
     for name in (
         "task1-prereg-bar.json",

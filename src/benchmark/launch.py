@@ -24,9 +24,10 @@ the pre-flight a build session walks before renting anything. #148 gave ``freeze
 its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
 lists (:mod:`benchmark.tiles`), #156 the third, ADR-0012's extractor contract
 (:mod:`benchmark.extract`), and #150 the fourth, §3.2's eval mask list
-(:mod:`benchmark.masks`). #158 made ``run`` real for **A1**: §2.4's classical fill over the
-committed eval mask list, both of §8's norm-inversion gates, and the rows and run record that
-come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
+(:mod:`benchmark.masks`) — into which #153 transplanted §3.3's real-void family, the one stage
+that reads anything off the network. #158 made ``run`` real for **A1**: §2.4's classical fill
+over the committed eval mask list, both of §8's norm-inversion gates, and the rows and run
+record that come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
 The two verbs that are still short of their stage raise past the work they have, and name what
 has not been built — deliberately, because a verb that quietly returned 0 having done part of
@@ -100,7 +101,7 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 
 
 def _freeze(resolution: Resolution) -> NoReturn:
-    """`freeze` — write every committed input. §4.5 step 1, CPU-only and local.
+    """`freeze` — write every committed input. §4.5 step 1, CPU-only.
 
     Four of the five are built, and the order is each ticket's own argument rather than the
     order they happened to land in.
@@ -121,11 +122,17 @@ def _freeze(resolution: Resolution) -> NoReturn:
     the bar it carries §3.4's guard, refusing to overwrite a version of itself whose content hash
     has moved.
 
-    **§3.2's eval mask list** goes last of the four (#150), because it is a function of the test
-    list two stages above it — 30,000 rows is 5,000 test tiles x two synthetic families x three
-    buckets — and it reads that list back off disk rather than out of the draw, on the contract
+    **The eval mask list** goes last of the four (#150, #153), because it is a function of the
+    test list two stages above it — §3.2's 30,000 synthetic rows are 5,000 test tiles x two
+    families x three buckets, and §3.3's real family is transplanted onto hosts drawn from that
+    same list — and it reads the list back off disk rather than out of the draw, on the contract
     family's rule that the committed file is what later phases re-read. It carries the same §3.4
     guard the spec does, and the same generator config hash #151's bank will.
+
+    It is also the one stage that is not purely local: §3.3's real family needs #127's 24
+    granules on disk and reads one GLO-30 COG per cell for the band the void is matched on. A
+    box without the granules is **refused** here rather than committing a well-formed eval mask
+    list of a benchmark with no C4 arm in it.
     """
     paths = resolution.config.paths
     bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
@@ -179,7 +186,8 @@ def _run(resolution: Resolution) -> int:
         raise FileNotFoundError(
             f"nothing to score against — {', '.join(missing)} "
             f"{'is' if len(missing) == 1 else 'are'} not on this box. Run "
-            f"`python -m benchmark.launch freeze` first (§4.5 step 1; it is CPU-only and local)."
+            f"`python -m benchmark.launch freeze` first (§4.5 step 1; it is CPU-only, and needs "
+            f"#127's granules and a GLO-30 read per cell for §3.3's real family)."
         )
     checkpoint = resolution.checkpoint
     if checkpoint is not None and not checkpoint.present:
@@ -247,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         return sub
 
-    add("freeze", "write every committed input (CPU-only and local)")
+    add("freeze", "write every committed input (CPU-only; reads GLO-30 for §3.3)")
     run = add("run", "execute exactly one (arm, size, seed) cell")
     # The cell, as flags — and they are config knobs rather than a second recipe: `--arm A5` is
     # `--set arm=A5`, applied in the same place, so an arm stays "this object with a knob moved".

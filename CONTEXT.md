@@ -74,6 +74,17 @@ GitHub issue #1.
   optimum exists to find, and *distinguishability between* adjacent strata is explicitly
   disavowed. A stratum is **terrain-meaningful** — the Gate E gallery judged all 20 coherent.
   Frozen by [ADR-0005](docs/adr/0005-sampling-design.md).
+- **Ruggedness band** (`R1`–`R4`) — quartiles of `slope_mean` over the **eligible test pool**
+  (all-land, water flag clear), cut in `benchmark.voids.Bands`. This is Task 1 §5's axis and
+  it is **not** the `stratum_id` above: a band *is* a rank, there are four of them rather than
+  twenty, and they are cut on one column rather than on the whole metric vector. The collision
+  is worth stating because #153's ticket says the real-void family is transplanted onto
+  "stratum-matched" hosts, and the matching is on the **band** — the void's band, read off
+  GLO-30 at the void's own coordinates, against the host tile's band. Matching on `stratum_id`
+  would be a different and much stronger claim, and it is not the one the family makes. Nor is
+  the band the *native* ruggedness of the ground a void came from: 34% of the real voids are
+  steeper than the ruggedest tile in the whole pool, so the transplant preserves the void's
+  shape and its band and nothing else about its terrain (plan §3.3).
 - **Selection list** — the committed list of `window_id, stratum_id, provenance` triples the
   sampler emits: the windows chosen for a tier, *before* any of them is read at full
   resolution. It is **the determinism contract** — not the seed, and not the sampler's code

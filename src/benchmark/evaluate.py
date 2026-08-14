@@ -381,8 +381,16 @@ def read_instances(cfg: BenchmarkConfig) -> list[Instance]:
       claiming a scored cell with no rows in it.
 
     ``instance`` counts within ``(tile_id, family, bucket)`` in committed order. It is 0 for
-    every synthetic row — one void per tile per bucket — and is what will separate the ~7 real
-    voids that share a host tile when #153 lands.
+    every synthetic row — one void per tile per bucket — and is what separates the real voids
+    that share a host tile: #153 landed 9,273 of them onto 1,116 hosts, a mean of 8.3 each and
+    at most 23, so ``(tile_id, family, bucket)`` is not a key on that half of the list.
+
+    ``family`` and ``bucket`` are carried as **labels**, never mapped back to §3.2's buckets.
+    That is load-bearing now that both families are in the file: a real row's ``bucket`` is one
+    of §3.3's size sub-rows (``real-small``, ``real-medium+``, ``count-only-128-160``), a
+    different vocabulary from the synthetic ``small``/``medium``/``large``. Anything downstream
+    that groups on ``bucket`` has to split on ``family`` first or it will pool two axes that
+    mean different things.
     """
     import pyarrow.parquet as pq
 

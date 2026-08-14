@@ -15,6 +15,7 @@ held-out block is asserted to raise rather than warn.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from inspect import signature
 from pathlib import Path
@@ -344,14 +345,19 @@ def test_a_dry_run_freeze_still_writes_nothing(corpus, flags, tmp_path):
 
 @pytest.fixture(scope="module")
 def frozen(tmp_path_factory):
-    """One real `freeze` of the shipped corpus, shared by the class below.
+    """§3.1's five lists off the shipped corpus, shared by the class below.
 
-    The `NotImplementedError` is the expected outcome and not a failure to write: `freeze`
-    commits §3.1's lists and then names the stage the last ticket builds.
+    The **tile stage**, not the whole `freeze`. Every claim in the class below is about the
+    lists — their sizes, their nesting, their stratum proportions, their geocells — and running
+    the other four stages to reach them costs 30,000 mask draws and, since #153 wired §3.3's
+    real family in, one live GLO-30 COG read per source granule. `freeze` as a whole is
+    asserted where its network dependency belongs: behind `DEMAE_S3_TEST`, below.
     """
     directory = tmp_path_factory.mktemp("task1")
-    with pytest.raises(NotImplementedError, match="train mask bank"):
-        launch.main(["freeze", "--artifacts-dir", str(directory)])
+    cfg = BenchmarkConfig().replace(
+        paths=BenchmarkConfig().paths.replace(artifacts_dir=str(directory))
+    )
+    tiles.freeze(cfg)
     return directory
 
 
@@ -414,17 +420,40 @@ class TestAgainstTheShippedCorpus:
         assert {cell_of[t] for t in drawn} <= held_out
         assert {split_of[t] for t in drawn} == {"test"}
 
-    def test_a_redraw_reproduces_the_committed_bytes_and_says_what_it_wrote(
-        self, frozen, tmp_path, capsys
-    ):
-        with pytest.raises(NotImplementedError):
-            launch.main(["freeze", "--artifacts-dir", str(tmp_path)])
-        out = capsys.readouterr().out
+    def test_a_redraw_reproduces_the_committed_bytes(self, frozen, tmp_path):
+        cfg = BenchmarkConfig().replace(
+            paths=BenchmarkConfig().paths.replace(artifacts_dir=str(tmp_path))
+        )
+        written = tiles.freeze(cfg)
         for path in frozen.glob("*.csv"):
             md5 = file_md5(path)
             assert file_md5(tmp_path / path.name) == md5, path.name
-            # And the md5 is on screen, which is what the run record quotes the list by.
-            assert md5 in out, path.name
+            # And the md5 the stage reports is the one on disk — it is what the run record
+            # quotes the list by, and `format_written` prints it from this mapping.
+            assert written[path.name] == md5, path.name
+
+
+@pytest.mark.skipif(
+    not (CORPUS_500K / "manifest.parquet").exists()
+    or not Path(dataset_config.SPLIT_BLOCKS_PATH).exists()
+    or not any(Path("data/srtm_voids/num").glob("*.num.zip"))
+    or os.environ.get("DEMAE_S3_TEST") != "1",
+    reason="set DEMAE_S3_TEST=1, with the corpus and #127's granules, to run the whole freeze",
+)
+def test_the_whole_freeze_says_what_it_committed(tmp_path, capsys):
+    """`python -m benchmark.launch freeze` end to end, every stage, at the real budget.
+
+    Opt-in because #153 gave the last stage a live GLO-30 read per source granule, so this is
+    the only test in this file that needs the network. The md5 of every list is asserted to
+    reach the console, which is what the run record quotes each artifact by — a `run` scored
+    against a stale list prints exactly as wide a table as a good one.
+    """
+    with pytest.raises(NotImplementedError, match="train mask bank"):
+        launch.main(["freeze", "--artifacts-dir", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    for path in tmp_path.glob("*.csv"):
+        assert file_md5(path) in out, path.name
 
 
 def test_the_default_ladder_is_the_one_the_config_registers():

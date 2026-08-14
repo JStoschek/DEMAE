@@ -53,6 +53,7 @@ one.
 from __future__ import annotations
 
 import math
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -356,12 +357,59 @@ def read_surface(cell: str, *, open_fn: Callable | None = None) -> np.ndarray:
     post ``(r, c)`` as GLO-30 post ``(r, c)``: 3600x3600, exactly one arc-second, and pixel
     *centres* on whole arc-second multiples. A COG that is any of those things by a half pixel
     would still slice, and every mask would sit half a post off the ground it was cut from.
+
+    The read is **anonymous**, through the corpus's own
+    :data:`dataset.config.AWS_NO_SIGN_ENV` rather than a second copy of the flag — the same
+    environment :class:`dataset.tiling.RasterioCogReader` opens every other Copernicus COG in
+    this repository under. The bucket is public, but GDAL signs with whatever credentials the
+    box happens to hold, and what comes back on a box that has some for something else is a
+    ``SignatureDoesNotMatch`` naming the key rather than the bucket. #153's transplant is the
+    first caller to read a surface outside a test, and the first to hit it.
+
+    It is also **retried**, on the corpus's own :data:`dataset.materialize.READ_ATTEMPTS` and
+    :data:`~dataset.materialize.RETRY_BACKOFF_S`, for the reason that module states beside them:
+    *a transient /vsis3 blip is the common failure and it is not worth a re-run for*. That
+    reason is sharper here than there. A `freeze` reads one of these per source granule, in
+    sequence, ~140 s in aggregate, and a single failed `TIFFReadEncodedTile` two minutes deep
+    would abort the whole stage having already committed the tile lists and the extractor spec
+    — the partly-frozen box `benchmark.launch` exists to not produce. Observed in practice
+    against the live bucket, which is why it is here rather than noted.
+
+    Only the *transport* is retried. Every :class:`LatticeMismatch` below is a statement about
+    the raster and is re-raised on the first attempt: retrying a COG that is the wrong shape
+    would just be three ways of reading the same wrong answer.
     """
-    if open_fn is None:  # pragma: no cover - the network path
-        import rasterio
+    if open_fn is not None:
+        return _read_surface_through(cell, open_fn)
 
-        open_fn = rasterio.open
+    import rasterio  # pragma: no cover - the network path
 
+    from dataset.materialize import READ_ATTEMPTS, RETRY_BACKOFF_S
+
+    last: Exception | None = None
+    for attempt in range(max(1, READ_ATTEMPTS)):
+        try:
+            with rasterio.Env(**dataset_config.AWS_NO_SIGN_ENV):
+                return _read_surface_through(cell, rasterio.open)
+        except LatticeMismatch:
+            raise
+        except Exception as exc:  # noqa: BLE001 — re-raised below with its cause
+            last = exc
+            if attempt + 1 < READ_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+    raise VoidError(
+        f"{cell}: the GLO-30 surface would not read in {READ_ATTEMPTS} attempts ({last}). "
+        f"§3.3 reads one per source granule to band the voids it transplants, so this is the "
+        f"transport rather than the data"
+    ) from last
+
+
+def _read_surface_through(cell: str, open_fn: Callable) -> np.ndarray:
+    """:func:`read_surface`'s body, once, whoever opened the raster.
+
+    Split out so the lattice checks below are the same checks on the network path and on an
+    injected one — a test that drove a second copy of them would assert the copy.
+    """
     origin_lat, origin_lon = cell_origin(cell)
     # The corpus's own stem builder, not a sixth copy of the f-string: a join key with several
     # definitions is a join key waiting to drift (:func:`dataset.geometry.format_cog_stem`).
@@ -390,6 +438,40 @@ def read_surface(cell: str, *, open_fn: Callable | None = None) -> np.ndarray:
 
 
 # --- §5's ruggedness bands ----------------------------------------------------
+
+
+#: All-land, by the corpus's own threshold. p119's ``eligible_pool`` uses it and #153's host
+#: pool has to use the same one: a band edge cut over one population and a band index read for
+#: a tile outside it are two different quantities wearing one name.
+LAND_FRAC_MIN: Final = 0.999
+
+
+def read_manifest_columns(corpus_dir: Path | str, columns: Sequence[str]) -> dict[str, np.ndarray]:
+    """``{name: array}`` for ``columns`` of the corpus manifest.
+
+    Two callers read this file to ask the same question of the same population —
+    :meth:`Bands.from_manifest` cuts the band edges over the eligible pool, and #153's
+    :class:`benchmark.masks.HostPool` picks hosts out of it — so the read is one function for
+    the reason :func:`eligible` is: a second copy of "which columns, and how are they
+    materialised" is a second place for the two to stop describing the same tiles.
+    """
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(Path(corpus_dir) / "manifest.parquet", columns=list(columns))
+    return {
+        name: table.column(name).to_numpy(zero_copy_only=False) for name in table.column_names
+    }
+
+
+def eligible(land_frac: np.ndarray, water_affected: np.ndarray) -> np.ndarray:
+    """p119's ``eligible_pool`` predicate: all-land, water flag clear.
+
+    One home for it, because it is asked twice and about different things — :meth:`Bands.
+    from_manifest` asks it of the pool it cuts quartiles over, and #153's :class:`benchmark.
+    masks.HostPool` asks it of the tiles it transplants onto. Those two have to be the same
+    population or a band index means one thing on the edges and another on the hosts.
+    """
+    return (np.asarray(land_frac) >= LAND_FRAC_MIN) & (~np.asarray(water_affected).astype(bool))
 
 
 @dataclass(frozen=True)
@@ -428,20 +510,11 @@ class Bands:
         cls, corpus_dir: Path | str, *, n_bands: int = N_BANDS, split: str = "test"
     ) -> Bands:
         """p119's ``eligible_pool``, recomputed: the test split, all-land, water-flag clear."""
-        import pyarrow.parquet as pq
-
-        table = pq.read_table(
-            Path(corpus_dir) / "manifest.parquet",
-            columns=["split", "land_frac", "water_affected", "slope_mean"],
+        column = read_manifest_columns(
+            corpus_dir, ["split", "land_frac", "water_affected", "slope_mean"]
         )
-        column = {
-            name: table.column(name).to_numpy(zero_copy_only=False)
-            for name in table.column_names
-        }
-        keep = (
-            (column["split"] == split)
-            & (column["land_frac"] >= 0.999)
-            & (~column["water_affected"].astype(bool))
+        keep = (column["split"] == split) & eligible(
+            column["land_frac"], column["water_affected"]
         )
         pool = column["slope_mean"][keep].astype(float)
         if pool.size == 0:
@@ -533,6 +606,41 @@ def components(
             )
         )
     return tuple(out)
+
+
+def shapes(mask: np.ndarray, components: Iterable[Component]) -> dict[int, np.ndarray]:
+    """Each component's own pixels, cropped to its bounding box, by label.
+
+    This is what #153's transplant pastes, and it is the reason :class:`Component` keeps its
+    ``label`` at all: the geometry a component carries — a centroid and a box — describes a
+    shape without being one, and a family whose whole claim is that the shapes are real cannot
+    be built from a description of them.
+
+    **Masked by label, not sliced.** Bounding boxes overlap; components do not. A crop taken by
+    slicing alone would hand the transplant every void that happens to pass through the box,
+    fused into a single shape — which is not a corruption anything downstream could notice,
+    because a fused pair of real voids looks exactly like a real void.
+
+    One :func:`scipy.ndimage.label` pass over the granule, re-derived here rather than carried
+    out of :func:`components`: the labelling is a function of the mask and this module's one
+    8-connectivity choice, so the two agree by construction rather than by a caller keeping an
+    array alive between them.
+    """
+    from scipy import ndimage
+
+    wanted = sorted({component.label for component in components})
+    if not wanted:
+        return {}
+
+    labelled, found = ndimage.label(mask, structure=_STRUCTURE)
+    boxes = ndimage.find_objects(labelled)
+    if wanted[-1] > found:
+        raise VoidError(
+            f"label {wanted[-1]} was asked for and this mask holds {found} components — the "
+            f"components and the shapes have to come off the same mask, since a label means "
+            f"nothing except as an index into one labelling"
+        )
+    return {label: labelled[boxes[label - 1]] == label for label in wanted}
 
 
 # --- The band, from GLO-30 at the void's own coordinates ----------------------
