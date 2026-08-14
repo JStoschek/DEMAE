@@ -1,0 +1,997 @@
+{
+  "amends": "task1-void-fill-plan.md \u00a77",
+  "arm": "A9",
+  "breakeven_ratio_overstated_by": 200.62831550854295,
+  "budget_usd": 25.0,
+  "device": "mps",
+  "encoder": {
+    "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",
+    "name": "terramind-tokenizer",
+    "normalization": "terramind_v1",
+    "parameters": {
+      "decoder": 196140560,
+      "encoder": 90126336,
+      "quant_proj": 3845,
+      "quantize": 0
+    },
+    "pos_emb": {
+      "adr": "ADR-0011",
+      "anchor": [
+        1,
+        1
+      ],
+      "derivation": "rederived_14x14_crop",
+      "grid_px": 14,
+      "native_grid_px": 16
+    }
+  },
+  "encoder_agreement": {
+    "dtype": "fp32",
+    "identical": true,
+    "max_abs_difference": 0.0,
+    "tiles": 40,
+    "tokens": 196,
+    "width": 768
+  },
+  "encoder_forward_cross_check": {
+    "measured_encode_ms_per_tile_local": 13.53206118756134,
+    "plan_section_7_ms_per_tile": 0.179,
+    "ratio_to_plan": 0.7772599892283318,
+    "transferred_encode_ms_per_tile_host": 0.1391295380718714
+  },
+  "extractor_spec_md5": "20d3039cfafaf3f63668eb244e30e309",
+  "instances": {
+    "plan_section_7_rounds_to": "40k",
+    "real_void": 9978,
+    "synthetic": 30000,
+    "total": 39978
+  },
+  "issue": 163,
+  "map": 145,
+  "measured": {
+    "batch_sweep": [
+      {
+        "batch": 1,
+        "decode_seconds_per_instance": 3.8789947499899426,
+        "distinct_tiles": 1,
+        "encode_seconds_per_instance": 0.02566833299351856,
+        "seconds_per_instance": 3.904663082983461,
+        "seconds_per_instance_median": 4.79703079200408,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.23316743906562928,
+          "max": 6.9994726669974625,
+          "mean": 5.026265966793289,
+          "median": 4.79703079200408,
+          "median_over_min": 1.228538977641774,
+          "min": 3.904663082983461,
+          "n": 5,
+          "stdev": 1.1719615635399205
+        },
+        "trials": 5
+      },
+      {
+        "batch": 2,
+        "decode_seconds_per_instance": 3.3013671250009793,
+        "distinct_tiles": 2,
+        "encode_seconds_per_instance": 0.025968791494960897,
+        "seconds_per_instance": 3.3413114584982395,
+        "seconds_per_instance_median": 3.6094683129995246,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.03926036313976939,
+          "max": 3.6268772084949887,
+          "mean": 3.5160279793999507,
+          "median": 3.6094683129995246,
+          "median_over_min": 1.0802549710890492,
+          "min": 3.3413114584982395,
+          "n": 5,
+          "stdev": 0.13804053528083168
+        },
+        "trials": 5
+      },
+      {
+        "batch": 4,
+        "decode_seconds_per_instance": 3.0087065417501435,
+        "distinct_tiles": 4,
+        "encode_seconds_per_instance": 0.01780063525075093,
+        "seconds_per_instance": 3.0265071770008944,
+        "seconds_per_instance_median": 3.0569364582515846,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.02283175403234809,
+          "max": 3.2049189792523975,
+          "mean": 3.0820828854004505,
+          "median": 3.0569364582515846,
+          "median_over_min": 1.010054257092773,
+          "min": 3.0265071770008944,
+          "n": 5,
+          "stdev": 0.07036935834677277
+        },
+        "trials": 5
+      },
+      {
+        "batch": 8,
+        "decode_seconds_per_instance": 2.842270062501484,
+        "distinct_tiles": 8,
+        "encode_seconds_per_instance": 0.014524593751048087,
+        "seconds_per_instance": 2.856794656252532,
+        "seconds_per_instance_median": 2.9135879896239203,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.00872438818886906,
+          "max": 2.916060427123739,
+          "mean": 2.8989521093502844,
+          "median": 2.9135879896239203,
+          "median_over_min": 1.0198800894726847,
+          "min": 2.856794656252532,
+          "n": 5,
+          "stdev": 0.02529158354291267
+        },
+        "trials": 5
+      },
+      {
+        "batch": 16,
+        "decode_seconds_per_instance": 2.7502212448125647,
+        "distinct_tiles": 16,
+        "encode_seconds_per_instance": 0.014253026061851415,
+        "seconds_per_instance": 2.7646674010629795,
+        "seconds_per_instance_median": 2.7908522083125717,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.028956450292224527,
+          "max": 2.9639976562493757,
+          "mean": 2.819556515624754,
+          "median": 2.7908522083125717,
+          "median_over_min": 1.0094712323223851,
+          "min": 2.7646674010629795,
+          "n": 5,
+          "stdev": 0.08164434809080598
+        },
+        "trials": 5
+      },
+      {
+        "batch": 32,
+        "decode_seconds_per_instance": 2.7175661510623286,
+        "distinct_tiles": 32,
+        "encode_seconds_per_instance": 0.01353206118756134,
+        "seconds_per_instance": 2.73109821224989,
+        "seconds_per_instance_median": 2.887260931000128,
+        "seconds_per_instance_spread": {
+          "coefficient_of_variation": 0.05133529486321117,
+          "max": 3.087373098968783,
+          "mean": 2.871084665631133,
+          "median": 2.887260931000128,
+          "median_over_min": 1.0571794591823158,
+          "min": 2.73109821224989,
+          "n": 5,
+          "stdev": 0.14738797788741828
+        },
+        "trials": 5
+      }
+    ],
+    "control": {
+      "batch": 8,
+      "drift_max_over_min": 1.104031808038644,
+      "runs": [
+        {
+          "batch": 8,
+          "milliseconds_per_instance_per_step": 59.8777796874856,
+          "phase": "start",
+          "seconds_per_instance": 0.598777796874856,
+          "timesteps": 10
+        },
+        {
+          "batch": 8,
+          "milliseconds_per_instance_per_step": 56.71045937506278,
+          "phase": "after_per_tile",
+          "seconds_per_instance": 0.5671045937506278,
+          "timesteps": 10
+        },
+        {
+          "batch": 8,
+          "milliseconds_per_instance_per_step": 56.94379843753268,
+          "phase": "after_batch_sweep",
+          "seconds_per_instance": 0.5694379843753268,
+          "timesteps": 10
+        },
+        {
+          "batch": 8,
+          "milliseconds_per_instance_per_step": 62.50158385009855,
+          "phase": "after_timestep_sweep",
+          "seconds_per_instance": 0.6250158385009854,
+          "timesteps": 10
+        },
+        {
+          "batch": 8,
+          "milliseconds_per_instance_per_step": 56.61212239992892,
+          "phase": "after_image_size_sweep",
+          "seconds_per_instance": 0.5661212239992892,
+          "timesteps": 10
+        }
+      ],
+      "spread": {
+        "coefficient_of_variation": 0.04446746746527179,
+        "max": 0.6250158385009854,
+        "mean": 0.5852914875002171,
+        "median": 0.5694379843753268,
+        "median_over_min": 1.005858745857657,
+        "min": 0.5661212239992892,
+        "n": 5,
+        "stdev": 0.026026430178116434
+      },
+      "timesteps": 10
+    },
+    "determinism": {
+      "seeded_is_reproducible": true,
+      "seeded_max_abs_difference": 0.0,
+      "timesteps": 2,
+      "unseeded_max_abs_difference": 0.004824161529541016
+    },
+    "image_size_sweep": [
+      {
+        "ascending_then_descending": [
+          3.1065043072503613,
+          2.833644145874132
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 2.833644145874132,
+        "image_size": 224,
+        "is_decode_quant_default": false,
+        "matches_tile": true,
+        "output_px": [
+          224,
+          224
+        ],
+        "trials": 2
+      },
+      {
+        "ascending_then_descending": [
+          3.9083167447497544,
+          3.533616890625126
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 3.533616890625126,
+        "image_size": 256,
+        "is_decode_quant_default": true,
+        "matches_tile": false,
+        "output_px": [
+          256,
+          256
+        ],
+        "trials": 2
+      }
+    ],
+    "per_tile": [
+      {
+        "decode_seconds": 4.440815875001135,
+        "encode_seconds": 0.11976041700108908,
+        "index": 0
+      },
+      {
+        "decode_seconds": 4.681404083996313,
+        "encode_seconds": 0.12475775000348222,
+        "index": 1
+      },
+      {
+        "decode_seconds": 4.8135254999942845,
+        "encode_seconds": 0.03485841699875891,
+        "index": 2
+      },
+      {
+        "decode_seconds": 5.498572000011336,
+        "encode_seconds": 0.1389505840052152,
+        "index": 3
+      },
+      {
+        "decode_seconds": 5.354073875001632,
+        "encode_seconds": 0.1829814999946393,
+        "index": 4
+      },
+      {
+        "decode_seconds": 5.247690041986061,
+        "encode_seconds": 0.16617799999949057,
+        "index": 5
+      },
+      {
+        "decode_seconds": 5.990787875009119,
+        "encode_seconds": 0.17257700000482146,
+        "index": 6
+      },
+      {
+        "decode_seconds": 4.750630249996902,
+        "encode_seconds": 0.14403412499814294,
+        "index": 7
+      },
+      {
+        "decode_seconds": 5.028477083003963,
+        "encode_seconds": 0.15814762499940116,
+        "index": 8
+      },
+      {
+        "decode_seconds": 4.682891999997082,
+        "encode_seconds": 0.15222925000125542,
+        "index": 9
+      },
+      {
+        "decode_seconds": 4.184927833994152,
+        "encode_seconds": 0.1287429170042742,
+        "index": 10
+      },
+      {
+        "decode_seconds": 4.006114208998042,
+        "encode_seconds": 0.11581195800681598,
+        "index": 11
+      },
+      {
+        "decode_seconds": 4.060664707998512,
+        "encode_seconds": 0.02438550000078976,
+        "index": 12
+      },
+      {
+        "decode_seconds": 3.969760749998386,
+        "encode_seconds": 0.0245481669990113,
+        "index": 13
+      },
+      {
+        "decode_seconds": 3.9211277080030413,
+        "encode_seconds": 0.024650874998769723,
+        "index": 14
+      },
+      {
+        "decode_seconds": 3.9639531659922795,
+        "encode_seconds": 0.02477766599622555,
+        "index": 15
+      },
+      {
+        "decode_seconds": 4.28945191699313,
+        "encode_seconds": 0.024279749995912425,
+        "index": 16
+      },
+      {
+        "decode_seconds": 4.648688834000495,
+        "encode_seconds": 0.024552791990572587,
+        "index": 17
+      },
+      {
+        "decode_seconds": 5.0487492910033325,
+        "encode_seconds": 0.02999554100097157,
+        "index": 18
+      },
+      {
+        "decode_seconds": 5.200801499988302,
+        "encode_seconds": 0.031920458990498446,
+        "index": 19
+      },
+      {
+        "decode_seconds": 5.029144625004847,
+        "encode_seconds": 0.028969209000933915,
+        "index": 20
+      },
+      {
+        "decode_seconds": 5.6606000419997144,
+        "encode_seconds": 0.14318716699199285,
+        "index": 21
+      },
+      {
+        "decode_seconds": 4.990761958004441,
+        "encode_seconds": 0.13096987499739043,
+        "index": 22
+      },
+      {
+        "decode_seconds": 5.9750291670061415,
+        "encode_seconds": 0.13342154199199285,
+        "index": 23
+      },
+      {
+        "decode_seconds": 4.605903250005213,
+        "encode_seconds": 0.14025695800955873,
+        "index": 24
+      },
+      {
+        "decode_seconds": 4.584927832998801,
+        "encode_seconds": 0.12472383299609646,
+        "index": 25
+      },
+      {
+        "decode_seconds": 4.83031279098941,
+        "encode_seconds": 0.1500282079941826,
+        "index": 26
+      },
+      {
+        "decode_seconds": 5.5380045829952,
+        "encode_seconds": 0.1506360829953337,
+        "index": 27
+      },
+      {
+        "decode_seconds": 4.432121582998661,
+        "encode_seconds": 0.1295701659983024,
+        "index": 28
+      },
+      {
+        "decode_seconds": 4.587727874997654,
+        "encode_seconds": 0.02492300000449177,
+        "index": 29
+      },
+      {
+        "decode_seconds": 5.290646166991792,
+        "encode_seconds": 0.19857441699423362,
+        "index": 30
+      },
+      {
+        "decode_seconds": 4.938912291007,
+        "encode_seconds": 0.1322165000019595,
+        "index": 31
+      },
+      {
+        "decode_seconds": 4.625459666989627,
+        "encode_seconds": 0.11883045900322031,
+        "index": 32
+      },
+      {
+        "decode_seconds": 4.594693459002883,
+        "encode_seconds": 0.1238936249865219,
+        "index": 33
+      },
+      {
+        "decode_seconds": 4.509973958003684,
+        "encode_seconds": 0.026827166002476588,
+        "index": 34
+      },
+      {
+        "decode_seconds": 4.451577416999498,
+        "encode_seconds": 0.12539841698890086,
+        "index": 35
+      },
+      {
+        "decode_seconds": 4.061914332996821,
+        "encode_seconds": 0.10765337500197347,
+        "index": 36
+      },
+      {
+        "decode_seconds": 3.9914402080030413,
+        "encode_seconds": 0.024971124992589466,
+        "index": 37
+      },
+      {
+        "decode_seconds": 3.971685166005045,
+        "encode_seconds": 0.024333667010068893,
+        "index": 38
+      },
+      {
+        "decode_seconds": 3.914543834005599,
+        "encode_seconds": 0.025281000009272248,
+        "index": 39
+      }
+    ],
+    "per_tile_decode": {
+      "coefficient_of_variation": 0.12138808137528151,
+      "max": 5.990787875009119,
+      "mean": 4.7092122176993145,
+      "median": 4.637074250495061,
+      "median_over_min": 1.184575891119892,
+      "min": 3.914543834005599,
+      "n": 40,
+      "stdev": 0.5716422358955543
+    },
+    "per_tile_encode": {
+      "coefficient_of_variation": 0.597908955595669,
+      "max": 0.19857441699423362,
+      "mean": 0.09782015212404076,
+      "median": 0.12430872899130918,
+      "median_over_min": 5.119852099475364,
+      "min": 0.024279749995912425,
+      "n": 40,
+      "stdev": 0.05848754499269468
+    },
+    "plateau": {
+      "batch": 32,
+      "decode_seconds_per_instance": 2.7175661510623286,
+      "distinct_tiles": 32,
+      "encode_seconds_per_instance": 0.01353206118756134,
+      "seconds_per_instance": 2.73109821224989,
+      "seconds_per_instance_median": 2.887260931000128,
+      "seconds_per_instance_spread": {
+        "coefficient_of_variation": 0.05133529486321117,
+        "max": 3.087373098968783,
+        "mean": 2.871084665631133,
+        "median": 2.887260931000128,
+        "median_over_min": 1.0571794591823158,
+        "min": 2.73109821224989,
+        "n": 5,
+        "stdev": 0.14738797788741828
+      },
+      "trials": 5
+    },
+    "timestep_sweep": [
+      {
+        "ascending_then_descending": [
+          0.2823531978756364,
+          0.3130276927495288
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 0.2823531978756364,
+        "milliseconds_per_instance_per_step": 56.47063957512728,
+        "timesteps": 5,
+        "trials": 2
+      },
+      {
+        "ascending_then_descending": [
+          0.5649359479994018,
+          0.6363074999990204
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 0.5649359479994018,
+        "milliseconds_per_instance_per_step": 56.49359479994018,
+        "timesteps": 10,
+        "trials": 2
+      },
+      {
+        "ascending_then_descending": [
+          1.1290159738746297,
+          1.259311499999967
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 1.1290159738746297,
+        "milliseconds_per_instance_per_step": 56.450798693731485,
+        "timesteps": 20,
+        "trials": 2
+      },
+      {
+        "ascending_then_descending": [
+          2.8833708125002886,
+          3.108510484375074
+        ],
+        "batch": 8,
+        "decode_seconds_per_instance": 2.8833708125002886,
+        "milliseconds_per_instance_per_step": 57.66741625000577,
+        "timesteps": 50,
+        "trials": 2
+      }
+    ],
+    "warmup_seconds": 4.750780874994234
+  },
+  "plan_section_7_placeholder": {
+    "gpu_hours": 11.1,
+    "seconds_per_instance": 1.0,
+    "status": "unpriced"
+  },
+  "projection": {
+    "device_ratio_5090_over_local": 97.26231665177356,
+    "host_gpu_hours": 0.310280210737679,
+    "host_usd": 0.12460853263225188,
+    "instances": 39978,
+    "local_gpu_hours": 30.17857210754716,
+    "per_instance_seconds_local": 2.7175661510623286,
+    "usd_per_hour": 0.4016
+  },
+  "projection_conservative": {
+    "device_ratio_5090_over_local": 86.81247272044013,
+    "host_gpu_hours": 0.34762944956919273,
+    "host_usd": 0.1396079869469878,
+    "instances": 39978,
+    "local_gpu_hours": 30.17857210754716,
+    "per_instance_seconds_local": 2.7175661510623286,
+    "usd_per_hour": 0.4016
+  },
+  "projection_including_encode": {
+    "device_ratio_5090_over_local": 97.26231665177356,
+    "host_gpu_hours": 0.31182524425796704,
+    "host_usd": 0.12522901809399956,
+    "instances": 39978,
+    "local_gpu_hours": 30.328845647035028,
+    "per_instance_seconds_local": 2.73109821224989,
+    "usd_per_hour": 0.4016
+  },
+  "projection_priced": "decode only; \u00a77's inference line already bills every scored pass's encoder forward, and A9 is one of the 38",
+  "selection": {
+    "per_stratum": 2,
+    "rule": "p134's: evenly-spaced, all-land, test-split, per stratum"
+  },
+  "sensitivity": [
+    {
+      "device_ratio_5090_over_local": 97.26231665177356,
+      "host_gpu_hours": 0.310280210737679,
+      "host_usd": 0.12460853263225188,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 1.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    },
+    {
+      "device_ratio_5090_over_local": 48.63115832588678,
+      "host_gpu_hours": 0.620560421475358,
+      "host_usd": 0.24921706526450377,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 2.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    },
+    {
+      "device_ratio_5090_over_local": 19.45246333035471,
+      "host_gpu_hours": 1.5514010536883949,
+      "host_usd": 0.6230426631612594,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 5.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    },
+    {
+      "device_ratio_5090_over_local": 9.726231665177355,
+      "host_gpu_hours": 3.1028021073767897,
+      "host_usd": 1.246085326322519,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 10.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    },
+    {
+      "device_ratio_5090_over_local": 4.863115832588678,
+      "host_gpu_hours": 6.2056042147535795,
+      "host_usd": 2.492170652645038,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 20.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    },
+    {
+      "device_ratio_5090_over_local": 0.9726231665177356,
+      "host_gpu_hours": 31.028021073767896,
+      "host_usd": 12.460853263225188,
+      "instances": 39978,
+      "local_gpu_hours": 30.17857210754716,
+      "per_instance_seconds_local": 2.7175661510623286,
+      "ratio_overstated_by": 100.0,
+      "usd_per_hour": 0.4016,
+      "within_budget": true
+    }
+  ],
+  "tile_px": 224,
+  "tiles": [
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 69.595458984375,
+      "lon": 33.528888888888886,
+      "split": "test",
+      "stratum_id": 0,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E033_00_DEM_1792_1792"
+    },
+    {
+      "lat": -86.09333333333333,
+      "local_relief_metres": 176.480224609375,
+      "lon": -164.3111111111111,
+      "split": "test",
+      "stratum_id": 0,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W165_00_DEM_224_136"
+    },
+    {
+      "lat": 0.2222222222222222,
+      "local_relief_metres": 1469.50732421875,
+      "lon": 30.031111111111112,
+      "split": "test",
+      "stratum_id": 1,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_2688_0"
+    },
+    {
+      "lat": -9.653333333333332,
+      "local_relief_metres": 969.0143966674805,
+      "lon": 159.84,
+      "split": "test",
+      "stratum_id": 1,
+      "tile_id": "Copernicus_DSM_COG_10_S10_00_E159_00_DEM_2240_2912"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 30.819580078125,
+      "lon": 33.715555555555554,
+      "split": "test",
+      "stratum_id": 2,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E033_00_DEM_1120_2464"
+    },
+    {
+      "lat": -85.15555555555555,
+      "local_relief_metres": 64.81800079345703,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 2,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_448_136"
+    },
+    {
+      "lat": 0.5333333333333333,
+      "local_relief_metres": 88.5596923828125,
+      "lon": 32.96888888888889,
+      "split": "test",
+      "stratum_id": 3,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E032_00_DEM_1568_3376"
+    },
+    {
+      "lat": -87.28,
+      "local_relief_metres": 52.81396484375,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 3,
+      "tile_id": "Copernicus_DSM_COG_10_S88_00_W163_00_DEM_896_136"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 121.0345458984375,
+      "lon": 30.653333333333332,
+      "split": "test",
+      "stratum_id": 4,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1120_2240"
+    },
+    {
+      "lat": -86.21777777777778,
+      "local_relief_metres": 152.475830078125,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 4,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_672_136"
+    },
+    {
+      "lat": 0.40888888888888886,
+      "local_relief_metres": 45.88671875,
+      "lon": 36.59111111111111,
+      "split": "test",
+      "stratum_id": 5,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E036_00_DEM_2016_2016"
+    },
+    {
+      "lat": -85.21777777777778,
+      "local_relief_metres": 19.590957641601562,
+      "lon": -161.3111111111111,
+      "split": "test",
+      "stratum_id": 5,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W162_00_DEM_672_136"
+    },
+    {
+      "lat": 6.346666666666667,
+      "local_relief_metres": 209.648681640625,
+      "lon": 38.46666666666667,
+      "split": "test",
+      "stratum_id": 6,
+      "tile_id": "Copernicus_DSM_COG_10_N06_00_E038_00_DEM_2240_1568"
+    },
+    {
+      "lat": -85.52888888888889,
+      "local_relief_metres": 375.478271484375,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 6,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W169_00_DEM_1792_136"
+    },
+    {
+      "lat": 0.6577777777777778,
+      "local_relief_metres": 102.48779296875,
+      "lon": 35.34222222222222,
+      "split": "test",
+      "stratum_id": 7,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E035_00_DEM_1120_1120"
+    },
+    {
+      "lat": -88.03111111111112,
+      "local_relief_metres": 16.78076171875,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 7,
+      "tile_id": "Copernicus_DSM_COG_10_S89_00_W169_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 47.9974365234375,
+      "lon": 32.404444444444444,
+      "split": "test",
+      "stratum_id": 8,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E032_00_DEM_0_1344"
+    },
+    {
+      "lat": -85.40444444444445,
+      "local_relief_metres": 124.90512084960938,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 8,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.5333333333333333,
+      "local_relief_metres": 179.599609375,
+      "lon": 30.466666666666665,
+      "split": "test",
+      "stratum_id": 9,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1568_1568"
+    },
+    {
+      "lat": -86.40444444444445,
+      "local_relief_metres": 122.310546875,
+      "lon": -167.3111111111111,
+      "split": "test",
+      "stratum_id": 9,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W168_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 638.814208984375,
+      "lon": 34.59111111111111,
+      "split": "test",
+      "stratum_id": 10,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E034_00_DEM_0_2016"
+    },
+    {
+      "lat": -86.46666666666667,
+      "local_relief_metres": 552.4906005859375,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 10,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_1568_136"
+    },
+    {
+      "lat": 0.72,
+      "local_relief_metres": 176.86279296875,
+      "lon": 35.46666666666667,
+      "split": "test",
+      "stratum_id": 11,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E035_00_DEM_896_1568"
+    },
+    {
+      "lat": -88.03111111111112,
+      "local_relief_metres": 19.424560546875,
+      "lon": 56.68888888888889,
+      "split": "test",
+      "stratum_id": 11,
+      "tile_id": "Copernicus_DSM_COG_10_S89_00_E056_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 159.6055908203125,
+      "lon": 30.90222222222222,
+      "split": "test",
+      "stratum_id": 12,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_0_3136"
+    },
+    {
+      "lat": -86.09333333333333,
+      "local_relief_metres": 408.391357421875,
+      "lon": -166.3111111111111,
+      "split": "test",
+      "stratum_id": 12,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W167_00_DEM_224_136"
+    },
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 119.809814453125,
+      "lon": 30.52888888888889,
+      "split": "test",
+      "stratum_id": 13,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1792_1792"
+    },
+    {
+      "lat": -86.15555555555555,
+      "local_relief_metres": 145.824462890625,
+      "lon": -168.3111111111111,
+      "split": "test",
+      "stratum_id": 13,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W169_00_DEM_448_136"
+    },
+    {
+      "lat": 0.5955555555555556,
+      "local_relief_metres": 203.32275390625,
+      "lon": 30.404444444444444,
+      "split": "test",
+      "stratum_id": 14,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1344_1344"
+    },
+    {
+      "lat": -86.40444444444445,
+      "local_relief_metres": 185.8641357421875,
+      "lon": -165.3111111111111,
+      "split": "test",
+      "stratum_id": 14,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W166_00_DEM_1344_136"
+    },
+    {
+      "lat": 0.8444444444444444,
+      "local_relief_metres": 325.3201904296875,
+      "lon": 31.52888888888889,
+      "split": "test",
+      "stratum_id": 15,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E031_00_DEM_448_1792"
+    },
+    {
+      "lat": -86.03111111111112,
+      "local_relief_metres": 376.9835205078125,
+      "lon": -163.3111111111111,
+      "split": "test",
+      "stratum_id": 15,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W164_00_DEM_0_136"
+    },
+    {
+      "lat": 0.9688888888888889,
+      "local_relief_metres": 55.8653564453125,
+      "lon": 30.466666666666665,
+      "split": "test",
+      "stratum_id": 16,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_0_1568"
+    },
+    {
+      "lat": -86.34222222222222,
+      "local_relief_metres": 74.114501953125,
+      "lon": -161.3111111111111,
+      "split": "test",
+      "stratum_id": 16,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W162_00_DEM_1120_136"
+    },
+    {
+      "lat": 0.09777777777777774,
+      "local_relief_metres": 55.4278564453125,
+      "lon": 30.093333333333334,
+      "split": "test",
+      "stratum_id": 17,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_3136_224"
+    },
+    {
+      "lat": -85.21777777777778,
+      "local_relief_metres": 107.69825744628906,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 17,
+      "tile_id": "Copernicus_DSM_COG_10_S86_00_W163_00_DEM_672_136"
+    },
+    {
+      "lat": 0.9066666666666666,
+      "local_relief_metres": 99.7950439453125,
+      "lon": 30.342222222222222,
+      "split": "test",
+      "stratum_id": 18,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_224_1120"
+    },
+    {
+      "lat": -86.46666666666667,
+      "local_relief_metres": 64.13916015625,
+      "lon": -162.3111111111111,
+      "split": "test",
+      "stratum_id": 18,
+      "tile_id": "Copernicus_DSM_COG_10_S87_00_W163_00_DEM_1568_136"
+    },
+    {
+      "lat": 0.47111111111111115,
+      "local_relief_metres": 1546.65966796875,
+      "lon": 30.031111111111112,
+      "split": "test",
+      "stratum_id": 19,
+      "tile_id": "Copernicus_DSM_COG_10_N00_00_E030_00_DEM_1792_0"
+    },
+    {
+      "lat": 49.72,
+      "local_relief_metres": 1072.30029296875,
+      "lon": 91.28,
+      "split": "test",
+      "stratum_id": 19,
+      "tile_id": "Copernicus_DSM_COG_10_N49_00_E091_00_DEM_896_896"
+    }
+  ],
+  "timesteps": 50,
+  "transfer": {
+    "batch_matched": true,
+    "conservative_floor": 86.81247272044013,
+    "geometric_mean": 97.26231665177356,
+    "measured_at_batch": 32,
+    "requested_batch": 32,
+    "source": "p120-primitive-costs.json",
+    "spread": 1.0992667468973454,
+    "usd_per_hour": 0.4016,
+    "vit_b": 101.97557315742847,
+    "vit_s": 92.76690434351093
+  },
+  "versions": {
+    "diffusers": "0.39.0",
+    "numpy": "2.5.1",
+    "terratorch": "1.2.10",
+    "timm": "1.0.28",
+    "torch": "2.13.0"
+  }
+}
