@@ -669,13 +669,27 @@ def built(tmp_path_factory):
     """One real `python -m benchmark.launch freeze`, both families, off the live bucket.
 
     The `NotImplementedError` is the expected outcome and not a failure to write: `freeze`
-    commits §3.1's lists, the extractor spec and the eval mask list, then names #151's stage.
+    commits §3.1's lists, the extractor spec, the eval mask list and #151's train mask bank,
+    then names #154's stage.
+
+    K is held to 1 and the bank pointed somewhere temporary: this fixture runs every stage, and
+    §3.2's K = 50 over 20,000 head-train tiles is 1,000,000 draws and twenty minutes, written to
+    `paths.mask_bank_path`, which defaults to a real location under `data/`. The bank's own
+    shape is `tests/test_benchmark_bank.py`'s.
     """
     directory = tmp_path_factory.mktemp("task1-real")
+    bank = tmp_path_factory.mktemp("task1-real-bank") / "train_mask_bank.parquet"
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
-        with pytest.raises(NotImplementedError, match="train mask bank"):
-            launch.main(["freeze", "--artifacts-dir", str(directory)])
+        with pytest.raises(NotImplementedError, match="dataset card"):
+            launch.main(
+                [
+                    "freeze",
+                    "--artifacts-dir", str(directory),
+                    "--set", "masks.bank_draws_per_tile=1",
+                    "--set", f'paths.mask_bank_path="{bank}"',
+                ]
+            )
     return directory, said.getvalue()
 
 

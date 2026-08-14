@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmark import launch, prereg
+from benchmark import launch, masks, prereg
+from benchmark.artifacts import MASK_BANK_SIDECAR_NAME
 from benchmark.config import BenchmarkConfig
 
 PLAN = Path(__file__).resolve().parents[1] / prereg.PLAN_PATH
@@ -38,6 +39,12 @@ FROZEN = {
     "extractor_spec.json": b"{}",
     "task1-prereg-bar.json": b"{}",
 }
+
+#: The one committed input `run` reads rather than merely resolves (#151). The bank itself is
+#: 104 MB and out of git, so what `run` checks is this file against the bytes at
+#: ``paths.mask_bank_path`` — which means a frozen box here has to carry a sidecar that agrees
+#: with its stand-in bank, rather than another opaque blob.
+BANK = b"one million rle rows, allegedly"
 
 
 @pytest.fixture
@@ -59,12 +66,27 @@ def flags(box):
     ]
 
 
+def write_sidecar(box, **moved):
+    """The bank sidecar `run` checks, describing :data:`BANK` unless a test moves a field."""
+    committed = {
+        **masks.BankDraw.of(BenchmarkConfig(), tiles=20_000).to_dict(),
+        "draw_hash": "0" * 32,
+        "md5": hashlib.md5(BANK).hexdigest(),
+        "size_bytes": len(BANK),
+        **moved,
+    }
+    path = box / "artifacts" / MASK_BANK_SIDECAR_NAME
+    path.write_text(json.dumps(committed, sort_keys=True, indent=2) + "\n")
+    return path
+
+
 @pytest.fixture
 def frozen(box):
     """The same box after a `freeze` that this ticket does not implement."""
     for name, body in FROZEN.items():
         (box / "artifacts" / name).write_bytes(body)
-    (box / "bank.parquet").write_bytes(b"one million rle rows, allegedly")
+    (box / "bank.parquet").write_bytes(BANK)
+    write_sidecar(box)
     return box
 
 
@@ -328,3 +350,37 @@ def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):
     # nothing to score against, and the message is the command that fixes it.
     with pytest.raises(FileNotFoundError, match="benchmark.launch freeze"):
         launch.main(["run", *flags])
+
+
+# --- The one input that is committed as a hash --------------------------------
+
+
+def test_a_run_refuses_a_bank_whose_md5_has_moved_rather_than_reading_it(frozen, flags):
+    """§3.4's sidecar doing the only job it has, through the command (#151).
+
+    The bank is the one committed input `run` *reads* rather than merely resolves: 104 MB cannot
+    go in git, so presence proves nothing and the md5 is the whole contract. Every way this goes
+    wrong is silent — a head trained against a re-drawn bank converges normally — so it is a
+    refusal, and it lands before the arm's checkpoint is even looked at.
+    """
+    (frozen / "bank.parquet").write_bytes(b"a different million rows")
+    with pytest.raises(ValueError, match="md5"):
+        launch.main(["run", *flags])
+
+
+def test_a_run_refuses_a_bank_frozen_under_a_different_generator_config(frozen, flags):
+    # The mid-change state the md5 alone would miss: the sidecar has moved and the old bank is
+    # still on disk, so what says the two artifacts disagree is §3.4's generator config hash.
+    write_sidecar(frozen, artifact_hash="not the hash this run carries")
+    with pytest.raises(ValueError, match="artifact_hash|one generator config hash"):
+        launch.main(["run", *flags])
+
+
+def test_the_bank_and_its_sidecar_resolve_as_two_inputs(frozen, flags, capsys):
+    # On a box that has the sidecar and not the 104 MB, "freeze first" is the wrong advice and
+    # "regenerate from the sidecar" is the right one — so the resolution line distinguishes them.
+    (frozen / "bank.parquet").unlink()
+    launch.main(["run", "--dry-run", *flags])
+    out = capsys.readouterr().out
+    assert "mask bank" in out and "not frozen" in out
+    assert MASK_BANK_SIDECAR_NAME in out

@@ -37,7 +37,7 @@ from . import arms, prereg
 from .config import BenchmarkConfig
 
 #: What `freeze` writes into ``paths.artifacts_dir``. The train mask bank is **not** here — it
-#: is 740 MB and lives under ``paths.mask_bank_path``, committed as a hash rather than as bytes
+#: is 104 MB and lives under ``paths.mask_bank_path``, committed as a hash rather than as bytes
 #: (§3.4).
 TILE_LIST_NAMES: Final = {
     "20k": "head_train_tiles.csv",
@@ -57,6 +57,15 @@ TEST_TILES_NAME: Final = "test_tiles.csv"
 #: and this module resolves it, and a writer and a resolver disagreeing about a name would
 #: produce a `run` reporting "not frozen yet" about a file `freeze` had just written.
 EVAL_MASKS_NAME: Final = "eval_masks.parquet"
+
+#: §3.4's train mask bank, as the only thing about it that can be committed. The bank itself is
+#: 1,000,000 RLE rows and **104 MB** as the zstd parquet `freeze` writes it, and it lives at
+#: ``paths.mask_bank_path``, out of git on the same
+#: rule the corpus's shards follow rather than on any size threshold. This file holds its md5,
+#: its draw hash and the generator config hash, and `run` refuses a bank whose md5 has moved
+#: rather than reading it. Named here for the reason the rest are: :mod:`benchmark.masks` writes
+#: it and this module resolves it.
+MASK_BANK_SIDECAR_NAME: Final = "train_mask_bank.json"
 
 
 def file_md5(path: Path | str | None) -> str | None:
@@ -214,6 +223,16 @@ class Resolution:
         """This arm's encoder, or ``None`` for the two arms that run none (A1 and A7)."""
         return None if self.arm.encoder is None else arms.ENCODERS[self.arm.encoder]
 
+    def reads(self, key: str) -> bool:
+        """Does this arm read the committed input filed under ``key``?
+
+        The same arm-aware question :attr:`missing` asks, exposed for the checks that go
+        *beyond* presence. §3.4's bank is the one input whose being on this box is not enough —
+        it is committed as an md5 rather than as bytes — and the arm that does not read it must
+        not be refused for a sidecar it has no use for.
+        """
+        return any(item.key == key and item.required for item in self.inputs)
+
     @property
     def missing(self) -> tuple[str, ...]:
         """The committed inputs **this arm reads** that `freeze` has not written yet, by label.
@@ -366,7 +385,9 @@ class Resolution:
 #: A set rather than a branch inside :func:`_required_for` so the membership is one readable
 #: line: the question "does A1 need the mask bank?" is answered by looking, which is the property
 #: that matters when the answer decides whether the benchmark's first number can be produced.
-TRAINING_ONLY_INPUTS: Final = frozenset({"head_train_tiles", "val_tiles", "mask_bank"})
+TRAINING_ONLY_INPUTS: Final = frozenset(
+    {"head_train_tiles", "val_tiles", "mask_bank", "mask_bank_sidecar"}
+)
 
 
 def _required_for(key: str, arm: arms.Arm) -> bool:
@@ -435,7 +456,12 @@ def resolve(cfg: BenchmarkConfig, arm: arms.Arm | None = None) -> Resolution:
         "val_tiles": ("val list", directory / VAL_TILES_NAME),
         "test_tiles": ("test list", directory / TEST_TILES_NAME),
         "eval_masks": ("eval masks", directory / EVAL_MASKS_NAME),
+        # The bank and the file that says what the bank should be, resolved as two inputs
+        # because on a given box they are two states: the sidecar is in git and always present
+        # on a frozen tree, and the 104 MB it describes may not be. Which of them is missing is
+        # the difference between "freeze first" and "regenerate the bank from the sidecar".
         "mask_bank": ("mask bank", cfg.paths.mask_bank_path),
+        "mask_bank_sidecar": ("bank sidecar", directory / MASK_BANK_SIDECAR_NAME),
         "extractor_spec": ("extractor spec", directory / "extractor_spec.json"),
         "prereg_bar": ("prereg bar", directory / prereg.BAR_NAME),
     }

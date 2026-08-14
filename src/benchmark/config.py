@@ -535,7 +535,7 @@ class Paths(_Frozen):
     #: Where the committed inputs live: the four tile lists, the eval mask list, the extractor
     #: spec, the pre-registration bar and the dataset card.
     artifacts_dir: str = "artifacts/task1"
-    #: §3.4 — 1,000,000 RLE rows at ~740 MB, which **cannot** be committed, on the same rule the
+    #: §3.4 — 1,000,000 RLE rows and 104 MB, which **cannot** be committed, on the same rule the
     #: corpus's shards follow. `freeze` generates it, its md5 and generator config hash are
     #: committed in a sidecar, and `run` refuses a bank whose md5 has moved. The determinism
     #: contract is preserved — the mask sequence a run sees is still a committed input, its
