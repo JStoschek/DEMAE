@@ -1507,8 +1507,8 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 | Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
 | Inference over the eval instances | 37 passes x **40k** | 4.4 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it. 37 is the 38 scored passes below minus A1, which runs no encoder |
 | A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
-| **GPU total** | | **145.1 min = 2.42 h** | **$0.97** at $0.4016/hr *(was 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147))* |
-| **A9 (TerraMind full tokenizer)** | **40k** instances | **unpriced** | diffusion decode; at 1 s/instance it is 11.1 GPU-h, 4.5x the whole table above. **§7 is not final until this is measured.** |
+| **GPU total** | | **163.7 min = 2.73 h** | **$1.09** at $0.4016/hr — **145.1 min / $0.97 for the lines above, plus A9's 18.6 min / $0.12 below**, which was outside this total for as long as it was unpriced *(was 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147), still excluding A9)* |
+| **A9 (TerraMind full tokenizer)** | **40k** instances | **18.6** | **Measured 2026-08-13 — [p163](p163-a9-decode-cost.md) ([#163](https://github.com/JStoschek/DEMAE/issues/163)).** Diffusion decode is **2.72 s/instance** on this laptop at TerraMind's own 50 timesteps, **0.31 GPU-h = $0.12** transferred at p120's ratio. Prices the *decode only* — the encoder forward is already in the inference line above, and A9 is one of its 38 passes. **The row read `unpriced`, at a guessed 1 s/instance = 11.1 GPU-h**; that guess overstates the line by 36x and is the wrong side of the device, since 1 s/instance would make the 5090 2.7x slower than the laptop this was measured on |
 | Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
 | Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **33 min** | 2.00 ms/draw averaged over the six (family, bucket) cells — 0.037 ms for a rectangle, 8.86 ms for a large blob. **Drawn on the fly instead this line would be 19.1 CPU-h**, since §7's own counts total 34.4M training tile presentations ([#121](https://github.com/JStoschek/DEMAE/issues/121)). **The 34.4M predates §2.3's rewrite** and is not re-derived here — see the note below the table |
 
@@ -1524,10 +1524,24 @@ passes, *even though R4 was added*. ViT-S gave back more than R4 took. #117's st
 that attention and wall-clock are the real budget is what this line measures; the dollar column
 is not.
 
-**The budget is not a constraint and should stop being treated as one.** At $0.99 of GPU
+**The budget is not a constraint and should stop being treated as one.** At $1.09 of GPU
 against a $25 target — the CPU hours are the project's own laptop, not rent — no line here justifies a spot-instance strategy or a resume design;
 #117's standing note that *attention and wall-clock are the real budget* is now measured
-rather than asserted. The one number that could still move the total is A9's.
+rather than asserted.
+
+**Every line is now measured** ([#163](https://github.com/JStoschek/DEMAE/issues/163),
+2026-08-13). A9 was the last open one, and this section used to end by saying so. It closes at
+**$0.12** — 11% of the GPU program rather than the 4.5x its placeholder implied — and it closes
+with room that is not worth re-checking: p120's local-to-5090 transfer would have to overstate
+that card by **201x** before A9 alone reached $25. See [p163](p163-a9-decode-cost.md) §8 for the
+sensitivity table and for what the transfer is worth, which is the same caveat p120 §3 states and
+inherits its weaker case, A9's decoder being a UNet.
+
+Two things [p163](p163-a9-decode-cost.md) found that are **not** budget items and belong to
+whoever runs the pass: `decode_quant` sizes its output raster from the decoder's 256 px training
+resolution and takes no hint from the 14x14 latent, so the default call returns a **256 px raster
+for a 224 px tile**, silently — and the decode is **stochastic unless a `generator` is passed**,
+which for a single-pass, no-seed arm means unreproducible rather than merely noisy.
 
 **Why no feature cache** (the §4.1 amendment, priced): precomputing frozen features is
 *cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
