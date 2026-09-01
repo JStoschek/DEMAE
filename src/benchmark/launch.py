@@ -30,14 +30,18 @@ sidecar git carries in its place. #158 made ``run`` real for **A1**: §2.4's cla
 over the committed eval mask list, both of §8's norm-inversion gates, and the rows and run
 record that come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
-The two verbs that are still short of their stage raise past the work they have, and name what
-has not been built — deliberately, because a verb that quietly returned 0 having done part of
-its job is precisely the shape of failure this module exists to prevent, and it is the shape
+#169 made ``report`` real: the 396-number printed table, the 66-cell C4 rank block and §9's
+three figures, rendered from the results parquet and printing nothing R5 does not permit it to
+print. It re-runs no arm, which is what makes it free to re-render.
+
+``freeze`` is the one verb still short of its stage. It raises past the work it has and names
+what has not been built — deliberately, because a verb that quietly returned 0 having done part
+of its job is precisely the shape of failure this module exists to prevent, and it is the shape
 that survived four tickets in Phase 1. It matters more once a verb writes real files than it did
 when none did: a ``freeze`` that lands three of five artifacts and exits 0 is read as a frozen
-box. ``run`` returns 0 now because it finishes what it starts *for the arm it was asked for*;
-an arm whose input convention has no implementation yet names its own ticket rather than
-returning quietly (:data:`benchmark.evaluate.FILLERS`).
+box. ``run`` and ``report`` return 0 because they finish what they start — ``run`` *for the arm
+it was asked for*, and an arm whose input convention has no implementation yet names its own
+ticket rather than returning quietly (:data:`benchmark.evaluate.FILLERS`).
 
 ## Why the resolution line is printed before anything is spent
 
@@ -55,7 +59,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles
+from . import arms, artifacts, evaluate, extract, masks, prereg, report, results, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -95,10 +99,10 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     )
 
 
-#: The three verbs take one resolution and return an exit code. ``run`` is the first one that
-#: does (#158) — `freeze` still stops short of §3.4's train mask bank and `report` renders
-#: nothing yet, so those two are annotated ``NoReturn`` and say which stage is missing. The
-#: uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
+#: The three verbs take one resolution and return an exit code. ``run`` was the first one
+#: that did (#158) and `report` is the last (#169); `freeze` still stops short of §3.4's
+#: train mask bank, so it is the one annotated ``NoReturn`` and names the stage that is
+#: missing. The uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
 
 
 def _freeze(resolution: Resolution) -> NoReturn:
@@ -242,14 +246,21 @@ def _run(resolution: Resolution) -> int:
     return 0
 
 
-def _report(resolution: Resolution) -> NoReturn:
-    """`report` — render the table from the results parquet, re-running no arm."""
-    _unbuilt(
-        "report",
-        "renders nothing yet",
-        "the 396-number printed table, the 66-cell C4 rank block and the three figures, read "
-        "from the results parquet and printing nothing R5 does not permit it to print (#136)",
-    )
+def _report(resolution: Resolution) -> int:
+    """`report` — render the table from the results parquet, re-running no arm (#169).
+
+    The one verb that reads no committed input except the registered bar and writes nothing into
+    ``artifacts_dir``. It is a **pure function of the results parquet** and the run records
+    beside it (#136's "computed and printed are different questions"), which is what makes
+    re-rendering free: a reviewer asking a question the table's shape did not anticipate is
+    asking it of a file that already holds the answer, not of a rented box.
+
+    Unlike `run` it takes no cell. The table is every printed arm at the headline size, so
+    ``--arm``/``--size``/``--seed`` would name a cell the render does not have — what it renders
+    is whatever the parquet holds, and a row nobody has scored says so in its own cells.
+    """
+    report.render(resolution.config)
+    return 0
 
 
 #: The whole command surface. A fourth verb is an argparse refusal, and a second entry point
