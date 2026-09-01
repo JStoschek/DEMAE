@@ -1,0 +1,11 @@
+{
+  "artifact_hash": "7f10087cf89ff129",
+  "columns": "tile_id,epoch,family,bucket,mask_rle,seed",
+  "draw_hash": "003a10ab2c88ec2de7ddd4085301eca1",
+  "draws_per_tile": 50,
+  "generator": "benchmark.masks-v1",
+  "md5": "a433de5b527efb326efc8c7d68665caf",
+  "rows": 1000000,
+  "size_bytes": 103653977,
+  "tiles": 20000
+}
