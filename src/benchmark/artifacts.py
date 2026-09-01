@@ -311,6 +311,15 @@ class Resolution:
             f"(N, {extract.tokens}, {encoder.width}), {extract.reference_dtype} reference / "
             f"{extract.compute_dtype} compute, valid = {extract.valid_mask}"
         )
+        if self.arm.trains == "head":
+            # §4.1's frozen recipe, printed before anything is spent, for the same reason the
+            # checkpoint md5 is: a head trained at a moved learning rate converges normally and
+            # prints a row exactly as wide as a good one. Deferred import — this module is on
+            # A1's torch-free path and `benchmark.tune` reaches `benchmark.train`.
+            from . import head, tune
+
+            lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")
+            lines.extend(tune.format_frozen(self.config.head))
         return lines
 
     def input_lines(self) -> list[str]:

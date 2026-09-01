@@ -265,9 +265,12 @@ def test_the_parameter_counts_are_a_pair_and_never_a_single_number():
     assert arms.parameter_counts(arms.get("A1")) == {"total": 0, "trainable": 0}
     # A2 is zero-shot over a counted encoder: total known, trainable exactly zero.
     assert arms.parameter_counts(arms.get("A2-R5")) == {"total": 85_254_144, "trainable": 0}
-    # The head does not exist yet (#159), and a count this registry guessed would print as a
-    # measurement — so it is `None` rather than 1,180,000.
-    assert arms.parameter_counts(arms.get("A4-R5"))["trainable"] is None
+    # #159 built the head, so A4's trainable half is counted rather than `None`. A3's decoder
+    # and A7's UNet are still their own tickets, and a count this registry guessed would print
+    # as a measurement — so those stay `None`.
+    assert arms.parameter_counts(arms.get("A4-R5"))["trainable"] == 1_181_089
+    assert arms.parameter_counts(arms.get("A3-R5"))["trainable"] is None
+    assert arms.parameter_counts(arms.get("A7"))["trainable"] is None
 
 
 def test_a_rerun_of_the_same_cell_replaces_its_rows_and_appends_its_record(box, flags):
@@ -461,11 +464,11 @@ def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_nam
     """
     assert set(evaluate.FILLERS) == set(arms.INPUT_CONVENTIONS)
 
-    for convention, filler in evaluate.FILLERS.items():
-        if convention == "classical_fill":
-            continue
+    # `a1_fill_plus_mask` was built by #159 and is no longer one of these — it refuses for a
+    # different reason (no trained head), asserted in `tests/test_benchmark_head.py`.
+    for convention in ("token_drop", "a1_fill_through_tokenizer"):
         with pytest.raises(NotImplementedError, match=f"{convention}.*not built") as exc:
-            filler(None, None, None)
+            evaluate.FILLERS[convention](None, None, None, None)
         assert "#" in str(exc.value), f"{convention} does not name the ticket that builds it"
 
 

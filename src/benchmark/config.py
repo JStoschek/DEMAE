@@ -372,6 +372,55 @@ class Head(_Frozen):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} {getattr(self, name)} must be >= 1")
 
+    @property
+    def tuned(self) -> dict[str, Any]:
+        """The knobs :mod:`benchmark.tune`'s one pass is allowed to move, and their values.
+
+        A subset rather than the whole object, because the three seed *counts* beside them are
+        not hyperparameters — they are how many observations §4.1 asks for, and moving one is a
+        different kind of change from moving the learning rate. The guard
+        (:func:`benchmark.tune.assert_frozen`) reads this and nothing else, so a smoke run at
+        ``head.seeds=1`` is not mistaken for a thumb on the scale and ``--set head.lr=3e-4`` is.
+        """
+        return {name: getattr(self, name) for name in TUNED_FIELDS}
+
+
+#: What "tuned once, on A6, using val only, then frozen for every arm" ranges over. Everything
+#: §4.1 states as a *recipe* number — the architecture's two width knobs, the loss's shape and
+#: its 0.1 slope weight, and the whole optimizer block — and nothing that is a count of
+#: observations.
+TUNED_FIELDS: Final = (
+    "proj_dim",
+    "stage_dims",
+    "loss",
+    "slope_weight",
+    "optimizer",
+    "lr",
+    "weight_decay",
+    "decay",
+    "warmup_frac",
+    "precision",
+    "batch_size",
+    "epochs",
+    "early_stop_metric",
+)
+
+#: **The** head recipe — the frozen result of §4.1's one tuning pass (#159).
+#:
+#: A module-level singleton rather than a fresh :class:`Head` per config, and the identity is the
+#: point: :attr:`BenchmarkConfig.head` defaults to *this object*, so A4, A5, A6 and A7 do not
+#: merely agree about the learning rate, they load the same one. "Tuned once, on A6, using val
+#: only, and then frozen for every arm" is a claim about the benchmark, and the cheapest way to
+#: make it checkable was to make it a claim about an object a test can compare with ``is``.
+#:
+#: The values are §4.1's own cited defaults. That is what the tuning pass *selects from* rather
+#: than a placeholder for what it will produce: :func:`benchmark.tune.tune` searches
+#: :data:`benchmark.tune.GRID` around them on A6/val, writes what it found to
+#: ``head_tuning.json``, and :func:`benchmark.tune.assert_frozen` refuses any later run whose
+#: recipe has drifted from what that artifact selected. So a tuning pass that moves a knob moves
+#: it *here*, in one committed line, and every arm afterwards loads the moved one.
+TUNED_HEAD: Final = Head()
+
 
 # --- §4.2 The DEMAE native fine-tune ------------------------------------------
 
@@ -580,6 +629,44 @@ class Paths(_Frozen):
                 )
 
 
+# --- The box this runs on -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Runtime(_Frozen):
+    """What the box does, as opposed to what the benchmark computes (#159).
+
+    **Environment, not recipe**, and marked so — none of it reaches
+    :attr:`BenchmarkConfig.config_hash`. §11's argument carried down one level: a rented A10 and
+    this laptop compute the same head from the same recipe, and a hash that moved with the device
+    string would read every relaunch as a recipe change. What *is* recipe is in :class:`Head`,
+    and the seed that separates a cell's three runs is a top-level scalar.
+
+    Nothing here may change a number. ``device`` and ``loader_workers`` change how long a cell
+    takes; ``checkpoint_dir`` changes where the per-epoch state lands. A knob that would change a
+    score belongs in :class:`Head` and therefore in the hash — ``precision`` is the near miss,
+    and it is in :class:`Head` for exactly that reason.
+    """
+
+    #: ``auto`` resolves to CUDA, then MPS, then CPU — see :func:`benchmark.train.resolve_device`.
+    #: Named values are taken literally, so a box that has CUDA can still be asked for CPU.
+    device: str = "auto"
+    #: Dataloader worker processes. §7 measures head training as **4.1x loader-bound** — the A1
+    #: fill of each banked void is the cost, not the frozen forward — so this is the knob that
+    #: decides whether a GPU sits idle, and it is the reason this group exists at all.
+    loader_workers: int = 4
+    #: Where per-epoch head checkpoints land. Not committed and not in git: they are 4.7 MB each
+    #: and the artifact a cell produces is its parquet rows (§7's "heads checkpoint per epoch
+    #: like everything else in this repo and that is the whole of it").
+    checkpoint_dir: str = "data/task1/heads"
+
+    def __post_init__(self) -> None:
+        if self.loader_workers < 0:
+            raise ValueError(f"loader_workers {self.loader_workers} must be >= 0")
+        if not self.device:
+            raise ValueError("runtime.device is a torch device string, or 'auto'")
+
+
 # --- The config ---------------------------------------------------------------
 
 _GROUPS: Final = {
@@ -590,6 +677,7 @@ _GROUPS: Final = {
     "finetune": Finetune,
     "unet": Unet,
     "extract": Extract,
+    "runtime": Runtime,
     "paths": Paths,
 }
 
@@ -629,10 +717,14 @@ class BenchmarkConfig(_Frozen):
     tiles: Tiles = field(default_factory=Tiles)
     masks: Masks = field(default_factory=Masks)
     fill: Fill = field(default_factory=Fill)
-    head: Head = field(default_factory=Head)
+    #: §4.1's head recipe. ``default`` rather than ``default_factory`` **on purpose**: every
+    #: config that does not override a head knob holds :data:`TUNED_HEAD` itself, so the frozen
+    #: recipe is one object rather than eleven equal copies. See that constant.
+    head: Head = field(default=TUNED_HEAD)
     finetune: Finetune = field(default_factory=Finetune)
     unet: Unet = field(default_factory=Unet)
     extract: Extract = field(default_factory=Extract)
+    runtime: Runtime = field(default_factory=Runtime, metadata=ENVIRONMENT)
     paths: Paths = field(default_factory=Paths, metadata=ENVIRONMENT)
 
     def __post_init__(self) -> None:

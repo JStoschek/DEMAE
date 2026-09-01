@@ -30,6 +30,14 @@ sidecar git carries in its place. #158 made ``run`` real for **A1**: §2.4's cla
 over the committed eval mask list, both of §8's norm-inversion gates, and the rows and run
 record that come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
+#159 made ``run`` **train**. An arm whose trainable part is §4.1's head — A4, A5, A6 — is a
+train-then-score cell: :mod:`benchmark.train` fits :mod:`benchmark.head` against the committed
+train mask bank, early-stops on §3.1's val draw, and hands the pass the weights it kept. It also
+gave ``run`` its one mode, ``--tune``: §4.1's single hyperparameter search, on A6, over val,
+which writes ``head_tuning.json`` and deliberately scores nothing (:mod:`benchmark.tune`). Every
+later cell's head recipe is refused if it has drifted from the line that search froze, which is
+what "no thumb lands on the scale" is, as a mechanism.
+
 The two verbs that are still short of their stage raise past the work they have, and name what
 has not been built — deliberately, because a verb that quietly returned 0 having done part of
 its job is precisely the shape of failure this module exists to prevent, and it is the shape
@@ -55,7 +63,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles
+from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles, train, tune
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -95,13 +103,14 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     )
 
 
-#: The three verbs take one resolution and return an exit code. ``run`` is the first one that
-#: does (#158) — `freeze` still stops short of §3.4's train mask bank and `report` renders
-#: nothing yet, so those two are annotated ``NoReturn`` and say which stage is missing. The
-#: uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
+#: The three verbs take one resolution and the parsed arguments, and return an exit code. ``run``
+#: is the first one that does (#158) — `freeze` still stops short of §3.4's dataset card and
+#: `report` renders nothing yet, so those two are annotated ``NoReturn`` and say which stage is
+#: missing. The uniform parameters are what keep :data:`VERBS` a table rather than a cascade;
+#: ``args`` joined them at #159, which gave `run` a mode (``--tune``) rather than a knob.
 
 
-def _freeze(resolution: Resolution) -> NoReturn:
+def _freeze(resolution: Resolution, args: argparse.Namespace) -> NoReturn:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only.
 
     All five are built, and the order is each ticket's own argument rather than the order they
@@ -174,7 +183,7 @@ def _freeze(resolution: Resolution) -> NoReturn:
     )
 
 
-def _run(resolution: Resolution) -> int:
+def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     """`run` — execute exactly one (arm, size, seed) cell, having refused a box it cannot.
 
     §4.5's step 2, and the first verb that produces a number. The order below is the argument:
@@ -193,7 +202,21 @@ def _run(resolution: Resolution) -> int:
 
     A1's numbers gate everything else (§4.5, user story 29), so the arms that are not built name
     their ticket rather than failing as an unknown key — :data:`benchmark.evaluate.FILLERS`.
+
+    Two refusals were added ahead of all of it at #159, and they are ahead of it because they are
+    about the **recipe** rather than about the box: a cell whose head hyperparameters have drifted
+    from §4.1's frozen ones, and a ``--tune`` asked for an arm that is not the neutral one. Both
+    belong beside the config-typo refusal, not after a 104 MB hash.
     """
+    # §4.1's "tuned once, then frozen for every arm", enforced before anything is stat'd, let
+    # alone spent — it is a fact about the recipe, so it belongs beside the config-typo refusal
+    # rather than after a 104 MB hash. Asked only of the arms that train a head: A1 and A7 have
+    # no §4.1 recipe to have drifted from.
+    if args.tune:
+        tune.assert_tuning_arm(resolution.config)
+    if resolution.arm.trains == "head":
+        tune.assert_frozen(resolution.config)
+
     missing = resolution.missing
     if missing:
         raise FileNotFoundError(
@@ -217,7 +240,29 @@ def _run(resolution: Resolution) -> int:
         )
 
     cfg = resolution.config
-    scored = evaluate.run_pass(cfg, resolution.arm)
+    trained = None
+    if resolution.arm.trains == "head":
+        if args.tune:
+            return _tune(resolution)
+        trained = train.train_head(
+            cfg, resolution.arm, on_epoch=lambda line: print(f"{'':<16} {line.line()}")
+        )
+        for line in train.format_trained(trained):
+            print(line)
+
+    # The trained head carries the encoder it was trained over, so the pass scores against the
+    # object the val curve was measured on rather than a second load of the same file.
+    learned = (
+        None
+        if trained is None
+        else evaluate.Learned(
+            arm=resolution.arm.name,
+            predict=trained.predict,
+            batch_size=cfg.head.batch_size,
+            detail=trained.to_dict(),
+        )
+    )
+    scored = evaluate.run_pass(cfg, resolution.arm, learned=learned)
     print(f"\n{'gates':<16} {evaluate.format_gates(scored.gates)}")
 
     rows = results.rows_from(
@@ -236,13 +281,37 @@ def _run(resolution: Resolution) -> int:
         seconds=scored.seconds,
         parameters=arms.parameter_counts(resolution.arm),
         gates=scored.gates,
+        training=None if trained is None else trained.to_dict(),
     )
     for line in results.format_written(path, rows=len(rows), total=total, record=record):
         print(line)
     return 0
 
 
-def _report(resolution: Resolution) -> NoReturn:
+def _tune(resolution: Resolution) -> int:
+    """`run --arm A6 --tune` — §4.1's one tuning pass, and the record it leaves (#159).
+
+    Scores nothing, and says so. The pass selects a recipe on **val**; A6's own primary cells are
+    three ordinary `run --arm A6 --seed {0,1,2}` invocations afterwards, at the full 50 epochs.
+    Folding the two together would have made the tuning pass produce a printed row, which is the
+    one thing a val-only selection must not do.
+    """
+    cfg = resolution.config
+    tuning = tune.tune(cfg, on_point=lambda point: print(f"{'':<16} {point.line()}"))
+    written = tune.write_tuning(cfg, tuning)
+    print()
+    for line in tuning.lines():
+        print(line)
+    print(f"{'wrote':<16} {written}")
+    print(
+        f"{'scored':<16} nothing — the tuning pass reads val only. A6's own primary cells are "
+        f"`run --arm {tune.TUNING_ARM} --seed {{0,1,2}}` at §4.1's full "
+        f"{cfg.head.epochs} epochs"
+    )
+    return 0
+
+
+def _report(resolution: Resolution, args: argparse.Namespace) -> NoReturn:
     """`report` — render the table from the results parquet, re-running no arm."""
     _unbuilt(
         "report",
@@ -273,6 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="assemble the config, the artifacts, the extractor and the arm; write nothing",
         )
+        # Set for every verb so `args.tune` is answerable without asking which one ran; only
+        # `run` offers the flag that moves it.
+        sub.set_defaults(tune=False)
         return sub
 
     add("freeze", "write every committed input (CPU-only; reads GLO-30 for §3.3)")
@@ -286,6 +358,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--size", default=None, help=f"label-efficiency subset: {list(LABEL_EFFICIENCY_SIZES)}"
     )
     run.add_argument("--seed", type=int, default=None, help="§4.1's seed for this cell")
+    # A mode rather than a knob: it does not change what a cell *is*, it changes whether this
+    # command produces one. Only `run` has it, and only on `--arm A6` does it do anything but
+    # refuse (§4.1, #159).
+    run.add_argument(
+        "--tune",
+        action="store_true",
+        help=f"§4.1's one tuning pass, on {tune.TUNING_ARM}, over val — writes "
+        f"{tune.TUNING_NAME} and scores nothing",
+    )
     add("report", "render the printed table, the C4 rank block and the three figures")
     return parser
 
@@ -298,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print("\n--dry-run: nothing was written")
         return 0
-    return VERBS[args.verb](resolution)
+    return VERBS[args.verb](resolution, args)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

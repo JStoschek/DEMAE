@@ -503,28 +503,39 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     misreading.
 
     ``None`` is *not counted here yet*, and it is deliberate on :attr:`Encoder.params`' own rule:
-    a count this registry guessed would print as a measurement. Three cases are genuinely known
+    a count this registry guessed would print as a measurement. Four cases are genuinely known
     and are returned as numbers:
 
     * **an arm with no encoder that trains nothing** — A1's classical interpolation, which has no
       parameters at all, so both counts are a true 0 rather than an unknown;
     * **an arm that trains nothing over a counted encoder** — A2 zero-shot, whose total is the
       encoder's and whose trainable half is exactly 0;
-    * **the trainable half of any inference-only arm**, which is 0 whatever its encoder costs.
+    * **the trainable half of any inference-only arm**, which is 0 whatever its encoder costs;
+    * **an arm that trains §4.1's head over a counted encoder** — A4, A5 and A6, whose trainable
+      half is :func:`benchmark.head.parameter_count` at that encoder's width and whose total is
+      that plus the frozen encoder. #159 built the head, so these stopped being ``None``.
 
-    Everything else waits on the module that builds the trainable part — the shared head (#159),
-    A3's decoder, A7's UNet (#162) — and reports ``None`` until then rather than a plausible
-    number nothing measured. `run` records whatever is known, so A1's row carries its pair today
-    and A4's fills in when the head exists.
+    What still waits on its own module is A3's fine-tuned decoder and A7's UNet (#162), and both
+    report ``None`` until then rather than a plausible number nothing measured. `run` records
+    whatever is known, so A1's row carries its pair today and A3's fills in when its arm exists.
     """
+    from . import head  # deferred: `benchmark.head` reads `benchmark.config`, which reads this
+
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
     trainable = 0 if arm.is_inference_only else None
+    if arm.trains == "head" and encoder is not None:
+        # Torch-free arithmetic over §4.1's four stage dimensions — see `head.parameter_count`.
+        # The width is the *only* thing that differs between A4, A5 and A6 here, which is the
+        # same sentence C1 rests on, arriving as a number.
+        trainable = head.parameter_count(encoder.width)
     if encoder is None:
         # A1 and A7. A1 trains nothing and runs no encoder, so it genuinely has none; A7 trains
         # a UNet this registry does not count.
         total = 0 if arm.is_inference_only else None
     elif arm.is_inference_only:
         total = encoder.params
+    elif arm.trains == "head" and encoder.params is not None:
+        total = encoder.params + trainable
     else:
         total = None
     return {"total": total, "trainable": trainable}

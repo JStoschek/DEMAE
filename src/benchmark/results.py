@@ -285,6 +285,7 @@ def run_record(
     parameters: Mapping[str, int | None],
     metrics: Sequence[str],
     gates: Mapping[str, Any] | None = None,
+    training: Mapping[str, Any] | None = None,
 ) -> dict:
     """The provenance payload a results table is answerable to.
 
@@ -314,6 +315,11 @@ def run_record(
             "metrics": list(metrics),
         },
         "gates": dict(gates or {}),
+        # The training half, for the arms that have one (#159): the head's parameter count, the
+        # epoch val selected, the checkpoint holding it, and the committed lists the pass read.
+        # `{}` for A1 and every inference-only arm, which is a different fact from "not recorded"
+        # and reads as one because `parameters` above is already `None`-for-unknown.
+        "training": dict(training or {}),
     }
 
 
@@ -366,6 +372,7 @@ def write(
     seconds: float,
     parameters: Mapping[str, int | None],
     gates: Mapping[str, Any] | None = None,
+    training: Mapping[str, Any] | None = None,
 ) -> tuple[Path, int, dict]:
     """Land one cell: the rows into the parquet, the record beside it. Returns both plus totals.
 
@@ -382,6 +389,7 @@ def write(
         parameters=parameters,
         metrics=metrics,
         gates=gates,
+        training=training,
     )
     append_run_record(record, run_record_path(path))
     return path, total, record

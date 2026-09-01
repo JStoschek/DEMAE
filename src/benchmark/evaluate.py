@@ -14,15 +14,21 @@ lets the results file be tested without a corpus and the pass be tested without 
 is emphatically not here is a ``main``: `launch` is the only entry point (ADR-0009), and this
 module is documented as **not a way to produce a result** exactly as ``pretrain.train`` is.
 
-## A1 today, a table tomorrow
+## Two conventions today, a table tomorrow
 
 :data:`FILLERS` dispatches on the arm's **input convention** rather than on its name, because
 that is the field §1's table actually varies: ``classical_fill`` is A1 and is built here;
-``a1_fill_plus_mask``, ``token_drop`` and ``a1_fill_through_tokenizer`` are the three the later
-arm tickets attach to, and each names its own ticket when asked for rather than failing as an
-unknown key. Dispatching on the convention is also what makes §2.4's residual rule expressible
-later without a second pass: three of the four conventions *begin* with the fill this one
-produces.
+``a1_fill_plus_mask`` is A4, A5 and A6's frozen-encoder-plus-head and arrived with #159;
+``token_drop`` and ``a1_fill_through_tokenizer`` are the two the later arm tickets attach to,
+and each names its own ticket when asked for rather than failing as an unknown key. Dispatching
+on the convention is what made §2.4's residual rule expressible without a second pass, and it is
+why A4, A5 and A6 are one entry rather than three: what differs between them is the encoder the
+registry names, which this module never asks about.
+
+The head is **not built here**. A learned cell is train-then-score, and what crosses into this
+module is :class:`Learned` — a callable and a batch size — so that the pass scores the weights
+the training run early-stopped rather than a fresh head, and so that A1's scoring path still
+imports no torch.
 
 ## Reading tiles without torch
 
@@ -58,9 +64,9 @@ looks normal (§8's risk row):
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Mapping, Sequence
 
 import numpy as np
 
@@ -181,15 +187,75 @@ def bands_for(cfg: BenchmarkConfig) -> voids.Bands:
 # --- The arm's fill -----------------------------------------------------------
 
 
-def _classical_fill(tile: Tile, void: np.ndarray, cfg: BenchmarkConfig) -> np.ndarray:
+@dataclass(frozen=True)
+class Learned:
+    """A trained arm's inference half, handed to the pass rather than built by it (#159).
+
+    :mod:`benchmark.train` assembles this — the frozen encoder, the trained head, the device —
+    and `launch` passes it in. This module deliberately does **not** import that one: the eval
+    pass is torch-free for A1 (§3.4), and a scoring path that imported a training module to score
+    a classical interpolation would have made that untrue for the sake of one type annotation.
+    What crosses the seam is a callable and a batch size.
+
+    ``predict`` has :func:`benchmark.train.predict`'s signature — raw int16 tiles and boolean
+    voids in, one float32 fill in metres per instance out — and it is the *same function the
+    training loop scored its val set with*. That identity is the whole reason the head is passed
+    in already trained rather than rebuilt here.
+    """
+
+    #: The registered arm this was trained for, checked against the pass's own arm.
+    arm: str
+    #: ``(raw_i16, voids, cfg) -> [filled]``. See above.
+    predict: Callable[[Sequence[np.ndarray], Sequence[np.ndarray], BenchmarkConfig], list]
+    #: How many instances go through one encoder forward. §4.1's training batch by default,
+    #: because the eval pass runs the identical composition and a frozen forward has no reason
+    #: to be narrower here than it was there.
+    batch_size: int = 1
+    #: What the run record says about the head behind this — :meth:`benchmark.train.Trained.to_dict`.
+    detail: Mapping[str, Any] = field(default_factory=dict)
+
+
+def _classical_fill(
+    tiles: Sequence[Tile],
+    voids: Sequence[np.ndarray],
+    cfg: BenchmarkConfig,
+    learned: Learned | None,
+) -> list[np.ndarray]:
     """A1 — §2.4's classical interpolation over the raw metres the shard holds."""
-    return fill.fill(tile.raw_i16, void, recipe=cfg.fill)
+    return [fill.fill(tile.raw_i16, void, recipe=cfg.fill) for tile, void in zip(tiles, voids)]
 
 
-def _unbuilt(convention: str, what: str, ticket: str) -> Callable[..., np.ndarray]:
+def _head_fill(
+    tiles: Sequence[Tile],
+    voids: Sequence[np.ndarray],
+    cfg: BenchmarkConfig,
+    learned: Learned | None,
+) -> list[np.ndarray]:
+    """A4, A5 and A6 — the A1 fill plus §4.1's head residual, inside the void (§2.4, #159).
+
+    The head is **not** built here. A cell of this convention is *train, then score*, and the
+    thing scored has to be the object the training pass early-stopped: a pass that instantiated
+    a fresh head at eval time would score a zero-output head, which by construction scores
+    exactly A1 — the quietest possible way for a whole arm to be wrong.
+    """
+    if learned is None:
+        raise NotImplementedError(
+            "an `a1_fill_plus_mask` cell is train-then-score and this pass was handed no "
+            "trained head. `benchmark.launch` trains one (§4.1, #159) and passes it in; a pass "
+            "reached any other way has nothing to score but A1 wearing another arm's name"
+        )
+    return learned.predict([tile.raw_i16 for tile in tiles], voids, cfg)
+
+
+def _unbuilt(convention: str, what: str, ticket: str) -> Callable[..., list[np.ndarray]]:
     """A convention that is registered and not yet built, saying which ticket builds it."""
 
-    def refuse(tile: Tile, void: np.ndarray, cfg: BenchmarkConfig) -> np.ndarray:
+    def refuse(
+        tiles: Sequence[Tile],
+        voids: Sequence[np.ndarray],
+        cfg: BenchmarkConfig,
+        learned: Learned | None,
+    ) -> list[np.ndarray]:
         raise NotImplementedError(
             f"the {convention!r} input convention is not built: {what} ({ticket}). A1 runs "
             f"first and its numbers gate every learned arm, because each of them is a residual "
@@ -203,11 +269,15 @@ def _unbuilt(convention: str, what: str, ticket: str) -> Callable[..., np.ndarra
 #: Complete rather than partial, so an unbuilt arm names its ticket instead of failing as a
 #: missing key, and so that adding a convention to the registry without building it is a visible
 #: gap here rather than a `KeyError` on a rented box.
-FILLERS: Final[dict[str, Callable[[Tile, np.ndarray, BenchmarkConfig], np.ndarray]]] = {
+#:
+#: Every filler takes and returns a **batch**. One instance at a time is what A1 wants and what
+#: keeps its memory flat; one encoder forward per instance is not what the frozen arms want, and
+#: a table whose signature could only express the first would have made the second a second pass.
+FILLERS: Final[
+    dict[str, Callable[[Sequence[Tile], Sequence[np.ndarray], BenchmarkConfig, Any], list]]
+] = {
     "classical_fill": _classical_fill,
-    "a1_fill_plus_mask": _unbuilt(
-        "a1_fill_plus_mask", "the §4.1 shared head over a frozen encoder", "#159, #160, #161"
-    ),
+    "a1_fill_plus_mask": _head_fill,
     "token_drop": _unbuilt(
         "token_drop", "DEMAE's native MAE inpainting path", "#160's zero-shot and fine-tuned arms"
     ),
@@ -435,20 +505,16 @@ def read_instances(cfg: BenchmarkConfig) -> list[Instance]:
     return instances
 
 
-def score_instance(
-    tile: Tile,
-    instance: Instance,
-    cfg: BenchmarkConfig,
-    *,
-    arm: arms.Arm,
-    bands: voids.Bands,
-    bar: prereg.Bar,
-) -> Scored:
-    """One instance, end to end: decode the mask, fill it, score it, and say what it was.
+def decode_void(tile: Tile, instance: Instance, cfg: BenchmarkConfig) -> np.ndarray:
+    """The committed RLE for this instance, decoded and checked against §3.2's area cap.
 
-    The band comes off the **tile's** ``slope_mean`` rather than the void's own terrain, on
-    :class:`benchmark.voids.Bands`' rule: the bands describe the ground a void sits on, so a band
-    index means the same thing here as it does for every other tile in the corpus.
+    Separate from the scoring below because the two happen at different rhythms once an arm
+    batches: every instance in a batch is decoded and checked before any of them is filled, and
+    the cap is a **polarity guard** that has to fire before a fill rather than after one.
+
+    `freeze` checks every draw against this cap and never trims, so a committed mask over it did
+    not come from the generator: an inverted decode is the way that happens, and it turns a 3%
+    void into a 97% one, which scores a plausible table nothing refuses.
     """
     void = masks.decode_rle(instance.mask_rle)
     if void.shape != tile.raw_i16.shape:
@@ -456,10 +522,6 @@ def score_instance(
             f"the committed mask for {instance.tile_id} decodes to {void.shape} and the tile is "
             f"{tile.raw_i16.shape}"
         )
-    # §3.2's area cap, re-checked on the *decoded* mask — the polarity guard the identity gate
-    # cannot be. `freeze` checks every draw against this cap and never trims, so a committed mask
-    # over it did not come from the generator: an inverted decode is the way that happens, and it
-    # turns a 3% void into a 97% one, which scores a plausible table nothing refuses.
     area = int(void.sum())
     cap = cfg.masks.max_area_frac * void.size
     if area > cap:
@@ -470,7 +532,25 @@ def score_instance(
             f"`freeze` and none is ever trimmed, so this mask did not come from the generator — "
             f"the usual cause is a decode that inverted the void"
         )
-    filled = FILLERS[arm.input_convention](tile, void, cfg)
+    return void
+
+
+def score_filled(
+    tile: Tile,
+    instance: Instance,
+    void: np.ndarray,
+    filled: np.ndarray,
+    *,
+    bands: voids.Bands,
+    bar: prereg.Bar,
+) -> Scored:
+    """One arm's fill for one instance, scored, and said what it was.
+
+    The band comes off the **tile's** ``slope_mean`` rather than the void's own terrain, on
+    :class:`benchmark.voids.Bands`' rule: the bands describe the ground a void sits on, so a band
+    index means the same thing here as it does for every other tile in the corpus.
+    """
+    area = int(void.sum())
     return Scored(
         tile_id=instance.tile_id,
         family=instance.family,
@@ -484,6 +564,22 @@ def score_instance(
             np.asarray(tile.raw_i16, dtype=np.float64), filled, void, tile.px, bar=bar
         ),
     )
+
+
+def score_instance(
+    tile: Tile,
+    instance: Instance,
+    cfg: BenchmarkConfig,
+    *,
+    arm: arms.Arm,
+    bands: voids.Bands,
+    bar: prereg.Bar,
+    learned: Learned | None = None,
+) -> Scored:
+    """One instance, end to end — the batch of one the pass below generalizes."""
+    void = decode_void(tile, instance, cfg)
+    filled = FILLERS[arm.input_convention]([tile], [void], cfg, learned)[0]
+    return score_filled(tile, instance, void, filled, bands=bands, bar=bar)
 
 
 def format_gates(gates: dict[str, Any]) -> str:
@@ -518,6 +614,7 @@ def run_pass(
     cfg: BenchmarkConfig,
     arm: arms.Arm,
     *,
+    learned: Learned | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> Pass:
     """Score one cell over the committed eval mask list, both gates first.
@@ -526,10 +623,26 @@ def run_pass(
     returns and R7's threshold is what the seam column is read against), then the gates, then
     the corpus is opened. A gate that fired after 30,000 instances had been scored would be a
     gate that costs 2.0–5.2 CPU-hours to consult.
+
+    ``learned`` is a trained arm's inference half (:class:`Learned`, #159). ``None`` is A1 and
+    every arm that trains nothing; a convention that needs one and is handed ``None`` refuses
+    rather than scoring an untrained head, which by construction would score exactly A1.
+
+    Instances are scored in batches of :attr:`Learned.batch_size`, which is **one** when there is
+    no learned arm. That keeps A1 exactly where #158 left it — one tile in memory at a time over
+    30,000 instances — while letting a frozen encoder see §4.1's batch in one forward instead of
+    128 of them.
     """
     started = time.perf_counter()
     bar = metrics.bar_for(cfg)
     gates: dict[str, Any] = {"golden_tile": golden_gate(cfg, bar)}
+
+    if learned is not None and learned.arm != arm.name:
+        raise ValueError(
+            f"this pass is scoring {arm.name} and was handed a head trained for {learned.arm}. "
+            f"A4, A5 and A6 share one head *architecture* (§4.1) and never one set of weights — "
+            f"the weights are what C1 compares"
+        )
 
     instances = read_instances(cfg)
     store = TileStore(cfg.paths.corpus_dir)
@@ -540,20 +653,20 @@ def run_pass(
     # deterministic, which matters for a gate that gets quoted in a run record.
     gates["identity_mask"] = identity_gate(store.read(instances[0].tile_id), cfg)
 
-    scored = []
-    for done, instance in enumerate(instances, start=1):
-        scored.append(
-            score_instance(
-                store.read(instance.tile_id),
-                instance,
-                cfg,
-                arm=arm,
-                bands=bands,
-                bar=bar,
-            )
-        )
+    batch_size = 1 if learned is None else max(1, learned.batch_size)
+    filler = FILLERS[arm.input_convention]
+    scored: list[Scored] = []
+    for start in range(0, len(instances), batch_size):
+        chunk = instances[start : start + batch_size]
+        tiles = [store.read(item.tile_id) for item in chunk]
+        chunk_voids = [
+            decode_void(tile, item, cfg) for tile, item in zip(tiles, chunk)
+        ]
+        filled = filler(tiles, chunk_voids, cfg, learned)
+        for tile, item, void, out in zip(tiles, chunk, chunk_voids, filled):
+            scored.append(score_filled(tile, item, void, out, bands=bands, bar=bar))
         if progress is not None:
-            progress(done, len(instances))
+            progress(len(scored), len(instances))
     return Pass(
         scored=scored,
         gates=gates,
