@@ -97,10 +97,21 @@ def box(tmp_path):
 
 @pytest.fixture
 def flags(box):
+    """Every path this cell touches, pinned inside the box.
+
+    ``paths.mask_bank_path`` is here for a reason worth stating: it is the one input whose
+    default is **outside** ``artifacts_dir``, so leaving it unset pointed these tests at
+    ``data/task1/train_mask_bank.parquet`` in the working tree. That passed for as long as nobody
+    had run a real `freeze` — and stopped the day someone did, because two tests below assert
+    what happens when the bank is *absent* and it had quietly become present. §8's rule is that
+    every write goes to ``tmp_path``; a read from a default path outside it is the same hazard
+    wearing the other direction.
+    """
     return [
         "--set", f'paths.corpus_dir="{box / "corpus"}"',
         "--set", f'paths.artifacts_dir="{box / "artifacts"}"',
         "--set", f'paths.results_path="{box / "results.parquet"}"',
+        "--set", f'paths.mask_bank_path="{box / "train_mask_bank.parquet"}"',
         "--set", f'paths.plan_path="{PLAN}"',
         "--set", f"tiles.test={len(TEST_COGS) * TILES_PER_COG}",
     ]
