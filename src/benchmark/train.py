@@ -71,7 +71,7 @@ import numpy as np
 from dataset.metrics import land_mask
 from pretrain.artifact import read_tile_strata
 
-from . import arms, extract, fill, head, masks
+from . import arms, extract, fill, head, masks, unet
 from .artifacts import TILE_LIST_NAMES, VAL_TILES_NAME
 from .config import BenchmarkConfig
 
@@ -515,6 +515,13 @@ def batches(cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles, *, batc
     )
 
 
+def _void_channel(batch: Composed, device: str):
+    """The batch's void as a ``(N, 1, H, W)`` float tensor — what both stacks condition on."""
+    import torch
+
+    return torch.from_numpy(batch.void.astype(np.float32)).unsqueeze(1).to(device)
+
+
 @dataclass(frozen=True)
 class Stack:
     """What produces a residual: a frozen encoder, a head, the arm naming them, and a device.
@@ -524,6 +531,10 @@ class Stack:
     five call sites. The clump is also the thing that must not be reassembled differently in two
     places: a head scored against a second load of its own encoder, or against a different arm's
     normalization, converges and prints normally.
+
+    :class:`ScratchStack` is its A7 sibling. The two share every caller — the training step, the
+    val pass, :func:`predict` and :class:`Trained` — because what those need is a residual, and
+    whether it came out of a frozen encoder is the arm's business rather than theirs.
     """
 
     #: :class:`benchmark.extract.Extractor` — the contract, holding the loaded encoder.
@@ -534,28 +545,77 @@ class Stack:
     arm: str
     device: str
 
+    def residual(self, batch: Composed, *, precision: str):
+        """The frozen encoder over the A1 fill, then §4.1's head — one ``(N, 1, 224, 224)``.
 
-def residual_of(batch: Composed, stack: Stack, *, precision: str):
-    """The frozen encoder over the A1 fill, then §4.1's head — one ``(N, 1, 224, 224)`` residual.
+        The encoder runs under :meth:`benchmark.extract.Extractor.extract`'s own ``no_grad``, so
+        nothing here has to remember to detach: the tokens arrive as a leaf and the only
+        parameters on the graph are the head's. That is why the frozen half is reached through
+        the contract rather than by calling the model — the contract is where the diet, the
+        layout and the absence of a gradient are all one declared thing.
+        """
+        features = self.extractor.extract(batch.a1_i16, batch.valid, arm=self.arm)
+        void = _void_channel(batch, self.device)
+        tokens = features.output.to(self.device)
+        with _autocast(self.device, precision):
+            out = self.module(tokens, void)
+        return out.float(), void
 
-    The encoder runs under :meth:`benchmark.extract.Extractor.extract`'s own ``no_grad``, so
-    nothing here has to remember to detach: the tokens arrive as a leaf and the only parameters
-    on the graph are the head's. That is why the frozen half is reached through the contract
-    rather than by calling the model — the contract is where the diet, the layout and the
-    absence of a gradient are all one declared thing.
+
+@dataclass(frozen=True)
+class ScratchStack:
+    """A7's half of :class:`Stack`'s contract: no encoder, and a trunk that reads the tile (#162).
+
+    Same three responsibilities and one fewer collaborator. There is no extractor because §4.4's
+    arm runs no encoder — which is also why there is no ``arm``-selected diet here: A7's registry
+    row declares ``normalization="none"``, and the per-tile conditioning it does apply is the
+    UNet's own rather than §2.1's (see :mod:`benchmark.unet`).
+
+    A sibling class rather than a ``None`` extractor on :class:`Stack`, because the two differ in
+    what they *are* and not in whether a field is set: an ``extractor is None`` branch inside
+    :meth:`Stack.residual` would put A7's conditioning and A4's frozen-feature contract in one
+    function, and the failure that invites — A7 silently scored through the encoder path, or a
+    frozen arm through A7's — is exactly the kind this codebase declares its way out of.
     """
-    import torch
 
-    features = stack.extractor.extract(batch.a1_i16, batch.valid, arm=stack.arm)
-    void = torch.from_numpy(batch.void.astype(np.float32)).unsqueeze(1).to(stack.device)
-    tokens = features.output.to(stack.device)
-    with _autocast(stack.device, precision):
-        residual = stack.module(tokens, void)
-    return residual.float(), void
+    #: §4.4's UNet (:func:`benchmark.unet.build`).
+    module: Any
+    #: The registered arm. Carried for the same reason :class:`Stack` carries it — the eval pass
+    #: checks the weights it was handed were trained for the arm it is scoring.
+    arm: str
+    device: str
+
+    def residual(self, batch: Composed, *, precision: str):
+        """§4.4's UNet over the conditioned A1 fill — one ``(N, 1, 224, 224)`` residual in metres.
+
+        The std that :func:`benchmark.unet.condition` divided the input by multiplies the output
+        back, so what leaves here is in the units §4.1's loss and §2.4's convention are written
+        in. See :mod:`benchmark.unet` on why that factor is applied here rather than folded into
+        the network.
+        """
+        import torch
+
+        image, stds = unet.condition(batch.a1_fill, batch.valid)
+        void = _void_channel(batch, self.device)
+        tensor = torch.from_numpy(image).unsqueeze(1).to(self.device)
+        scale = torch.from_numpy(stds).view(-1, 1, 1, 1).to(self.device)
+        with _autocast(self.device, precision):
+            out = self.module(tensor, void)
+        return out.float() * scale, void
+
+
+def residual_of(batch: Composed, stack: Stack | ScratchStack, *, precision: str):
+    """One batch's residual, from whichever stack the arm trains through.
+
+    A free function over a method call so that the two stacks stay the *only* place an arm's
+    mechanism is written down: every caller in this module asks for a residual and none of them
+    branches on how it was produced.
+    """
+    return stack.residual(batch, precision=precision)
 
 
 def predict_composed(
-    batch: Composed, stack: Stack, *, precision: str
+    batch: Composed, stack: Stack | ScratchStack, *, precision: str
 ) -> list[np.ndarray]:
     """§2.4's fill for one already-composed batch: A1's fill plus the head's masked residual."""
     import torch
@@ -574,7 +634,7 @@ def predict(
     raw_i16: Sequence[np.ndarray],
     voids: Sequence[np.ndarray],
     cfg: BenchmarkConfig,
-    stack: Stack,
+    stack: Stack | ScratchStack,
 ) -> list[np.ndarray]:
     """§2.4's fill for a trained arm: the A1 fill plus the head's residual, inside the void.
 
@@ -698,7 +758,9 @@ class Trained:
     """What one training pass produced — the head, and everything a run record quotes about it."""
 
     module: Any
-    width: int
+    #: The encoder feature width §4.1's head absorbs. ``None`` for A7, which has no encoder and
+    #: therefore no width — see :attr:`kind`.
+    width: int | None
     parameters: int
     #: The epoch whose val RMSE was lowest. Its weights are what ``module`` holds.
     best_epoch: int
@@ -711,10 +773,14 @@ class Trained:
     #: The encoder, head, arm and device this was trained as. Held so that :meth:`predict` is
     #: the *same* composition the val pass used, over the *same* loaded encoder — the eval pass
     #: rebuilding either would be a second chance to get them different.
-    stack: Stack | None = None
+    stack: Stack | ScratchStack | None = None
     #: §4.1's declared precision, and the one this box could honour. See :func:`_autocast`.
     precision_declared: str = "bf16"
     precision_used: str = "bf16"
+    #: Which trainable part this pass fitted — ``"head"`` for §4.1's, ``"unet"`` for §4.4's.
+    #: Recorded rather than inferred from ``width is None`` so the run record says what was
+    #: trained in the same words §1's table does.
+    kind: str = "head"
 
     def predict(
         self, raw_i16: Sequence[np.ndarray], voids: Sequence[np.ndarray], cfg
@@ -726,6 +792,7 @@ class Trained:
     def to_dict(self) -> dict:
         """The training half of a run record: what was trained, on what, and how it went."""
         return {
+            "kind": self.kind,
             "parameters": self.parameters,
             "width": self.width,
             "epochs_run": len(self.history),
@@ -750,7 +817,7 @@ class Trained:
 def val_rmse(
     instances: Sequence[ValInstance],
     cfg: BenchmarkConfig,
-    stack: Stack,
+    stack: Stack | ScratchStack,
     *,
     tiles: TrainingTiles,
 ) -> float:
@@ -931,10 +998,212 @@ def train_head(
     )
 
 
+# --- §4.4's from-scratch arm --------------------------------------------------
+
+
+def assert_shares_frozen_recipe(cfg: BenchmarkConfig, recipe) -> None:
+    """Refuse an A7 pass handed anything but §4.1's own recipe object (#162).
+
+    §4.4 says A7 trains under the *same loss, the same schedule length and the same seeds* as the
+    frozen arms. The strongest available form of that is not an equality check on a handful of
+    fields — a field added to §4.1's recipe next month would slip straight past one — but
+    identity: A7 reads ``cfg.head``, the object A4, A5 and A6 read, and there is no second
+    recipe for it to have been configured with.
+
+    :data:`benchmark.config.SHARED_WITH_HEAD` makes the same statement one layer down, where it
+    refuses a :class:`~benchmark.config.Unet` that grows an ``lr`` or an ``epochs`` field at all.
+    Between them, "matches the frozen arms" stops being a property a reviewer checks and becomes
+    one the code cannot express the negation of.
+
+    ``recipe is not cfg.head`` rather than ``recipe != cfg.head``: a *copy* carrying identical
+    values is still a second place the recipe lives, and the next edit to it is the drift this
+    refusal exists to prevent.
+    """
+    if recipe is not cfg.head:
+        raise TrainError(
+            "§4.4 trains A7 under §4.1's loss, schedule length and seeds, so this pass reads "
+            "`cfg.head` and not a recipe of its own. What was passed is a different object — "
+            "if it carries the same values today, it is still the second copy that drifts"
+        )
+
+
+def assert_everything_trains(module, *, expected: int) -> None:
+    """A7 trains ``everything`` (:data:`benchmark.arms.TRAINABLE`) — checked, not declared.
+
+    :func:`assert_encoder_frozen`'s mirror image, and it earns its place for the same reason: the
+    registry's ``trains`` field is a *claim*, and the column §6 item 4 prints is only honest if
+    the claim was true of the module that actually stepped. A UNet with a frozen stage would
+    print 17.5M trainable and train less.
+    """
+    total = sum(p.numel() for p in module.parameters())
+    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    if total != trainable or total != expected:
+        raise TrainError(
+            f"§4.4's A7 trains everything: {trainable:,} of {total:,} parameters carry a "
+            f"gradient and this recipe derives {expected:,}. §6 item 4 prints both counts for "
+            f"this arm, and a frozen stage would make the printed pair a claim rather than a "
+            f"measurement"
+        )
+
+
+def train_unet(
+    cfg: BenchmarkConfig,
+    arm: arms.Arm,
+    *,
+    epochs: int | None = None,
+    on_epoch: Callable[[Epoch], None] | None = None,
+) -> Trained:
+    """Train §4.4's UNet from scratch for one cell — A7 (#162).
+
+    :func:`train_head`'s sibling, and deliberately its sibling rather than its ``if``: the two
+    differ in **what they build** and in nothing else, so everything after the trunk is built is
+    the same shared machinery — :class:`TrainingTiles`, :func:`read_bank`, :func:`batches`,
+    :class:`Cosine`, :func:`parameter_groups`, :func:`head.loss`, :func:`val_rmse`,
+    :func:`save_checkpoint`. That sharing *is* #162's second acceptance criterion: A7's schedule
+    is not configured to match the frozen arms', it is the same code reading the same recipe.
+
+    There is no ``recipe=`` parameter, and its absence is the point. :func:`train_head` takes one
+    because §4.1's tuning pass (:func:`benchmark.tune.tune`) legitimately varies the head's knobs
+    on A6/val; A7 has no tuning pass of its own — §4.4 gives it the frozen arms' recipe — so a
+    parameter to override it would be a knob whose only use is to break the criterion.
+    ``epochs`` survives only as the fixture-sized short-cut the test suite needs, and it is
+    checked against §4.1's own count on the way out.
+
+    The order is :func:`train_head`'s, minus the encoder it does not have:
+
+    1. **The two draws, behind the guard** — the only tile source opened here, and one that
+       cannot reach a test tile.
+    2. **The bank, restricted to this cell's tiles.** Read, never drawn. A7 reads §3.4's bank
+       for exactly the reason every training arm does: per-epoch void geometry has to be the
+       same draws the frozen arms train against, or C3's bar is measured against a different
+       problem.
+    3. **The UNet, zero-initialized at the output**, so the pass starts at A1 exactly.
+    4. **§4.1's epochs, val-scored, best-epoch restored** — checkpoint selection, not an early
+       stop; see :func:`train_head`.
+    """
+    import torch
+
+    started = time.perf_counter()
+    if arm.trains != "everything":
+        raise TrainError(
+            f"arm {arm.name} trains {arm.trains!r}; §4.4's from-scratch pass is for the arm that "
+            f"trains everything. A4, A5 and A6 train §4.1's head and go through `train_head`"
+        )
+    # §4.4's recipe is §4.1's. Asserted before a tile is read, so a pass that could not have
+    # matched the frozen arms refuses at the top rather than after an epoch.
+    recipe = cfg.head
+    assert_shares_frozen_recipe(cfg, recipe)
+    epochs = recipe.epochs if epochs is None else epochs
+    device = resolve_device(cfg)
+
+    tiles = TrainingTiles.read(cfg)
+    assert_reads_val_only(tiles.sources)
+    train_ids = list(tiles.head_train[: cfg.train_tiles])
+    banked = read_bank(cfg, train_ids)
+    val = val_instances(cfg, tiles.val)
+
+    built = unet.build(cfg.unet, seed=cfg.seed)
+    module = built.module.to(device)
+    assert_everything_trains(module, expected=unet.parameter_count(cfg.unet))
+    stack = ScratchStack(module=module, arm=arm.name, device=device)
+    optimizer = torch.optim.AdamW(
+        parameter_groups(module, weight_decay=recipe.weight_decay),
+        lr=recipe.lr,
+        weight_decay=recipe.weight_decay,
+    )
+    steps_per_epoch = max(1, math.ceil(len(train_ids) / recipe.batch_size))
+    schedule = Cosine.of(recipe, steps_per_epoch=steps_per_epoch, epochs=epochs)
+
+    directory = Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
+    directory.mkdir(parents=True, exist_ok=True)
+
+    order = np.random.default_rng(cfg.seed)
+    history: list[Epoch] = []
+    best: Epoch | None = None
+    step = 0
+
+    for epoch in range(epochs):
+        epoch_started = time.perf_counter()
+        module.train()
+        # §3.4's epoch-`e` draw per tile, in this seed's order — `train_head`'s two-things note.
+        shuffled = [
+            (train_ids[i], banked.rle(train_ids[i], epoch))
+            for i in order.permutation(len(train_ids))
+        ]
+        totals = {"loss": 0.0, "l1_m": 0.0, "slope_l1": 0.0}
+        lr = recipe.lr
+        for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
+            lr = schedule.apply(optimizer, step)
+            residual, void = residual_of(batch, stack, precision=recipe.precision)
+            truth = torch.from_numpy(
+                batch.raw_i16.astype(np.float32)
+            ).unsqueeze(1).to(device)
+            a1 = torch.from_numpy(batch.a1_fill).unsqueeze(1).to(device)
+            prediction = a1 + residual * void
+            terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
+            optimizer.zero_grad(set_to_none=True)
+            terms.total.backward()
+            optimizer.step()
+            step += 1
+            for key, value in terms.detached().items():
+                totals[key] += value
+
+        module.eval()
+        scored = val_rmse(val, cfg, stack, tiles=tiles)
+        line = Epoch(
+            epoch=epoch,
+            loss=totals["loss"] / steps_per_epoch,
+            elevation=totals["l1_m"] / steps_per_epoch,
+            slope=totals["slope_l1"] / steps_per_epoch,
+            lr=lr,
+            val_rmse=scored,
+            seconds=time.perf_counter() - epoch_started,
+        )
+        history.append(line)
+        save_checkpoint(module, line, directory / EPOCH_CHECKPOINT.format(epoch=epoch))
+        if best is None or line.val_rmse < best.val_rmse:
+            best = line
+            save_checkpoint(module, line, directory / BEST_CHECKPOINT)
+        if on_epoch is not None:
+            on_epoch(line)
+
+    if best is not None:
+        module.load_state_dict(
+            torch.load(directory / BEST_CHECKPOINT, map_location=device)["state_dict"]
+        )
+    module.eval()
+    assert_everything_trains(module, expected=unet.parameter_count(cfg.unet))
+
+    return Trained(
+        module=module,
+        width=None,
+        parameters=built.parameters,
+        best_epoch=-1 if best is None else best.epoch,
+        best_val_rmse=math.inf if best is None else best.val_rmse,
+        history=tuple(history),
+        seconds=time.perf_counter() - started,
+        checkpoint=None if best is None else str(directory / BEST_CHECKPOINT),
+        tiles=len(train_ids),
+        sources=tiles.sources,
+        stack=stack,
+        precision_declared=recipe.precision,
+        precision_used=precision_on(device, recipe.precision),
+        kind="unet",
+    )
+
+
 def format_trained(trained: Trained) -> list[str]:
-    """What `run` prints once the head is trained — the counts, and the epoch it kept."""
+    """What `run` prints once the trainable part is fitted — the counts, and the epoch it kept.
+
+    The first row is the only one that differs between §4.1's head and §4.4's UNet, because it
+    is the only one that names what was trained; the other three are about the pass.
+    """
+    if trained.kind == "unet":
+        first = f"{'unet':<16} {unet.format_parameters()}"
+    else:
+        first = f"{'head':<16} {head.format_parameters(trained.width)}"
     return [
-        f"{'head':<16} {head.format_parameters(trained.width)}",
+        first,
         f"{'trained':<16} {len(trained.history)} epochs over {trained.tiles:,} tiles in "
         f"{trained.seconds:.1f}s, reading {', '.join(trained.sources)}",
         f"{'kept':<16} epoch {trained.best_epoch} at val_rmse "

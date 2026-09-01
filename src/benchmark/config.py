@@ -60,7 +60,7 @@ import argparse
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Final
@@ -498,13 +498,42 @@ class Finetune(_Frozen):
 # --- §4.4 The from-scratch baseline -------------------------------------------
 
 
+#: §4.1's recipe knobs, which §4.4 says A7 **shares** rather than owns: *same loss, same
+#: schedule length, same seeds*. Named here so :func:`assert_shares_head_recipe` can refuse a
+#: :class:`Unet` that grows one, which is #162's second acceptance criterion in its structural
+#: form — "asserted rather than configured by hand" is a claim that A7 *cannot* drift, not a
+#: claim that two numbers happen to be equal in today's defaults.
+#:
+#: Read off :class:`Head`'s own fields minus its two shape knobs, rather than typed out: a knob
+#: added to §4.1's recipe later is one A7 must go on sharing, and a hand-written list would
+#: silently stop covering it.
+SHARED_WITH_HEAD: Final[tuple[str, ...]] = tuple(
+    name for name in Head.__dataclass_fields__ if name not in ("proj_dim", "stage_dims")
+)
+
+
+def assert_shares_head_recipe(names: Iterable[str]) -> None:
+    """Refuse a §4.4 recipe that declares one of §4.1's knobs. See :data:`SHARED_WITH_HEAD`."""
+    owned = sorted(set(names) & set(SHARED_WITH_HEAD))
+    if owned:
+        raise ValueError(
+            f"§4.4 trains A7 under §4.1's loss, schedule length and seeds, so the UNet recipe "
+            f"cannot declare {owned}. A7 reads `cfg.head` for those; what belongs here is the "
+            f"trunk's shape"
+        )
+
+
 @dataclass(frozen=True)
 class Unet(_Frozen):
     """A7 — the PANGAEA bar, and a hard one (plan §4.4).
 
-    ~17M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
+    ~17.5M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
     total *and* trainable counts: a totals-only column reads A7 as handicapped when it is the
     opposite.
+
+    **Shape only.** The loss, the optimizer, the schedule and the seed counts are §4.1's and are
+    read from :class:`Head` — see :data:`SHARED_WITH_HEAD`, which refuses this class if it ever
+    grows one of them.
     """
 
     #: §4.4 — a standard 4-down / 4-up UNet.
@@ -513,10 +542,18 @@ class Unet(_Frozen):
     in_channels: int = 2
     #: §4.4/§2.4 — residual over the A1 fill, like every learned arm.
     residual: bool = True
+    #: The stage-1 width the rest double from. 48 is what lands §4.4's "~17M" — 17,465,377 by
+    #: :func:`benchmark.unet.parameter_count`, against 64's 31.0M and 32's 7.8M. Named as a knob
+    #: rather than hard-coded because it is the one number that sets this arm's capacity, and
+    #: §4.4's whole argument is about capacity.
+    base_width: int = 48
 
     def __post_init__(self) -> None:
+        assert_shares_head_recipe(self.__dataclass_fields__)
         if self.depth < 1:
             raise ValueError(f"depth {self.depth} must be >= 1")
+        if self.base_width < 1:
+            raise ValueError(f"base_width {self.base_width} must be >= 1")
         if self.in_channels != 2:
             raise ValueError(
                 f"in_channels {self.in_channels}: §4.4's input is the A1-filled tile plus the "

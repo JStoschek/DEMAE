@@ -276,12 +276,18 @@ def test_the_parameter_counts_are_a_pair_and_never_a_single_number():
     assert arms.parameter_counts(arms.get("A1")) == {"total": 0, "trainable": 0}
     # A2 is zero-shot over a counted encoder: total known, trainable exactly zero.
     assert arms.parameter_counts(arms.get("A2-R5")) == {"total": 85_254_144, "trainable": 0}
-    # #159 built the head, so A4's trainable half is counted rather than `None`. A3's decoder
-    # and A7's UNet are still their own tickets, and a count this registry guessed would print
-    # as a measurement — so those stay `None`.
+    # #159 built the head and #162 the UNet, so A4's and A7's trainable halves are counted
+    # rather than `None`. A3's decoder is still its own ticket (#166), and a count this registry
+    # guessed would print as a measurement — so it stays `None`.
     assert arms.parameter_counts(arms.get("A4-R5"))["trainable"] == 1_181_089
     assert arms.parameter_counts(arms.get("A3-R5"))["trainable"] is None
-    assert arms.parameter_counts(arms.get("A7"))["trainable"] is None
+    # A7's pair is equal and that is §4.4's point, not a degenerate case: it runs no encoder and
+    # trains every parameter it has, so (17.5M, 17.5M) beside A4's (86.4M, 1.18M) is the whole
+    # sentence §6 item 4 prints the pair for.
+    a7 = arms.parameter_counts(arms.get("A7"))
+    assert a7 == {"total": 17_465_377, "trainable": 17_465_377}
+    assert a7["trainable"] > 14 * arms.parameter_counts(arms.get("A4-R5"))["trainable"]
+    assert a7["total"] < arms.parameter_counts(arms.get("A4-R5"))["total"]
 
 
 def test_a_rerun_of_the_same_cell_replaces_its_rows_and_appends_its_record(box, flags):

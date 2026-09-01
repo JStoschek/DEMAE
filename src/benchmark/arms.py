@@ -403,6 +403,17 @@ class Arm:
         """
         return self.trains == "head"
 
+    @property
+    def trains_everything(self) -> bool:
+        """Does this arm train §4.4's from-scratch UNet? A7, and only A7 (#162).
+
+        :attr:`trains_head`'s sibling and its argument a third time: four questions are asked of
+        it — what A7's parameter pair is, whether `run` trains before it scores, which pass it
+        trains through, and whether §3.4's bank is an input — and the string comparison spelled
+        at each site is one typo away from an arm that scores an untrained UNet.
+        """
+        return self.trains == "everything"
+
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:
     return name, Arm(name=name, **kwargs)
@@ -557,27 +568,37 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     * **an arm that trains §4.1's head over a counted encoder** — A4, A5 and A6, whose trainable
       half is :func:`benchmark.head.parameter_count` at that encoder's width and whose total is
       that plus the frozen encoder. #159 built the head, so these stopped being ``None``.
+    * **the from-scratch arm** — A7, whose total and trainable are both
+      :func:`benchmark.unet.parameter_count`, because it runs no encoder and trains every
+      parameter it has. #162 built the UNet, so this stopped being ``None``.
 
-    What still waits on its own module is A3's fine-tuned decoder and A7's UNet (#162), and both
-    report ``None`` until then rather than a plausible number nothing measured. `run` records
-    whatever is known, so A1's row carries its pair today and A3's fills in when its arm exists.
+    **A7's two numbers are equal, and that is the point rather than a degenerate case.** The pair
+    §6 item 4 prints is what makes the table legible *across* arms: A7 at (17.5M, 17.5M) beside
+    A4 at (86.4M, 1.18M) is the sentence §4.4 rewrote its capacity anchor into — an order of
+    magnitude more trained, at a fifth of the total. A column of totals alone reverses it.
+
+    What still waits on its own module is A3's fine-tuned decoder (#166), which reports ``None``
+    rather than a plausible number nothing measured.
     """
     # Deferred so that importing this registry stays free: it is a declarative module with no
     # dependencies at all, and `benchmark.head` pulls in numpy and `dataset.config`. Everything
     # that asks for a parameter count is already paying for both.
-    from . import head
+    from . import head, unet
 
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
     trainable = 0 if arm.is_inference_only else None
+    if arm.trains_everything:
+        # Torch-free arithmetic over §4.4's shape — see `unet.parameter_count`.
+        trainable = unet.parameter_count()
     if arm.trains_head and encoder is not None:
         # Torch-free arithmetic over §4.1's four stage dimensions — see `head.parameter_count`.
         # The width is the *only* thing that differs between A4, A5 and A6 here, which is the
         # same sentence C1 rests on, arriving as a number.
         trainable = head.parameter_count(encoder.width)
     if encoder is None:
-        # A1 and A7. A1 trains nothing and runs no encoder, so it genuinely has none; A7 trains
-        # a UNet this registry does not count.
-        total = 0 if arm.is_inference_only else None
+        # A1 and A7. A1 trains nothing and runs no encoder, so both its counts are a true 0;
+        # A7 runs no encoder either, so its total *is* the UNet it trains.
+        total = 0 if arm.is_inference_only else trainable
     elif arm.is_inference_only:
         total = encoder.params
     elif arm.trains_head and encoder.params is not None:

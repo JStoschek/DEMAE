@@ -264,6 +264,17 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         )
         for line in train.format_trained(trained):
             print(line)
+    elif resolution.arm.trains_everything:
+        # A7 (#162). A separate branch rather than a third case inside `train_head`, because the
+        # two passes differ in what they build and share everything after it — see
+        # `train.train_unet`. There is no `--tune` arm of this branch: §4.1's recipe is tuned on
+        # A6 and frozen for every arm, and `tune.assert_tuning_arm` has already refused any other
+        # arm inside `resolve`, before this function is reached.
+        trained = train.train_unet(
+            cfg, resolution.arm, on_epoch=lambda line: print(f"{'':<16} {line.line()}")
+        )
+        for line in train.format_trained(trained):
+            print(line)
 
     # The trained head carries the encoder it was trained over, so the pass scores against the
     # object the val curve was measured on rather than a second load of the same file.
