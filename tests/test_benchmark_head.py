@@ -656,7 +656,7 @@ def test_the_tuning_record_says_whether_the_frozen_recipe_survived(box, flags, s
     cfg = launch.resolve(
         launch.build_parser().parse_args(["run", "--arm", "A6", *flags])
     ).config
-    tuning = tune.tune(cfg, grid={"lr": (1e-3,)}, epochs=1)
+    tuning = tune.tune(cfg, grid={"lr": (TUNED_HEAD.lr,)}, epochs=1)
 
     assert tuning.selected == {"lr": TUNED_HEAD.lr}
     assert tuning.agrees is True

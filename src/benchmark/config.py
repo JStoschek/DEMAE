@@ -334,7 +334,16 @@ class Head(_Frozen):
     #: §4.1's optimizer block. **Tuned once on A6 — the neutral encoder — using val only, then
     #: frozen for every arm**; tuning on the arm you hope wins is the classic thumb on the scale.
     optimizer: str = "adamw"
-    lr: float = 1e-3
+    #: **Tuned 2026-09-01 on A6/val, and moved from §4.1's 1e-3 to 3e-3** (#159). The pass is
+    #: recorded in ``head_tuning.json``; the short version is that 3e-3 won an interior maximum
+    #: over `(3e-4, 1e-3, 3e-3, 1e-2, 3e-2)` — 35.177 m against 35.371 at 1e-2 and 35.822 at
+    #: §4.1's own value — so the grid brackets it rather than stopping at a wall.
+    #:
+    #: The margin is worth stating beside the number. Re-running three of those points measured a
+    #: **run-to-run spread of up to 0.058 m** at a fixed seed, because CUDA training here is not
+    #: bit-reproducible; the gap to the nearest rival is 0.194 m, about 3x that floor, and the gap
+    #: to 1e-3 is 0.645 m. So this is a real selection and not a large one.
+    lr: float = 3e-3
     weight_decay: float = 0.05
     decay: str = "cosine"
     warmup_frac: float = 0.05
