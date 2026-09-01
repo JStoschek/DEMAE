@@ -784,6 +784,7 @@ def train_head(
     extractor=None,
     epochs: int | None = None,
     recipe=None,
+    tag: str | None = None,
     on_epoch: Callable[[Epoch], None] | None = None,
 ) -> Trained:
     """Train §4.1's head for one cell. The encoder is frozen and asserted so on the way out.
@@ -792,6 +793,13 @@ def train_head(
     (:func:`benchmark.tune.tune`); a `run` passes none and gets the frozen one, which
     :func:`benchmark.tune.assert_frozen` has already checked. ``epochs`` is the tuning pass's
     other short-cut, for the same reason and with the same restriction.
+
+    ``tag`` distinguishes this pass's checkpoint directory from a sibling's. A cell does not need
+    one — ``(arm, size, seed)`` is its identity — but a **tuning pass** trains several heads at
+    the same identity, and without a tag each grid point overwrote the last one's epoch files and
+    left a ``best.pt`` holding the *last* point's weights rather than the winner's. Nothing reads
+    those files, so no number was ever wrong; what was wrong is that a directory named for a cell
+    held something else, which is the same shape of problem as a printed count nothing checked.
 
     The order below is the argument:
 
@@ -847,7 +855,8 @@ def train_head(
     steps_per_epoch = max(1, math.ceil(len(train_ids) / recipe.batch_size))
     schedule = Cosine.of(recipe, steps_per_epoch=steps_per_epoch, epochs=epochs)
 
-    directory = Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
+    cell = f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
+    directory = Path(cfg.runtime.checkpoint_dir) / (cell if tag is None else f"{cell}-{tag}")
     directory.mkdir(parents=True, exist_ok=True)
 
     order = np.random.default_rng(cfg.seed)

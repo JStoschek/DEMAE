@@ -106,6 +106,15 @@ class TuningError(RuntimeError):
     """A tuning pass that would not be *the* tuning pass, or a run that has drifted from it."""
 
 
+def tag_for(point: dict[str, Any]) -> str:
+    """A filesystem-safe name for one grid point, so its checkpoints are its own.
+
+    Each point trains a head at the same ``(arm, size, seed)``, so without this they all land in
+    one directory and overwrite each other — see :func:`benchmark.train.train_head`'s ``tag``.
+    """
+    return "tune-" + "-".join(f"{name}{value:g}" for name, value in sorted(point.items()))
+
+
 def points(grid: dict[str, tuple] | None = None) -> list[dict[str, Any]]:
     """The grid as a list of ``{knob: value}`` overlays, in a deterministic order.
 
@@ -405,7 +414,11 @@ def tune(
     for knobs in points(grid):
         at = time.perf_counter()
         trained = train.train_head(
-            cfg, arms.get(cfg.arm), recipe=recipe_for(knobs), epochs=epochs
+            cfg,
+            arms.get(cfg.arm),
+            recipe=recipe_for(knobs),
+            epochs=epochs,
+            tag=tag_for(knobs),
         )
         point = Point(
             knobs=knobs,

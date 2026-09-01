@@ -598,6 +598,24 @@ def test_the_head_checkpoints_every_epoch(box, flags, stub, frozen):
     assert [p.name for p in written] == ["best.pt", "epoch000.pt", "epoch001.pt"]
 
 
+def test_each_tuning_point_keeps_its_own_checkpoints(box, flags, stub, frozen, capsys):
+    """A grid point's weights land under its own name, not on top of the previous point's.
+
+    Every point trains at the same `(arm, size, seed)`, so before #159 gave `train_head` a `tag`
+    they all shared one directory and `best.pt` ended up holding the *last* point's weights under
+    a name that reads like the cell's. No number was ever wrong — `tune` compares val RMSE in
+    memory and never reads these back — but a directory that lies about what it holds is the
+    thing this repository refuses everywhere else.
+    """
+    assert launch.main(["run", "--arm", "A6", "--tune", *flags]) == 0
+    written = sorted(p.name for p in (box / "heads").iterdir())
+
+    assert written == sorted(f"A6-20k-seed0-{tune.tag_for(pt)}" for pt in tune.points())
+    assert "A6-20k-seed0" not in written, "a tuning pass must not squat on the cell's own name"
+    for directory in written:
+        assert (box / "heads" / directory / train.BEST_CHECKPOINT).is_file()
+
+
 def test_three_seeds_land_three_sets_of_rows(box, flags, stub, frozen):
     """§4.1's three seeds per primary cell — the shape A6 ships in with this ticket."""
     for seed in (0, 1, 2):
