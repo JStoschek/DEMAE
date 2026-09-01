@@ -200,6 +200,21 @@ class Encoder:
 DEMAE_R5_MD5: Final = "3ec5ebc72fa28c43fe88f67692d9b41a"
 DEMAE_R4_MD5: Final = "59e8346c4b08e1ab4fedd44f0802e12b"
 
+#: `mae_vit-base-p16_8xb512-fp16-coslr-1600e_in1k_20220825-f7569ca2.pth` — the published
+#: mmselfsup ImageNet-1k MAE that A6 reads and that R4 warm-started from.
+#:
+#: The value of `pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E.md5`, **quoted rather than imported**,
+#: and pinned against it by a test — :attr:`Encoder.timm_model`'s rule, applied for
+#: :attr:`Encoder.timm_model`'s reason. Importing it would put ``pretrain.init`` on this
+#: module's import path, and that module imports torch at its top; this registry is read by
+#: `freeze` and by A1's scoring path, which §3.4 keeps torch-free so they run on a box with no
+#: CUDA stack. A test is the cheap half of that trade and the copy is the dear half.
+#:
+#: The spec it is quoted from is where the rest of this file's identity lives — the URL, the
+#: 484,833,387 bytes, the Apache-2.0 licence and that licence's source — because P101 spent a
+#: ticket establishing that the licence is why this checkpoint was chosen.
+IMAGENET_MAE_MD5: Final = "91ecc0345a6d6ecefe9c59041841f180"
+
 #: `TerraMind_Tokenizer_DEM.pt` — the whole 1,145,511,376-byte tokenizer, of which A5 and A9 read
 #: the 90.2 M-parameter `encoder.` half (p118 §8). Published rather than observed, on
 #: :attr:`Encoder.checkpoint_md5`'s rule: the file is public, Apache-2.0 and ungated, at
@@ -280,10 +295,25 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # key map turn it into the single-channel timm encoder A6 reads; `pretrain.init` owns
         # both, and `benchmark.extract` reuses them rather than writing a second map.
         checkpoint_format="mmselfsup_rgb",
-        # Unpinned here rather than quoted from `pretrain.init.KNOWN_CHECKPOINTS`: that md5 is
-        # the 485 MB *full* MAE file, and what A6 reads is the encoder half of it. The value
-        # goes in the moment a box mounts one and `freeze` records what it froze against.
-        checkpoint_md5=None,
+        # **Pinned 2026-09-01 (#159).** This entry read "unpinned ... that md5 is the 485 MB
+        # *full* MAE file, and what A6 reads is the encoder half of it", and the second clause
+        # confuses what A6 *uses* with what a box *mounts*. `checkpoint_format` here is
+        # `mmselfsup_rgb`, and `benchmark.extract._build_timm` reads the whole published file
+        # and picks `backbone.` out of it (`_timm_state_from_mmselfsup`) — so the file at
+        # `paths.imagenet_mae_checkpoint` **is** the 485 MB one, and this is its md5.
+        #
+        # The same sentence also said the value "goes in the moment a box mounts one and
+        # `freeze` records what it froze against", which `benchmark.extract.build_spec` does not
+        # do: it copies this field into the spec and computes an observed md5 only to *check* a
+        # pin, so an unpinned encoder produces a spec whose `checkpoint_md5` is null — and
+        # `Extractor._checked_path` then refuses to load it at all. A6 was unrunnable until this
+        # line moved, which is what found it.
+        #
+        # Quoted from `pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E` — the same published artifact,
+        # already carrying its URL, its 484,833,387 bytes, its Apache-2.0 licence and that
+        # licence's source, because P101 spent a ticket establishing that the licence is why this
+        # checkpoint was chosen. Verified against a downloaded copy rather than transcribed.
+        checkpoint_md5=IMAGENET_MAE_MD5,
     ),
     # A9's entry. Same file, same 90.2 M-parameter encoder, same diet — what differs is what the
     # arm does *after* the features (§1: encode, FSQ, diffusion decode), which is not something

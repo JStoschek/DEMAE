@@ -290,10 +290,12 @@ def test_the_committed_contract_in_this_repository_is_what_this_code_writes():
     spec = load_spec(committed)
     assert spec.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5
     assert spec.encoders["demae-r4"].checkpoint_md5 == arms.DEMAE_R4_MD5
-    # Neither unreleased encoder has a published md5, so neither is pinned — and an unpinned
-    # entry refuses at extraction rather than running against whatever sits at the path.
+    # A6's was pinned by #159 — it is the published mmselfsup file, and the encoder could not
+    # load at all while it was null.
+    assert spec.encoders["imagenet-mae"].checkpoint_md5 == arms.IMAGENET_MAE_MD5
+    # §2.3's ViT-S run has not been released, so there is no file to pin — and an unpinned entry
+    # refuses at extraction rather than running against whatever sits at the path.
     assert spec.encoders["demae-vits"].checkpoint_md5 is None
-    assert spec.encoders["imagenet-mae"].checkpoint_md5 is None
 
 
 def test_the_specs_md5_is_not_in_phase_ones_frozen_four_field_fingerprint():
@@ -933,6 +935,42 @@ def test_the_published_md5s_are_the_files_on_this_box(tag, md5):
         assert artifacts.file_md5(path) == md5, f"{path} is not the {tag} encoder this plan pins"
 
 
+def test_the_registrys_imagenet_mae_md5_is_pretrain_inits_own():
+    """The other quoted-rather-than-imported identity, pinned the same way (#159).
+
+    `benchmark.arms` may not import `pretrain.init` — that module imports torch at its top and
+    this registry is read by `freeze` and by A1's scoring path, which §3.4 keeps torch-free. So
+    the md5 is a literal there and this is the half that keeps it honest.
+
+    It is the **whole published file's** md5 and that is the point: A6's `checkpoint_format` is
+    `mmselfsup_rgb`, so `benchmark.extract` reads the 485 MB mmselfsup checkpoint and picks
+    `backbone.` out of it. The registry said otherwise until #159, and A6 could not load at all
+    while it did.
+    """
+    from pretrain.init import MMSELFSUP_MAE_VIT_B16_1600E as published
+
+    assert arms.IMAGENET_MAE_MD5 == published.md5
+    assert arms.ENCODERS["imagenet-mae"].checkpoint_md5 == published.md5
+    assert published.licence == "Apache-2.0"
+
+
+def test_every_encoder_a_registered_arm_reads_publishes_an_md5():
+    """An unpinned encoder is one `Extractor._checked_path` refuses to load — so it is not a
+    state an arm this benchmark scores may be left in.
+
+    `demae-vits` is the exception and stays one: §2.3's ViT-S run has not been released, so there
+    is no file to pin, and its arm (`A4-S`) is the single appendix cell (`printed=False`) that no
+    §0 claim rests on.
+    """
+    unpinned = sorted(
+        name
+        for name, encoder in arms.ENCODERS.items()
+        if encoder.checkpoint_md5 is None
+    )
+    assert unpinned == ["demae-vits"]
+    assert not arms.ARMS["A4-S"].printed
+
+
 def test_the_registrys_timm_names_are_the_release_modules_own():
     """One home for "which published model is this shape". A second would be a second answer."""
     from pretrain.release import TIMM_MODELS
@@ -1025,8 +1063,18 @@ def test_the_imagenet_mae_arm_reads_the_published_file_through_section_eights_co
     assert out.cls is not None
 
 
-def test_the_imagenet_mae_arm_refuses_until_its_md5_is_published(tmp_path, mmselfsup_checkpoint):
-    """The state this repository is actually in, asserted rather than left implicit."""
+def test_the_imagenet_mae_arm_refuses_a_file_that_is_not_the_published_one(
+    tmp_path, mmselfsup_checkpoint
+):
+    """What A6's pin buys (#159): the *identity* of the weights, not merely their shape.
+
+    This fixture is shaped exactly like the published checkpoint — it is built from `pretrain
+    .init`'s own key map — so every structural check downstream passes on it. What it is not is
+    the 1600-epoch file A6 is registered against, and the md5 is the only thing that can say so.
+    Before the pin this loaded happily; #147's own comment on the field is the argument, and
+    p101 §6.1's choice of *this* schedule over its 300- and 800-epoch siblings is what would
+    otherwise have been silently discarded.
+    """
     base = BenchmarkConfig()
     cfg = base.replace(
         arm="A6",
@@ -1037,8 +1085,9 @@ def test_the_imagenet_mae_arm_refuses_until_its_md5_is_published(tmp_path, mmsel
             imagenet_mae_checkpoint=str(mmselfsup_checkpoint),
         ),
     )
-    with pytest.raises(ValueError, match="publishes no md5 for imagenet-mae"):
+    with pytest.raises(ValueError, match="imagenet-mae") as exc:
         Extractor(build_spec(cfg), cfg).encoder("A6")
+    assert arms.IMAGENET_MAE_MD5 in str(exc.value), "the refusal must name what was expected"
 
 
 def test_the_summed_collapse_is_the_one_section_eight_specifies(

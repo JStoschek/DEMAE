@@ -74,7 +74,7 @@
     },
     "imagenet-mae": {
       "checkpoint_format": "mmselfsup_rgb",
-      "checkpoint_md5": null,
+      "checkpoint_md5": "91ecc0345a6d6ecefe9c59041841f180",
       "depth": 12,
       "family": "imagenet-mae",
       "has_cls": true,
