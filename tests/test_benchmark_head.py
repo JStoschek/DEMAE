@@ -396,12 +396,35 @@ def test_a_seed_count_is_not_a_tuned_hyperparameter(box, flags, stub):
         tune.assert_frozen(BenchmarkConfig(head=Head(slope_weight=0.3)))
 
 
-def test_the_tuning_grid_can_select_the_null_of_the_claim_it_tests():
-    """§4.1 asserts the slope term is worth 0.1; a grid that could not select 0.0 assumes it."""
-    assert 0.0 in tune.GRID["slope_weight"]
-    assert TUNED_HEAD.slope_weight in tune.GRID["slope_weight"]
+def test_the_grid_searches_only_the_knob_the_plan_argues_for_least():
+    """§4.1 states a value for every knob; the one this pass may move is the learning rate.
+
+    The rest are refused a search on purpose. `slope_weight` and the loss's shape are §4.1's
+    *design* of the objective; `epochs` and `batch_size` are §7 budget lines that #162 turns into
+    a fairness criterion. A grid over any of them would let a val RMSE re-decide a plan decision,
+    which is what this benchmark's own "Out of Scope" section forbids.
+    """
+    assert set(tune.GRID) == {"lr"}
     assert TUNED_HEAD.lr in tune.GRID["lr"]
-    assert len(tune.points()) == 6
+    assert len(tune.points()) == len(tune.GRID["lr"])
+    searchable = set(tune.GRID)
+    for name in ("slope_weight", "loss", "epochs", "batch_size", "stage_dims"):
+        assert name not in searchable, f"{name} is §4.1's to state, not this pass's to move"
+
+
+def test_a_tuning_record_the_config_never_absorbed_is_refused(box, flags, stub, frozen):
+    """A pass that selected something new, and the one-line edit it owed, never made.
+
+    Without this the `OWED` console line is the only thing standing between a search result and
+    a table trained at the recipe that search rejected — and a console line is read once, by
+    whoever ran the pass.
+    """
+    directory = box / "artifacts"
+    (directory / tune.TUNING_NAME).write_text(
+        json.dumps({"arm": "A6", "selected": {"lr": 0.0003}, "searched": [], "grid": {}})
+    )
+    with pytest.raises(tune.TuningError, match="never folded into"):
+        launch.main(["run", "--arm", "A6", *flags])
 
 
 def test_tuning_refuses_an_arm_that_is_not_the_neutral_one(box, flags, stub, frozen):
@@ -470,6 +493,28 @@ def test_training_reads_the_committed_bank_rather_than_drawing(box, flags, stub,
         assert len(set(banked.by_tile[tile_id])) == cfg.masks.bank_draws_per_tile
 
 
+def test_the_loader_composes_in_worker_processes_too(box, flags, stub, frozen):
+    """`runtime.loader_workers` defaults to 4, so the worker path is the one a GPU run takes.
+
+    §7 measures head training as 4.1x loader-bound — the A1 fill of each banked void is the cost
+    — so the shipping default is workers, and everything else here runs at 0 to keep the suite
+    sharded cheaply. That leaves exactly one thing untested by the rest of this file: whether
+    :class:`benchmark.train.Examples` survives the process boundary. It holds a config and a
+    :class:`benchmark.train.TrainingTiles` and opens its own store per worker precisely so that it
+    does, under ``spawn`` as well as ``fork``, and a pickling failure here is one that would only
+    ever show up on the rented box.
+    """
+    # `--set` is applied in order and the last one wins, so appending is how a test moves a
+    # knob `flags` already set.
+    assert (
+        launch.main(
+            ["run", "--arm", "A6", *flags, "--set", "runtime.loader_workers=2"]
+        )
+        == 0
+    )
+    assert table_of(box).num_rows == len(splits_of(box)["test"]) * 2 * 3
+
+
 def test_a_bank_missing_this_cells_tiles_is_refused(box, flags, stub, frozen):
     """A bank frozen against a different head-train draw, caught structurally."""
     cfg = launch.resolve(launch.build_parser().parse_args(["run", "--arm", "A6", *flags])).config
@@ -514,6 +559,11 @@ def test_the_run_record_carries_the_head_it_scored_with(a6):
     assert Path(training["checkpoint"]).name == train.BEST_CHECKPOINT
     assert TEST_TILES_NAME not in training["read"]
     assert record["parameters"]["trainable"] == 1_181_089
+    # §4.1 declares bf16 and a CPU box cannot honour it, so the record says both rather than
+    # letting the declared one stand for what actually ran.
+    assert training["precision_declared"] == "bf16"
+    assert training["precision_used"] == "fp32"
+    assert training["device"] == "cpu"
 
 
 def test_the_head_checkpoints_every_epoch(box, flags, stub, frozen):
@@ -557,7 +607,7 @@ def test_an_untrained_head_is_not_something_the_pass_will_score(box, flags, stub
 
 
 def test_the_tuning_pass_writes_its_record_and_scores_nothing(box, flags, stub, frozen, capsys):
-    """§4.1's one pass: six points on val, a record beside the artifacts, and no printed row."""
+    """§4.1's one pass: the grid on val, a record beside the artifacts, and no printed row."""
     assert (
         launch.main(
             ["run", "--arm", "A6", "--tune", *flags]
@@ -565,10 +615,11 @@ def test_the_tuning_pass_writes_its_record_and_scores_nothing(box, flags, stub, 
         == 0
     )
     out = capsys.readouterr().out
-    written = json.loads((box / "artifacts" / tune.TUNING_NAME).read_text())
+    # Read back through the module's own reader, which is also what `assert_frozen` consults.
+    written = tune.read_tuning(box / "artifacts" / tune.TUNING_NAME)
 
     assert written["arm"] == "A6"
-    assert len(written["searched"]) == 6
+    assert len(written["searched"]) == len(tune.points())
     assert set(written["selected"]) == set(tune.GRID)
     assert TEST_TILES_NAME not in written["reads"]
     assert not (box / "results.parquet").exists(), "a val-only pass must not print a row"

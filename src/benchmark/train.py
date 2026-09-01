@@ -37,8 +37,9 @@ the encoder normalizes by. That matters most on exactly the instances that matte
 void is 40% of a tile.
 
 **The truth is the raw tile.** Not the fill, not a standardized tensor. §4.1's loss is masked L1
-**in metres** and §5 scores in metres, so metres is what the loss sees, and
-:func:`benchmark.head.OUTPUT_UNITS` says the same thing from the other end.
+**in metres** and §5 scores in metres, so metres is what the loss sees — and what
+:mod:`benchmark.head` emits, since the encoder's diet is applied on the way in and never
+inverted.
 
 ## Val, and the split guard
 
@@ -63,7 +64,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final, Sequence
+from typing import Any, Callable, Final, Iterable, Sequence
 
 import numpy as np
 
@@ -115,19 +116,25 @@ def resolve_device(cfg: BenchmarkConfig) -> str:
     return "cpu"
 
 
-def _autocast(device: str, precision: str):
-    """§4.1's bf16, where the device has it, and a no-op context where it does not.
+def precision_on(device: str, precision: str) -> str:
+    """What a box will actually compute in, given what the recipe declared.
 
-    CPU bf16 autocast is real but slow, and the CI box that runs this suite has no accelerator at
-    all; a precision the *recipe* declares must not become a reason the tests cannot run. So the
-    declared precision is honoured on CUDA and MPS and skipped on CPU, and the run record carries
-    the device beside it so a reader can tell which happened.
+    §4.1 declares bf16. CPU bf16 autocast is real but slow, and the box that runs this suite has
+    no accelerator at all; a precision the recipe declares must not become the reason the tests
+    cannot run. So the declared precision is honoured on CUDA and MPS and dropped to fp32 on CPU
+    — and **said**, here, so :meth:`Trained.to_dict` can record both. A run record naming only
+    what was asked for would be claiming a number was produced under a precision it was not.
     """
+    return "fp32" if device == "cpu" else precision
+
+
+def _autocast(device: str, precision: str):
+    """§4.1's bf16 where the box has it, and a no-op context where :func:`precision_on` says not."""
     import contextlib
 
     import torch
 
-    if precision == "fp32" or device == "cpu":
+    if precision_on(device, precision) == "fp32":
         return contextlib.nullcontext()
     return torch.autocast(torch.device(device).type, dtype=torch.bfloat16)
 
@@ -508,7 +515,27 @@ def batches(cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles, *, batc
     )
 
 
-def residual_of(batch: Composed, *, extractor, module, arm: str, device: str, precision: str):
+@dataclass(frozen=True)
+class Stack:
+    """What produces a residual: a frozen encoder, a head, the arm naming them, and a device.
+
+    The four travel together everywhere — the training step, the val pass, the eval pass and
+    :class:`Trained` — so they are one object rather than four keyword arguments threaded through
+    five call sites. The clump is also the thing that must not be reassembled differently in two
+    places: a head scored against a second load of its own encoder, or against a different arm's
+    normalization, converges and prints normally.
+    """
+
+    #: :class:`benchmark.extract.Extractor` — the contract, holding the loaded encoder.
+    extractor: Any
+    #: §4.1's head (:func:`benchmark.head.build`).
+    module: Any
+    #: The registered arm, which is what selects the encoder and its declared diet.
+    arm: str
+    device: str
+
+
+def residual_of(batch: Composed, stack: Stack, *, precision: str):
     """The frozen encoder over the A1 fill, then §4.1's head — one ``(N, 1, 224, 224)`` residual.
 
     The encoder runs under :meth:`benchmark.extract.Extractor.extract`'s own ``no_grad``, so
@@ -519,30 +546,23 @@ def residual_of(batch: Composed, *, extractor, module, arm: str, device: str, pr
     """
     import torch
 
-    features = extractor.extract(batch.a1_i16, batch.valid, arm=arm)
-    void = torch.from_numpy(batch.void.astype(np.float32)).unsqueeze(1).to(device)
-    tokens = features.output.to(device)
-    with _autocast(device, precision):
-        residual = module(tokens, void)
+    features = stack.extractor.extract(batch.a1_i16, batch.valid, arm=stack.arm)
+    void = torch.from_numpy(batch.void.astype(np.float32)).unsqueeze(1).to(stack.device)
+    tokens = features.output.to(stack.device)
+    with _autocast(stack.device, precision):
+        residual = stack.module(tokens, void)
     return residual.float(), void
 
 
 def predict_composed(
-    batch: Composed, cfg: BenchmarkConfig, *, extractor, module, arm: str, device: str
+    batch: Composed, stack: Stack, *, precision: str
 ) -> list[np.ndarray]:
     """§2.4's fill for one already-composed batch: A1's fill plus the head's masked residual."""
     import torch
 
-    module.eval()
+    stack.module.eval()
     with torch.no_grad():
-        residual, _ = residual_of(
-            batch,
-            extractor=extractor,
-            module=module,
-            arm=arm,
-            device=device,
-            precision=cfg.head.precision,
-        )
+        residual, _ = residual_of(batch, stack, precision=precision)
     values = residual.detach().cpu().numpy()
     return [
         head.apply_residual(batch.a1_fill[i], values[i, 0], batch.void[i])
@@ -554,11 +574,7 @@ def predict(
     raw_i16: Sequence[np.ndarray],
     voids: Sequence[np.ndarray],
     cfg: BenchmarkConfig,
-    *,
-    extractor,
-    module,
-    arm: str,
-    device: str,
+    stack: Stack,
 ) -> list[np.ndarray]:
     """§2.4's fill for a trained arm: the A1 fill plus the head's residual, inside the void.
 
@@ -568,12 +584,7 @@ def predict(
     returns arrays **equal** to A1's (:func:`benchmark.head.apply_residual`).
     """
     return predict_composed(
-        compose(raw_i16, voids, cfg),
-        cfg,
-        extractor=extractor,
-        module=module,
-        arm=arm,
-        device=device,
+        compose(raw_i16, voids, cfg), stack, precision=cfg.head.precision
     )
 
 
@@ -661,6 +672,27 @@ class Epoch:
         )
 
 
+def save_checkpoint(module, line: Epoch, path: Path) -> Path:
+    """One epoch's state, with the two numbers that say which epoch it is.
+
+    §7: *heads checkpoint per epoch like everything else in this repo and that is the whole of
+    it.* Written by one function rather than by two identical ``torch.save`` calls, because the
+    per-epoch file and the best-so-far file are the same payload under two names and a payload
+    that drifted between them would make the kept head unidentifiable.
+    """
+    import torch
+
+    torch.save(
+        {
+            "epoch": line.epoch,
+            "val_rmse": line.val_rmse,
+            "state_dict": module.state_dict(),
+        },
+        path,
+    )
+    return path
+
+
 @dataclass(frozen=True)
 class Trained:
     """What one training pass produced — the head, and everything a run record quotes about it."""
@@ -676,27 +708,20 @@ class Trained:
     checkpoint: str | None = None
     tiles: int = 0
     sources: tuple[str, ...] = ()
-    #: The frozen encoder this head was trained over, and where it ran. Held so that
-    #: :meth:`predict` is the *same* composition the val pass used, over the *same* loaded
-    #: encoder — the eval pass rebuilding either would be a second chance to get them different.
-    extractor: Any = None
-    arm: str = ""
-    device: str = "cpu"
+    #: The encoder, head, arm and device this was trained as. Held so that :meth:`predict` is
+    #: the *same* composition the val pass used, over the *same* loaded encoder — the eval pass
+    #: rebuilding either would be a second chance to get them different.
+    stack: Stack | None = None
+    #: §4.1's declared precision, and the one this box could honour. See :func:`_autocast`.
+    precision_declared: str = "bf16"
+    precision_used: str = "bf16"
 
     def predict(
         self, raw_i16: Sequence[np.ndarray], voids: Sequence[np.ndarray], cfg
     ) -> list[np.ndarray]:
         """:func:`predict`, bound to this trained head — what :class:`benchmark.evaluate.Learned`
         carries across the seam."""
-        return predict(
-            raw_i16,
-            voids,
-            cfg,
-            extractor=self.extractor,
-            module=self.module,
-            arm=self.arm,
-            device=self.device,
-        )
+        return predict(raw_i16, voids, cfg, self.stack)
 
     def to_dict(self) -> dict:
         """The training half of a run record: what was trained, on what, and how it went."""
@@ -713,19 +738,21 @@ class Trained:
             "seconds": round(float(self.seconds), 3),
             "checkpoint": self.checkpoint,
             "read": list(self.sources),
-            "device": self.device,
+            "device": None if self.stack is None else self.stack.device,
+            # What the recipe asked for, and what the box actually ran — two fields, because
+            # `_autocast` skips bf16 on CPU and a record naming only the declared precision would
+            # be claiming a number was produced under one it was not.
+            "precision_declared": self.precision_declared,
+            "precision_used": self.precision_used,
         }
 
 
 def val_rmse(
     instances: Sequence[ValInstance],
     cfg: BenchmarkConfig,
+    stack: Stack,
     *,
     tiles: TrainingTiles,
-    extractor,
-    module,
-    arm: str,
-    device: str,
 ) -> float:
     """Pooled RMSE in metres over every val void — the number §4.1 early-stops on.
 
@@ -739,9 +766,7 @@ def val_rmse(
     count = 0
     items = [(item.tile_id, item.mask_rle) for item in instances]
     for batch in batches(cfg, items, tiles, batch_size=cfg.head.batch_size):
-        filled = predict_composed(
-            batch, cfg, extractor=extractor, module=module, arm=arm, device=device
-        )
+        filled = predict_composed(batch, stack, precision=cfg.head.precision)
         for i, out in enumerate(filled):
             void = batch.void[i]
             err = out[void] - batch.raw_i16[i].astype(np.float32)[void]
@@ -813,6 +838,7 @@ def train_head(
 
     built = head.build(encoder.width, recipe, seed=cfg.seed)
     module = built.module.to(device)
+    stack = Stack(extractor=extractor, module=module, arm=arm.name, device=device)
     optimizer = torch.optim.AdamW(
         parameter_groups(module, weight_decay=recipe.weight_decay),
         lr=recipe.lr,
@@ -826,7 +852,9 @@ def train_head(
 
     order = np.random.default_rng(cfg.seed)
     history: list[Epoch] = []
-    best = (math.inf, -1)
+    #: The lowest-val epoch so far, as the :class:`Epoch` line itself rather than as a pair of
+    #: loose numbers — it is what the pass returns and what the run record quotes.
+    best: Epoch | None = None
     step = 0
 
     for epoch in range(epochs):
@@ -844,14 +872,7 @@ def train_head(
         lr = recipe.lr
         for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
             lr = schedule.apply(optimizer, step)
-            residual, void = residual_of(
-                batch,
-                extractor=extractor,
-                module=module,
-                arm=arm.name,
-                device=device,
-                precision=recipe.precision,
-            )
+            residual, void = residual_of(batch, stack, precision=recipe.precision)
             truth = torch.from_numpy(
                 batch.raw_i16.astype(np.float32)
             ).unsqueeze(1).to(device)
@@ -868,15 +889,7 @@ def train_head(
                 totals[key] += value
 
         module.eval()
-        scored = val_rmse(
-            val,
-            cfg,
-            tiles=tiles,
-            extractor=extractor,
-            module=module,
-            arm=arm.name,
-            device=device,
-        )
+        scored = val_rmse(val, cfg, stack, tiles=tiles)
         line = Epoch(
             epoch=epoch,
             loss=totals["loss"] / steps_per_epoch,
@@ -887,20 +900,14 @@ def train_head(
             seconds=time.perf_counter() - epoch_started,
         )
         history.append(line)
-        torch.save(
-            {"epoch": epoch, "val_rmse": scored, "state_dict": module.state_dict()},
-            directory / EPOCH_CHECKPOINT.format(epoch=epoch),
-        )
-        if scored < best[0]:
-            best = (scored, epoch)
-            torch.save(
-                {"epoch": epoch, "val_rmse": scored, "state_dict": module.state_dict()},
-                directory / BEST_CHECKPOINT,
-            )
+        save_checkpoint(module, line, directory / EPOCH_CHECKPOINT.format(epoch=epoch))
+        if best is None or line.val_rmse < best.val_rmse:
+            best = line
+            save_checkpoint(module, line, directory / BEST_CHECKPOINT)
         if on_epoch is not None:
             on_epoch(line)
 
-    if best[1] >= 0:
+    if best is not None:
         module.load_state_dict(
             torch.load(directory / BEST_CHECKPOINT, map_location=device)["state_dict"]
         )
@@ -911,16 +918,16 @@ def train_head(
         module=module,
         width=built.width,
         parameters=built.parameters,
-        best_epoch=best[1],
-        best_val_rmse=best[0],
+        best_epoch=-1 if best is None else best.epoch,
+        best_val_rmse=math.inf if best is None else best.val_rmse,
         history=tuple(history),
         seconds=time.perf_counter() - started,
-        checkpoint=str(directory / BEST_CHECKPOINT) if best[1] >= 0 else None,
+        checkpoint=None if best is None else str(directory / BEST_CHECKPOINT),
         tiles=len(train_ids),
         sources=tiles.sources,
-        extractor=extractor,
-        arm=arm.name,
-        device=device,
+        stack=stack,
+        precision_declared=recipe.precision,
+        precision_used=precision_on(device, recipe.precision),
     )
 
 
@@ -932,4 +939,6 @@ def format_trained(trained: Trained) -> list[str]:
         f"{trained.seconds:.1f}s, reading {', '.join(trained.sources)}",
         f"{'kept':<16} epoch {trained.best_epoch} at val_rmse "
         f"{trained.best_val_rmse:.4f} m — {trained.checkpoint}",
+        f"{'precision':<16} {trained.precision_declared} declared, "
+        f"{trained.precision_used} on {'' if trained.stack is None else trained.stack.device}",
     ]

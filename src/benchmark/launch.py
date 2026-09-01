@@ -74,9 +74,25 @@ def resolve(args: argparse.Namespace) -> Resolution:
     The order is what makes *"a typo'd override stops before the corpus is touched"* true
     rather than nearly true: the config is built first, so an unknown knob raises before a
     single file is stat'd, let alone hashed.
+
+    §4.1's two recipe refusals are here for the same reason, and specifically **here rather than
+    in** :func:`_run` (#159): ``--dry-run`` returns before the verb runs, so a check inside `run`
+    would let ``--dry-run --set head.lr=3e-4`` exit 0 while the resolution line printed the moved
+    learning rate under the words *tuned once ... then frozen for every arm*. A pre-flight that
+    prints a drifted recipe as the frozen one is worse than no pre-flight.
+
+    Only for ``run``. `freeze` writes artifacts that are a function of the ``tiles`` and ``masks``
+    groups alone (:attr:`~benchmark.config.BenchmarkConfig.artifact_hash`), so refusing a freeze
+    over a head knob would be a refusal about a recipe that stage does not read.
     """
     cfg = config_from_args(args)
-    return artifacts.resolve(cfg, arms.get(cfg.arm))
+    arm = arms.get(cfg.arm)
+    if args.verb == "run":
+        if getattr(args, "tune", False):
+            tune.assert_tuning_arm(cfg)
+        if arm.trains_head:
+            tune.assert_frozen(cfg)
+    return artifacts.resolve(cfg, arm)
 
 
 def format_resolution(resolution: Resolution, *, verb: str) -> str:
@@ -203,20 +219,16 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     A1's numbers gate everything else (§4.5, user story 29), so the arms that are not built name
     their ticket rather than failing as an unknown key — :data:`benchmark.evaluate.FILLERS`.
 
-    Two refusals were added ahead of all of it at #159, and they are ahead of it because they are
+    Two refusals fire ahead of all of it, in :func:`resolve` rather than here, because they are
     about the **recipe** rather than about the box: a cell whose head hyperparameters have drifted
-    from §4.1's frozen ones, and a ``--tune`` asked for an arm that is not the neutral one. Both
-    belong beside the config-typo refusal, not after a 104 MB hash.
+    from §4.1's frozen ones, and a ``--tune`` asked for an arm that is not the neutral one. They
+    belong beside the config-typo refusal, and they have to be upstream of ``--dry-run`` — see
+    :func:`resolve`.
     """
     # §4.1's "tuned once, then frozen for every arm", enforced before anything is stat'd, let
     # alone spent — it is a fact about the recipe, so it belongs beside the config-typo refusal
     # rather than after a 104 MB hash. Asked only of the arms that train a head: A1 and A7 have
     # no §4.1 recipe to have drifted from.
-    if args.tune:
-        tune.assert_tuning_arm(resolution.config)
-    if resolution.arm.trains == "head":
-        tune.assert_frozen(resolution.config)
-
     missing = resolution.missing
     if missing:
         raise FileNotFoundError(
@@ -241,7 +253,7 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
 
     cfg = resolution.config
     trained = None
-    if resolution.arm.trains == "head":
+    if resolution.arm.trains_head:
         if args.tune:
             return _tune(resolution)
         trained = train.train_head(

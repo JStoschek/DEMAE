@@ -358,6 +358,14 @@ class Head(_Frozen):
             raise ValueError(f"unknown decay {self.decay!r} (§4.1 chose cosine to 0)")
         if self.precision not in ("bf16", "fp32"):
             raise ValueError(f"precision {self.precision!r}: §4.1 trains in bf16")
+        # Checked here rather than left for the training loop to ignore: this field is in
+        # `TUNED_FIELDS`, so it is part of what "frozen for every arm" covers, and a frozen knob
+        # nothing reads is one a reader is entitled to think does something.
+        if self.early_stop_metric != "val_rmse":
+            raise ValueError(
+                f"unknown early_stop_metric {self.early_stop_metric!r} (§4.1 stops on val RMSE, "
+                f"and `benchmark.train` computes exactly that one number over §3.1's val draw)"
+            )
         if self.lr <= 0:
             raise ValueError(f"lr {self.lr} must be positive")
         for name in ("weight_decay", "slope_weight"):

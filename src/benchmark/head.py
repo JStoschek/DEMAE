@@ -4,6 +4,11 @@ LayerNorm on patch tokens → 1x1 conv to 256 → four stages of [3x3 conv, Grou
 2x bilinear upsample] at (256, 128, 64, 32), the full-resolution void mask concatenated at each
 stage's input, and a **1-channel residual added to the A1 fill**.
 
+The residual is in **metres**, because §4.1's loss is masked L1 in metres and
+:mod:`benchmark.metrics` scores in metres. Nothing here rescales it: the encoder's diet is
+applied on the way *in* (§2.1, :func:`benchmark.extract.normalize`) and never inverted, because
+the head never sees the encoder's units — it sees tokens.
+
 ## Why the output is a residual and not a fill
 
 §2.4 makes A1's classical interpolation the base every learned arm improves on, and this module
@@ -35,14 +40,28 @@ The whole delta between the two is the first projection: 256 x (768 - 384) weigh
 them. Everything after the 1x1 conv is byte-identical across A4, A5 and A6, which is what makes
 C1 a claim about the representation and not about the decoder attached to it.
 
-## The mask, at four resolutions
+## The mask, at four resolutions — and at none of them 224
 
-"The full-resolution void mask concatenated at each stage's input" — and the stages run at 14,
-28, 56 and 112 px, so three of the four concatenations are of a *downsampled* mask. It is
-**area**-pooled (:func:`_mask_at`), not sampled: a 16 px void is 0.5% of a tile and nearest-
-neighbour sampling onto the 14x14 token grid would show it to the first stage as either a whole
-token or nothing at all. Area pooling hands each stage the fraction of its cell the void covers,
-which is the quantity the stage can actually act on.
+§4.1 says *the full-resolution void mask concatenated at each stage's input*, and it is worth
+being exact about what that can mean here, because **no stage input sits at 224 px**. A stage is
+[conv, GroupNorm, GELU, upsample] in that order, so its convolution runs at its *input*
+resolution and the doubling happens after; four stages from a 14x14 token grid therefore take
+their inputs at 14, 28, 56 and 112, and the 224 px map that comes out of the fourth goes
+straight into the 1-channel output convolution. Three stages fewer or a fifth would not land on
+the tile at all (:func:`build` refuses that), so this is forced by the architecture rather than
+chosen.
+
+So "full-resolution" is read as naming **the mask that is pooled**, not the resolution each stage
+sees it at: the source is the 224 px void, and each stage is handed it at its own scale. The
+alternative reading — a mask that reaches the stages at 224 — is not expressible by §4.1's own
+stage order, and the reading that *is* buys the thing the phrase is for: a void whose shape is
+finer than a 16 px patch is still visible to the first stage, which it would not be if the mask
+arrived on the token grid.
+
+The pooling is **area**, not sampling (:func:`_mask_at`). A 16 px void is 0.5% of a tile, and
+nearest-neighbour sampling onto the 14x14 grid would show the first stage either a whole token or
+nothing at all. Area pooling hands each stage the fraction of its cell the void covers, which is
+the quantity a convolution can actually act on.
 
 ## Not a way to produce a result
 
@@ -72,13 +91,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: parameters whatever the grouping — so this is a choice about the statistic and not about the
 #: size of the head.
 GROUPS: Final = 32
-
-#: What the head's output is added to, and therefore what it is measured in. Metres, because
-#: §4.1's loss is masked L1 **in metres** and :mod:`benchmark.metrics` scores in metres. Nothing
-#: in this module rescales it: the encoder's diet is applied on the way *in* (§2.1,
-#: :func:`benchmark.extract.normalize`) and never inverted, because the head never sees the
-#: encoder's units — it sees tokens.
-OUTPUT_UNITS: Final = "metres"
 
 #: §4.1's two widths and what the head costs at each — the corrected figures §7 asks to print.
 #: Checked against :func:`parameter_count` by a test rather than trusted, so this dict is a
@@ -164,30 +176,17 @@ def _mask_at(void, size: tuple[int, int]):
     return F.adaptive_avg_pool2d(void, size)
 
 
-def _module():
-    """`torch.nn`, imported at call time.
-
-    :mod:`benchmark` is torch-optional — `freeze`, the scoring path and A1 all run on a box with
-    no CUDA stack (§3.4) — so the import lives inside the two functions that need it rather than
-    at module scope, exactly as :mod:`dataset.loader` keeps its own.
-    """
-    import torch.nn as nn
-
-    return nn
-
-
 def _build_class():
     """The head, defined against a torch imported at call time.
 
-    A closure rather than a module-level ``class FillHead(nn.Module)`` for the reason above: a
-    class statement subclassing ``nn.Module`` would import torch when this module is imported,
-    and A1's scoring path imports this module transitively through
-    :mod:`benchmark.evaluate`'s filler table.
+    A closure rather than a module-level ``class FillHead(nn.Module)``: :mod:`benchmark` is
+    torch-optional — `freeze`, the scoring path and A1 all run on a box with no CUDA stack (§3.4)
+    — and a class statement subclassing ``nn.Module`` would import torch the moment this module
+    is imported, which :mod:`benchmark.arms` does transitively for a parameter count.
     """
     import torch
+    import torch.nn as nn
     import torch.nn.functional as F
-
-    nn = _module()
 
     class FillHead(nn.Module):
         """§4.1's head. ``forward(tokens, void) -> residual in metres``.

@@ -360,6 +360,19 @@ class Arm:
         """
         return self.trains == "nothing"
 
+    @property
+    def trains_head(self) -> bool:
+        """Does this arm train §4.1's shared head? A4, A5, A6 and the ViT-S appendix cell do.
+
+        :attr:`is_inference_only`'s sibling and its argument applied a second time (#159): five
+        separate questions are asked of it — what a row's parameter pair is, whether the
+        resolution line prints §4.1's frozen recipe, whether `run` checks that recipe against the
+        frozen one, whether `run` trains before it scores, and what the eval pass is handed. A6
+        answering four of the five is an arm that trains a head nothing checks the recipe of, and
+        the string comparison spelled at each site is one typo away from exactly that.
+        """
+        return self.trains == "head"
+
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:
     return name, Arm(name=name, **kwargs)
@@ -519,11 +532,14 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     report ``None`` until then rather than a plausible number nothing measured. `run` records
     whatever is known, so A1's row carries its pair today and A3's fills in when its arm exists.
     """
-    from . import head  # deferred: `benchmark.head` reads `benchmark.config`, which reads this
+    # Deferred so that importing this registry stays free: it is a declarative module with no
+    # dependencies at all, and `benchmark.head` pulls in numpy and `dataset.config`. Everything
+    # that asks for a parameter count is already paying for both.
+    from . import head
 
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
     trainable = 0 if arm.is_inference_only else None
-    if arm.trains == "head" and encoder is not None:
+    if arm.trains_head and encoder is not None:
         # Torch-free arithmetic over §4.1's four stage dimensions — see `head.parameter_count`.
         # The width is the *only* thing that differs between A4, A5 and A6 here, which is the
         # same sentence C1 rests on, arriving as a number.
@@ -534,7 +550,7 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
         total = 0 if arm.is_inference_only else None
     elif arm.is_inference_only:
         total = encoder.params
-    elif arm.trains == "head" and encoder.params is not None:
+    elif arm.trains_head and encoder.params is not None:
         total = encoder.params + trainable
     else:
         total = None

@@ -311,11 +311,12 @@ class Resolution:
             f"(N, {extract.tokens}, {encoder.width}), {extract.reference_dtype} reference / "
             f"{extract.compute_dtype} compute, valid = {extract.valid_mask}"
         )
-        if self.arm.trains == "head":
+        if self.arm.trains_head:
             # §4.1's frozen recipe, printed before anything is spent, for the same reason the
             # checkpoint md5 is: a head trained at a moved learning rate converges normally and
-            # prints a row exactly as wide as a good one. Deferred import — this module is on
-            # A1's torch-free path and `benchmark.tune` reaches `benchmark.train`.
+            # prints a row exactly as wide as a good one. The import is deferred because
+            # `benchmark.tune` reaches `benchmark.train`, which reaches this module — a cycle,
+            # not a dependency this module is avoiding.
             from . import head, tune
 
             lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")

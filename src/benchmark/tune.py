@@ -20,18 +20,21 @@ conspicuously absent. Both are asserted by tests rather than argued for here.
 
 ## What is searched, and what is not
 
-:data:`GRID`. Two knobs, six points — and the smallness is the argument rather than a
-concession. §4.1 states a value for every knob in the optimizer block, and most of them are not
-things a val number over 2,000 tiles can distinguish: a 1.08M-parameter head's weight decay, the
-batch size and the epoch count are §7 budget decisions with their own arithmetic, and moving
-them here would be re-deciding a priced line on the strength of a val RMSE. What is left is the
-learning rate — the one knob whose wrong value produces a head that looks broken rather than
-merely worse — and §4.1's own 0.1 slope weight, which is the one term in the loss the plan
-introduces without a citation to a measurement.
+:data:`GRID`. **One knob, three points**, and the smallness is the argument rather than a
+concession.
 
-``slope_weight = 0.0`` is in the grid deliberately. It is the null of §4.1's own claim that the
-slope term is worth having, and a grid that could not select it would be evidence for that claim
-constructed so as not to be able to disconfirm it.
+§4.1 states a value for every knob in the optimizer block, and almost none of them is something
+this pass may move. The batch size and the epoch count are §7 budget lines with their own
+arithmetic, and #162 makes "schedule length matches the frozen arms'" an acceptance criterion —
+so a val RMSE is not what decides them. The loss's shape and its 0.1 slope weight are §4.1's
+*design* of the objective, stated without reference to any measurement this benchmark takes; a
+grid that could select ``slope_weight = 0.0`` would let a val number delete a mandated loss term,
+which is the plan being re-decided on the strength of a result. That is what the spec's own "Out
+of Scope" section forbids, and the fact that testing the null would be scientifically interesting
+does not make it this ticket's to test.
+
+What is left is the **learning rate** — the one knob whose wrong value produces a head that looks
+broken rather than merely worse, and the one §4.1 gives no argument for beyond convention.
 
 ## What this writes, and what it does not decide
 
@@ -72,16 +75,18 @@ TUNING_NAME: Final = "head_tuning.json"
 #: How many epochs each grid point trains for. **Not** §4.1's 50: the pass is comparing six
 #: recipes against each other rather than producing a head anything scores, and §7 prices the
 #: whole GPU program at 2.42 hours with head training as thirteen 50-epoch cells. Ten epochs is
-#: the first tenth of the same cosine — enough for a learning rate that is wrong by 3x to be
-#: visibly wrong, and a twelfth of what a full grid would have cost. The winner is then trained
-#: at the full 50 as A6's own primary cell, which is what ships with this ticket.
+#: the first fifth of the same cosine — enough for a learning rate that is wrong by 3x to be
+#: visibly wrong, and a fraction of what a full-length grid would have cost. The winner is then
+#: trained at the full 50 as A6's own primary cell, which is what ships with this ticket.
+#:
+#: A number the build chose, not one §4.1 states, and recorded as an amendment against the spec
+#: for that reason. What keeps it honest is that it decides *nothing but which point wins*: the
+#: 50 is untouched everywhere a cell is scored, and it is the frozen recipe's own field.
 TUNING_EPOCHS: Final = 10
 
-#: The two knobs the pass searches, and their values. See the module docstring on why these two.
-GRID: Final[dict[str, tuple]] = {
-    "lr": (3e-4, 1e-3, 3e-3),
-    "slope_weight": (0.0, 0.1),
-}
+#: The one knob the pass searches, and its values — §4.1's own 1e-3 and a decade either side.
+#: See the module docstring on why one and not seven.
+GRID: Final[dict[str, tuple]] = {"lr": (3e-4, 1e-3, 3e-3)}
 
 
 class TuningError(RuntimeError):
@@ -126,7 +131,15 @@ def assert_frozen(cfg: BenchmarkConfig) -> None:
     deliberate — moving a hyperparameter for one arm is exactly the thing this benchmark
     pre-registered against, so the cheap path is to stop and the expensive path is to re-tune,
     re-freeze the line and say so.
+
+    **Both halves of "frozen" are checked.** The cell against the constant, and — where the box
+    has one — the constant against the committed record of the pass that chose it
+    (:func:`assert_records_the_frozen_recipe`). Without the second, a tuning pass that selected
+    something new would leave a `head_tuning.json` saying so and every later cell would keep
+    training at the old recipe, with only a console line from a run nobody reran to say the edit
+    was owed.
     """
+    assert_records_the_frozen_recipe(cfg)
     moved = {
         name: (value, config.TUNED_HEAD.tuned[name])
         for name, value in cfg.head.tuned.items()
@@ -143,6 +156,49 @@ def assert_frozen(cfg: BenchmarkConfig) -> None:
         f"(`python -m benchmark.launch run --arm {TUNING_ARM} --tune`) and move "
         f"`benchmark.config.TUNED_HEAD` in a commit that says what moved and why"
     )
+
+
+def assert_records_the_frozen_recipe(cfg: BenchmarkConfig) -> None:
+    """Refuse when this box's committed tuning record selected something the config does not hold.
+
+    The one place the artifact is *read* rather than written, and it is still not a source: no
+    hyperparameter is loaded from it. What is compared is what the pass **selected** against what
+    the frozen line **holds**, and a disagreement means the one-line edit that pass owed the
+    config was never made — so every cell since has been training at a recipe the search rejected.
+
+    Absent is fine and is the ordinary state: ``head_tuning.json`` is written by `run --tune` and
+    lives beside the committed artifacts, so a box that has not run the pass has nothing to
+    disagree with. A record that cannot be parsed is a refusal rather than a shrug, on
+    :func:`benchmark.masks.read_sidecar`'s rule.
+    """
+    path = tuning_path(cfg)
+    if not path.is_file():
+        return
+    try:
+        selected = dict(read_tuning(path)["selected"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TuningError(
+            f"{path} is not a tuning record this contract can read ({exc}). It is written by "
+            f"`python -m benchmark.launch run --arm {TUNING_ARM} --tune`; delete it deliberately "
+            f"if it is a leftover from an older shape"
+        ) from None
+    disagrees = {
+        name: (value, config.TUNED_HEAD.tuned.get(name))
+        for name, value in selected.items()
+        if config.TUNED_HEAD.tuned.get(name) != value
+    }
+    if disagrees:
+        detail = ", ".join(
+            f"{n}: the pass selected {chose!r}, the config holds {frozen!r}"
+            for n, (chose, frozen) in sorted(disagrees.items())
+        )
+        raise TuningError(
+            f"{path} records a tuning pass whose selection was never folded into "
+            f"`benchmark.config.TUNED_HEAD` — {detail}. §4.1 tunes once and then freezes, and "
+            f"until that one line moves, every arm is training at a recipe the search rejected. "
+            f"Make the edit, or delete the record if the pass is not the one this table is "
+            f"answerable to"
+        )
 
 
 def assert_tuning_arm(cfg: BenchmarkConfig) -> None:
@@ -201,16 +257,26 @@ class Tuning:
     epochs: int
     grid: dict[str, tuple]
     searched: tuple[Point, ...]
-    selected: dict[str, Any]
     seconds: float
 
     @property
     def winner(self) -> Point:
-        """The point :attr:`selected` names — the lowest val RMSE, ties to the earliest point."""
-        return min(
-            self.searched,
-            key=lambda p: (p.val_rmse, self.searched.index(p)),
-        )
+        """The lowest val RMSE, ties going to the earliest point in the grid's declared order.
+
+        ``min`` is first-wins, and :func:`points` visits the grid in the order it is declared in,
+        so two boxes that measure the same tie select the same point rather than whichever
+        finished first.
+        """
+        return min(self.searched, key=lambda point: point.val_rmse)
+
+    @property
+    def selected(self) -> dict[str, Any]:
+        """The winner's knobs — **derived**, so the record and the search cannot disagree.
+
+        A stored field here was a second answer to a question with one answer, and the two were
+        computed by different expressions.
+        """
+        return dict(self.winner.knobs)
 
     @property
     def agrees(self) -> bool:
@@ -326,15 +392,11 @@ def tune(
         if on_point is not None:
             on_point(point)
 
-    # The winner is the lowest val RMSE, ties broken by the grid's own declared order — so two
-    # boxes that measure the same tie select the same point rather than whichever finished first.
-    won = min(searched, key=lambda p: (p.val_rmse, searched.index(p)))
     return Tuning(
         arm=cfg.arm,
         epochs=epochs,
         grid={name: tuple(values) for name, values in grid.items()},
         searched=tuple(searched),
-        selected=dict(won.knobs),
         seconds=time.perf_counter() - started,
     )
 

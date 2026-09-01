@@ -207,9 +207,10 @@ class Learned:
     arm: str
     #: ``(raw_i16, voids, cfg) -> [filled]``. See above.
     predict: Callable[[Sequence[np.ndarray], Sequence[np.ndarray], BenchmarkConfig], list]
-    #: How many instances go through one encoder forward. §4.1's training batch by default,
-    #: because the eval pass runs the identical composition and a frozen forward has no reason
-    #: to be narrower here than it was there.
+    #: How many instances go through one encoder forward. One here, so that a `Learned` built
+    #: without thinking about it behaves like A1's per-instance loop; `benchmark.launch` passes
+    #: §4.1's training batch, because the eval pass runs the identical composition and a frozen
+    #: forward has no reason to be narrower here than it was there.
     batch_size: int = 1
     #: What the run record says about the head behind this — :meth:`benchmark.train.Trained.to_dict`.
     detail: Mapping[str, Any] = field(default_factory=dict)
