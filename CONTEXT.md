@@ -206,7 +206,7 @@ GitHub issue #1.
   keeps the shipped pair — moving it would move a number four committed artifacts quote for
   a third of a percent — so a train-only ablation should read the train-only pair from
   `p77-split.json` and say which one it used.
-- **Corpus card** — the project's one artifact written for a reader **outside** it:
+- **Corpus card** — the **corpus**'s artifact written for a reader **outside** the project:
   [`f-honesty-notes.md`](docs/research/f-honesty-notes.md), the plan's E3 honesty notes
   recorded against the shipped 500 k tier. Not a ticket report — it is organized by *what a
   consumer could get wrong* rather than by what Phase F measured, and a Phase-4 model card is
@@ -215,6 +215,16 @@ GitHub issue #1.
   that, because a stale number in a card is one no downstream reader can catch. Caveats with
   no measurable size (the withheld-country gap) are pinned as explicit nulls with a stated
   reason, since an absent entry and a forgotten one look identical.
+- **Dataset card** — Task 1's counterpart, and the benchmark's artifact written for a reader
+  outside it: `dataset_card.md`, the last thing `benchmark.launch freeze` writes
+  ([`src/benchmark/card.py`](src/benchmark/card.py)). It documents §3.1's four tile draws in
+  their five files, both mask artifacts, and the one generator config hash the two share — each
+  by md5 — plus the three sets of data terms. Its numbers are **derived, never typed**, on the
+  corpus card's rule. Two things it states rather than lets a reader infer: the module commits
+  tile lists and masks and **never tiles**, so nothing it ships is a redistribution question;
+  and the 104 MB train mask bank is **not in the repository** — git carries
+  `train_mask_bank.json` holding its md5, and a run refuses a bank whose md5 has moved, so what
+  is committed is the mask sequence's *hash* rather than its bytes.
 - **Manifest** — the per-tile index: one row per tile **actually on disk**, holding the
   storage join (`shard_id`, `row_index`), the per-tile land `mean`/`std`, the geography,
   the `stratum_id` and `provenance` copied from the selection list, and the frozen metric

@@ -302,7 +302,7 @@ def test_report_refuses_the_same_way(frozen, flags):
 def test_freeze_writes_the_registered_bar_and_still_does_not_return_zero(box, flags, capsys):
     """#148's stage and #149's, through the one command — and neither of them exits 0.
 
-    A verb that wrote some of its five artifacts and returned 0 would read as a frozen box,
+    A verb that wrote some of its six artifacts and returned 0 would read as a frozen box,
     which is the failure this file exists to prevent. So the bar lands first, `freeze` says it
     landed, and then #149's tile draw asks this box for a corpus it does not have. What the
     tile stage commits when a corpus *is* there is `test_benchmark_tiles.py`'s.

@@ -21,23 +21,25 @@ uv run python -m benchmark.launch report              # the printed table, the C
 
 #147 shipped the command surface, the frozen run config, the resolution line and ``--dry-run``:
 the pre-flight a build session walks before renting anything. #148 gave ``freeze`` the first of
-its five artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
+its six artifacts, the registered bar (:mod:`benchmark.prereg`), #149 the second, §3.1's tile
 lists (:mod:`benchmark.tiles`), #156 the third, ADR-0012's extractor contract
 (:mod:`benchmark.extract`), and #150 the fourth, §3.2's eval mask list
 (:mod:`benchmark.masks`) — into which #153 transplanted §3.3's real-void family, the one stage
 that reads anything off the network — and #151 the fifth, §3.4's train mask bank and the md5
-sidecar git carries in its place. #158 made ``run`` real for **A1**: §2.4's classical fill
-over the committed eval mask list, both of §8's norm-inversion gates, and the rows and run
-record that come out the other side (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
+sidecar git carries in its place. #154 wrote the sixth and last, §3.4's dataset card
+(:mod:`benchmark.card`), which is why ``freeze`` **returns 0**: there is no stage left to name.
+#158 made ``run`` real for **A1**: §2.4's classical fill over the committed eval mask list, both
+of §8's norm-inversion gates, and the rows and run record that come out the other side
+(:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
-The two verbs that are still short of their stage raise past the work they have, and name what
-has not been built — deliberately, because a verb that quietly returned 0 having done part of
-its job is precisely the shape of failure this module exists to prevent, and it is the shape
-that survived four tickets in Phase 1. It matters more once a verb writes real files than it did
-when none did: a ``freeze`` that lands three of five artifacts and exits 0 is read as a frozen
-box. ``run`` returns 0 now because it finishes what it starts *for the arm it was asked for*;
-an arm whose input convention has no implementation yet names its own ticket rather than
-returning quietly (:data:`benchmark.evaluate.FILLERS`).
+``report`` is the one verb still short of its stage. It raises past the work it has and names
+what has not been built — deliberately, because a verb that quietly returned 0 having done part
+of its job is precisely the shape of failure this module exists to prevent, and it is the shape
+that survived four tickets in Phase 1. It mattered more once a verb wrote real files than it did
+when none did: a ``freeze`` that lands three of six artifacts and exits 0 is read as a frozen
+box. ``freeze`` and ``run`` return 0 now because they finish what they start — ``run`` *for the
+arm it was asked for*, and an arm whose input convention has no implementation yet names its own
+ticket rather than returning quietly (:data:`benchmark.evaluate.FILLERS`).
 
 ## Why the resolution line is printed before anything is spent
 
@@ -55,7 +57,7 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles
+from . import arms, artifacts, card, evaluate, extract, masks, prereg, results, tiles
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -86,7 +88,7 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     Named rather than absent, and raising rather than returning 0, because the alternative is a
     command that reports success having done part of its job — which is the failure ADR-0009
     exists to close and the one this repo has a name for. It matters most now that one verb has
-    started writing real artifacts: a `freeze` that lands three of five files and exits 0 is read
+    started writing real artifacts: a `freeze` that lands three of six files and exits 0 is read
     as a frozen box.
     """
     raise NotImplementedError(
@@ -95,16 +97,15 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
     )
 
 
-#: The three verbs take one resolution and return an exit code. ``run`` is the first one that
-#: does (#158) — `freeze` still stops short of §3.4's train mask bank and `report` renders
-#: nothing yet, so those two are annotated ``NoReturn`` and say which stage is missing. The
-#: uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
+#: The three verbs take one resolution and return an exit code. ``freeze`` and ``run`` do (#154,
+#: #158); ``report`` renders nothing yet, so it is annotated ``NoReturn`` and says which stage is
+#: missing. The uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
 
 
-def _freeze(resolution: Resolution) -> NoReturn:
+def _freeze(resolution: Resolution) -> int:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only.
 
-    All five are built, and the order is each ticket's own argument rather than the order they
+    All six are built, and the order is each ticket's own argument rather than the order they
     happened to land in.
 
     The **registered bar** goes first (#148) for the reason ADR-0013 gives: every threshold the
@@ -142,6 +143,16 @@ def _freeze(resolution: Resolution) -> NoReturn:
     one artifact here whose refusal would otherwise arrive twenty minutes late. It is also the
     one that is **not** committed as bytes: 104 MB cannot go in git, so what lands in
     ``artifacts_dir`` is the sidecar holding its md5.
+
+    **§3.4's dataset card** goes last (#154), and it is last by definition: it is the document
+    that says what the five stages above it produced, so it cannot be written before they have.
+    It is also the only artifact here written for a *reader* — the two things a reader would
+    otherwise have to infer are that the module commits tile lists and masks and never tiles,
+    and that the bank is not in this repository (:mod:`benchmark.card`).
+
+    With it, `freeze` **returns 0** for the first time. Every verb above raised past the work it
+    had and named the stage that was missing, which is the defence against a command that writes
+    five of six artifacts and reports success; there is no sixth stage left to name.
     """
     paths = resolution.config.paths
     bar = prereg.write_bar(Path(paths.artifacts_dir) / prereg.BAR_NAME, plan=paths.plan_path)
@@ -158,20 +169,20 @@ def _freeze(resolution: Resolution) -> NoReturn:
         f"  ADR-0012's contract, md5 {artifacts.file_md5(spec)} — raw int16 metres in, "
         f"{extract.LAYERS} block outputs plus a separate `output` out, re-checked at load"
     )
-    for line in masks.format_written(masks.freeze(resolution.config), resolution.config.masks):
+    evaluated = masks.freeze(resolution.config)
+    for line in masks.format_written(evaluated, resolution.config.masks):
         print(line)
-    for line in masks.format_bank_written(masks.freeze_bank(resolution.config)):
+    banked = masks.freeze_bank(resolution.config)
+    for line in masks.format_bank_written(banked):
         print(line)
-    _unbuilt(
-        "freeze",
-        f"wrote {prereg.BAR_NAME}, §3.1's tile lists, {extract.SPEC_FILENAME}, "
-        f"{artifacts.EVAL_MASKS_NAME} and the train mask bank, and stopped — the last of the "
-        f"freeze is not built",
-        "the dataset card, written beside them — the four tile lists, both mask artifacts and "
-        "the generator's config hash, each with its md5, plus the three sets of data terms and "
-        "the sentence a reader would otherwise have to infer: the module commits tile lists and "
-        "masks and never tiles, and the 104 MB bank is not in this repository (§3.4, #154)",
-    )
+    # Handed the two mask stages' own return values rather than re-reading their files: what the
+    # card owes about them — the real family's attrition, the bank's draw hash — is in those
+    # objects, and a second reader would be a second answer to what this freeze just did. The
+    # tile lists it re-reads itself, on the contract family's rule (:mod:`benchmark.card`).
+    written = card.freeze(resolution.config, eval_masks=evaluated, bank=banked)
+    for line in card.format_written(written):
+        print(line)
+    return 0
 
 
 def _run(resolution: Resolution) -> int:
