@@ -84,9 +84,22 @@ TUNING_NAME: Final = "head_tuning.json"
 #: 50 is untouched everywhere a cell is scored, and it is the frozen recipe's own field.
 TUNING_EPOCHS: Final = 10
 
-#: The one knob the pass searches, and its values — §4.1's own 1e-3 and a decade either side.
-#: See the module docstring on why one and not seven.
-GRID: Final[dict[str, tuple]] = {"lr": (3e-4, 1e-3, 3e-3)}
+#: The one knob the pass searches, and its values — §4.1's own 1e-3 and two decades above,
+#: one below. See the module docstring on why one knob and not seven.
+#:
+#: **Extended 2026-09-01, after a result, and that is worth being uncomfortable about.** The
+#: first pass ran `(3e-4, 1e-3, 3e-3)` and selected **3e-3 — the top of the grid**. A search whose
+#: winner sits on its own boundary has not found an optimum, it has found a wall: nothing in it
+#: distinguishes "3e-3 is best" from "best is somewhere above 3e-3". So the grid was widened and
+#: the pass re-run whole.
+#:
+#: The reason this is not the thumb on the scale §4.1 forbids is that the rule being applied does
+#: not depend on *which* point won or on what any arm's score is: a winner on a boundary means an
+#: unbracketed optimum whichever end it lands on, and the same widening would have followed a win
+#: at 3e-4. It is also decided on **val**, on the neutral arm, before a single test instance has
+#: been scored — no results parquet existed when this changed. What would not be acceptable, and
+#: is not what happened, is widening a grid because the arm we hope wins did badly.
+GRID: Final[dict[str, tuple]] = {"lr": (3e-4, 1e-3, 3e-3, 1e-2, 3e-2)}
 
 
 class TuningError(RuntimeError):
@@ -118,7 +131,7 @@ def recipe_for(point: dict[str, Any], base: Head | None = None) -> Head:
 # --- The guard ----------------------------------------------------------------
 
 
-def assert_frozen(cfg: BenchmarkConfig) -> None:
+def assert_frozen(cfg: BenchmarkConfig, *, tuning: bool = False) -> None:
     """Refuse a cell whose head recipe is not the one frozen for every arm.
 
     Called by `run` before it spends anything, for the arms that train a head. What it compares
@@ -138,8 +151,20 @@ def assert_frozen(cfg: BenchmarkConfig) -> None:
     something new would leave a `head_tuning.json` saying so and every later cell would keep
     training at the old recipe, with only a console line from a run nobody reran to say the edit
     was owed.
+
+    ``tuning`` skips **only** the second half, and only for `run --tune`. The record check exists
+    to stop a *scoring* cell running against a recipe the search rejected; a tuning pass scores
+    nothing, and it is the one thing that can resolve the disagreement — so a guard that refused
+    it would make the state it detects unrecoverable except by deleting the record, which is the
+    one file that says what the disagreement is. Found by running it: the first real pass selected
+    a new learning rate and then locked out its own re-run.
+
+    The first half still applies to a tuning pass, and has to: :data:`GRID` searches *around* the
+    frozen recipe (:func:`recipe_for`), so a base that has already drifted is not a search anyone
+    can read the result of.
     """
-    assert_records_the_frozen_recipe(cfg)
+    if not tuning:
+        assert_records_the_frozen_recipe(cfg)
     moved = {
         name: (value, config.TUNED_HEAD.tuned[name])
         for name, value in cfg.head.tuned.items()

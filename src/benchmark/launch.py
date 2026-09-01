@@ -91,7 +91,10 @@ def resolve(args: argparse.Namespace) -> Resolution:
         if getattr(args, "tune", False):
             tune.assert_tuning_arm(cfg)
         if arm.trains_head:
-            tune.assert_frozen(cfg)
+            # A tuning pass is exempted from the *record* half of the guard — it is the thing
+            # that resolves a record/config disagreement, so refusing it would make that state
+            # unrecoverable. See `tune.assert_frozen`.
+            tune.assert_frozen(cfg, tuning=getattr(args, "tune", False))
     return artifacts.resolve(cfg, arm)
 
 

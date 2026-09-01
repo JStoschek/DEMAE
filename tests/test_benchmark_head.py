@@ -396,6 +396,28 @@ def test_a_seed_count_is_not_a_tuned_hyperparameter(box, flags, stub):
         tune.assert_frozen(BenchmarkConfig(head=Head(slope_weight=0.3)))
 
 
+def test_a_tuning_pass_is_not_locked_out_by_the_record_it_is_there_to_replace(
+    box, flags, stub, frozen
+):
+    """The guard's own deadlock, closed (#159).
+
+    A tuning pass that selects something new leaves a record disagreeing with the frozen line —
+    which is exactly the state `assert_records_the_frozen_recipe` refuses. Re-tuning is the
+    remedy for that state, so a guard that refused it too would leave deleting the record as the
+    only way out, and the record is the one file that says what the disagreement is.
+
+    A *scoring* cell in the same state is still refused, which is the half that matters.
+    """
+    directory = box / "artifacts"
+    (directory / tune.TUNING_NAME).write_text(
+        json.dumps({"arm": "A6", "selected": {"lr": 0.0003}, "searched": [], "grid": {}})
+    )
+    with pytest.raises(tune.TuningError, match="never folded into"):
+        launch.main(["run", "--arm", "A6", *flags])
+    # ...and the same box, with `--tune`, runs.
+    assert launch.main(["run", "--arm", "A6", "--tune", *flags]) == 0
+
+
 def test_the_grid_searches_only_the_knob_the_plan_argues_for_least():
     """§4.1 states a value for every knob; the one this pass may move is the learning rate.
 
@@ -407,6 +429,9 @@ def test_the_grid_searches_only_the_knob_the_plan_argues_for_least():
     assert set(tune.GRID) == {"lr"}
     assert TUNED_HEAD.lr in tune.GRID["lr"]
     assert len(tune.points()) == len(tune.GRID["lr"])
+    # §4.1's own value must not sit on an end of the grid: a winner on a boundary is an
+    # unbracketed optimum, which is what sent the first real pass back for a wider search.
+    assert tune.GRID["lr"][0] < TUNED_HEAD.lr < tune.GRID["lr"][-1]
     searchable = set(tune.GRID)
     for name in ("slope_weight", "loss", "epochs", "batch_size", "stage_dims"):
         assert name not in searchable, f"{name} is §4.1's to state, not this pass's to move"
