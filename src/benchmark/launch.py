@@ -59,7 +59,18 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, evaluate, extract, masks, prereg, report, results, tiles
+from . import (
+    arms,
+    artifacts,
+    evaluate,
+    extract,
+    masks,
+    prereg,
+    report,
+    results,
+    tiles,
+    zeroshot,
+)
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -214,10 +225,19 @@ def _run(resolution: Resolution) -> int:
     if resolution.reads("mask_bank"):
         masks.assert_bank_matches(resolution.config)
     checkpoint = resolution.checkpoint
-    if checkpoint is not None and not checkpoint.present:
+    if checkpoint is not None and checkpoint.required and not checkpoint.present:
         raise FileNotFoundError(
             f"arm {resolution.arm.name} reads the {resolution.arm.encoder} encoder and "
             f"{checkpoint.absent_note}"
+        )
+    # A2's second file, on the same rule and for a sharper reason: §14's release is encoder-only,
+    # so an arm whose whole mechanism *is* the pretrained decoder cannot be driven by the file
+    # every other arm initializes from (#167). Refused here rather than inside the pass so the
+    # message names the path and the field instead of a missing tensor.
+    mae = resolution.mae_checkpoint
+    if mae is not None and not mae.present:
+        raise FileNotFoundError(
+            f"arm {resolution.arm.name} runs the pretrained MAE decoder and {mae.absent_note}"
         )
 
     cfg = resolution.config
@@ -233,6 +253,7 @@ def _run(resolution: Resolution) -> int:
         run=results.run_id(resolution),
         config_hash=cfg.config_hash,
     )
+    register = _register_disposition(resolution, scored)
     path, total, record = results.write(
         rows,
         resolution,
@@ -240,10 +261,57 @@ def _run(resolution: Resolution) -> int:
         seconds=scored.seconds,
         parameters=arms.parameter_counts(resolution.arm),
         gates=scored.gates,
+        register=register,
     )
     for line in results.format_written(path, rows=len(rows), total=total, record=record):
         print(line)
+    if register is not None:
+        print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
+
+
+def _register_disposition(resolution: Resolution, scored: evaluate.Pass) -> dict | None:
+    """How this cell's row is to be read, for the one registered rule whose trigger is a result.
+
+    R12 governs A2 and nothing else, so this is ``None`` for every other arm and the run record
+    carries no ``register`` block at all (:func:`benchmark.results.run_record`).
+
+    The comparison is against **A1's rows in the same cell** — same size, same seed — read back
+    out of the results parquet rather than recomputed, because §4.5 already runs A1 first and its
+    numbers gate every learned arm. A2's own rows come from the pass in memory, before
+    :func:`benchmark.results.write` lands them: the disposition is part of the record that
+    describes those rows, so it cannot be computed from a file they are not in yet.
+
+    Nothing here decides anything. R12 is discursive (ADR-0013) — the enforcement is the
+    writeup's and the reviewer's — so a run that trips the contingency still writes its rows and
+    still exits 0. What changes is that the record says so, which is the whole of what a
+    discursive rule can be held to.
+    """
+    arm = resolution.arm
+    if not zeroshot.governs(arm):
+        return None
+    cfg = resolution.config
+    return zeroshot.disposition(
+        arm,
+        a1_rows=results.rows_for_cell(
+            cfg.paths.results_path,
+            arm="A1",
+            size=cfg.size,
+            seed=cfg.seed,
+            columns=zeroshot.COMPARISON_COLUMNS,
+        ),
+        a2_rows=[
+            {
+                "band": item.band,
+                "family": item.family,
+                "bucket": item.bucket,
+                "tile_id": item.tile_id,
+                "instance": item.instance,
+                zeroshot.COMPARISON_METRIC: item.metrics[zeroshot.COMPARISON_METRIC],
+            }
+            for item in scored.scored
+        ],
+    )
 
 
 def _report(resolution: Resolution) -> int:

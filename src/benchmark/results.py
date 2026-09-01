@@ -246,6 +246,47 @@ def read_rows(path: Path | str):
     return pq.read_table(Path(path))
 
 
+def rows_for_cell(
+    path: Path | str, *, arm: str, size: str, seed: int, columns: Sequence[str]
+) -> list[dict]:
+    """One cell's rows as plain dicts, or ``[]`` when the file holds none.
+
+    Here rather than at the caller because this module owns the file: which columns key a cell
+    is :meth:`ResultRow.cell`'s answer, and a second filter written beside a consumer is one that
+    can disagree with :func:`append_rows`' replacement rule about what "this cell" means.
+
+    ``[]`` for a missing file rather than a refusal, on :func:`read_run_records`' rule: a results
+    parquet that does not exist yet is a state, and the caller — #167's R12 comparison, which
+    needs A1's rows to read A2's row — has something specific to say about it that an exception
+    here would pre-empt.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    table = read_rows(path)
+    missing = [name for name in (*columns, *KEY_COLUMNS) if name not in table.schema.names]
+    if missing:
+        raise ValueError(
+            f"{path} has no {missing} column(s); it holds {table.schema.names}. The metric "
+            f"roster is the registered bar's (R1), so a file written under a different roster "
+            f"is a file this run cannot read a cell out of"
+        )
+    # Filtered in Arrow and *then* decoded, rather than the other way round. The full table is
+    # ~1.3M rows by the end of the sweep (eleven printed rows over three seeds) and one cell is
+    # ~40,000 of them, so decoding first would turn a per-run read into eight million Python
+    # objects to throw away.
+    import pyarrow.compute as pc
+
+    cell = table.filter(
+        pc.and_(
+            pc.and_(pc.equal(table["arm"], arm), pc.equal(table["size"], size)),
+            pc.equal(table["seed"], seed),
+        )
+    )
+    column = {name: cell.column(name).to_pylist() for name in columns}
+    return [{name: column[name][i] for name in columns} for i in range(cell.num_rows)]
+
+
 # --- The run record -----------------------------------------------------------
 
 
@@ -285,6 +326,7 @@ def run_record(
     parameters: Mapping[str, int | None],
     metrics: Sequence[str],
     gates: Mapping[str, Any] | None = None,
+    register: Mapping[str, Any] | None = None,
 ) -> dict:
     """The provenance payload a results table is answerable to.
 
@@ -297,6 +339,15 @@ def run_record(
 
     ``parameters`` is §6 item 4's, and it is a mapping with two keys rather than two ints so that
     "not built yet" stays expressible — see :func:`benchmark.arms.parameter_counts`.
+
+    ``register`` is a **disposition**, not a rule: how this cell's row is to be read under
+    whichever registered rule governs it, computed rather than asserted. ADR-0013's register is
+    already committed in `task1-prereg-bar.json` and is not restated here. What a run can add is
+    the outcome — R12's majority-of-bands comparison and its verdict (:func:`benchmark.zeroshot.
+    disposition`) — for the rules whose trigger is a *result* rather than a threshold, and which
+    therefore have nothing a bar file could hold. ``None`` for a cell no such rule governs, and
+    the key is then absent rather than null: a block on every row is one a reviewer stops
+    reading, and an empty one would say "R12 found nothing" where nothing asked.
     """
     return {
         "run_id": run_id(resolution),
@@ -314,6 +365,7 @@ def run_record(
             "metrics": list(metrics),
         },
         "gates": dict(gates or {}),
+        **({"register": dict(register)} if register else {}),
     }
 
 
@@ -366,6 +418,7 @@ def write(
     seconds: float,
     parameters: Mapping[str, int | None],
     gates: Mapping[str, Any] | None = None,
+    register: Mapping[str, Any] | None = None,
 ) -> tuple[Path, int, dict]:
     """Land one cell: the rows into the parquet, the record beside it. Returns both plus totals.
 
@@ -382,6 +435,7 @@ def write(
         parameters=parameters,
         metrics=metrics,
         gates=gates,
+        register=register,
     )
     append_run_record(record, run_record_path(path))
     return path, total, record

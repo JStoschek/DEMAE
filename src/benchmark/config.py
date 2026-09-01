@@ -556,6 +556,13 @@ class Paths(_Frozen):
     demae_r5_checkpoint: str | None = ".release-work/release-R5-v2/encoder.pt"
     demae_r4_checkpoint: str | None = ".release-work/release-R4-v2/encoder.pt"
     demae_vits_checkpoint: str | None = None
+    #: The **pretraining** checkpoints those encoders were exported from — the only files in
+    #: this benchmark that carry an MAE decoder. ``None`` until a box mounts one, and that is
+    #: the honest default: §14's release is encoder-only, so the decoder A2 runs is not in the
+    #: released artifact and is not in this repository. Each release manifest names the file it
+    #: came from in its ``source_checkpoint`` field, which is where to look.
+    demae_r5_mae_checkpoint: str | None = None
+    demae_r4_mae_checkpoint: str | None = None
     #: TerraMind's DEM tokenizer and the ImageNet MAE. ``None`` until a box mounts them —
     #: an unmounted checkpoint is *named* at resolution time rather than silently absent, which
     #: is the whole reason these are fields rather than lookups inside a loader.

@@ -450,6 +450,11 @@ def test_a_ruled_out_arm_is_refused_generically_rather_than_by_a_special_case(na
     assert "ruled out" not in str(exc.value), "a special-cased message is a surface too"
 
 
+#: The conventions that have an implementation rather than a ticket. ``classical_fill`` is
+#: A1's (#158) and ``token_drop`` is A2's (#167); the other two name the tickets that build them.
+BUILT_CONVENTIONS = ("classical_fill", "token_drop")
+
+
 def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_name_a_ticket():
     """A1 runs first and its numbers gate the rest, so the others say which ticket builds them.
 
@@ -458,14 +463,19 @@ def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_nam
     checkpoint this box has not mounted — so no CLI path reaches the unbuilt conventions today.
     What can go wrong here is the table falling behind the registry, which is a completeness
     claim about a dict.
+
+    The entries are **factories** — ``(cfg, arm) -> filler`` — since #167: a convention that runs
+    an encoder has to load one once per pass rather than once per instance, and ``token_drop`` is
+    shared by two arms whose weights differ. So the refusal is raised by the filler a factory
+    returns, which is exactly where a built convention would do its work.
     """
     assert set(evaluate.FILLERS) == set(arms.INPUT_CONVENTIONS)
 
-    for convention, filler in evaluate.FILLERS.items():
-        if convention == "classical_fill":
+    for convention, factory in evaluate.FILLERS.items():
+        if convention in BUILT_CONVENTIONS:
             continue
         with pytest.raises(NotImplementedError, match=f"{convention}.*not built") as exc:
-            filler(None, None, None)
+            factory(None, None)(None, None)
         assert "#" in str(exc.value), f"{convention} does not name the ticket that builds it"
 
 

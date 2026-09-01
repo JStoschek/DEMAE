@@ -357,6 +357,19 @@ _ANCHORS: Final[dict[str, Callable[[Any], tuple[str, ...]]]] = {
 # --- §6, as the anchor sees it ------------------------------------------------
 
 
+def rule(name: str) -> Rule:
+    """One register row, by name — :data:`REGISTER`'s :func:`benchmark.arms.get`.
+
+    Distinct from :meth:`Bar.rule`, which reads the register a *committed bar file* carries. This
+    reads the one in code, which is what a caller wants when it needs a rule's statement or its
+    home rather than a value a run must clear — a discursive rule has no value either way.
+    """
+    for entry in REGISTER:
+        if entry.rule == name:
+            return entry
+    raise KeyError(f"{name} is not in the register — it holds {[e.rule for e in REGISTER]}")
+
+
 def section_text(plan: Path | str = PLAN_PATH) -> str:
     """§6 of the plan, from its heading to the next one, in the form an anchor matches.
 
