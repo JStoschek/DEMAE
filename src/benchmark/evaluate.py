@@ -67,7 +67,7 @@ import numpy as np
 from dataset.geometry import PixelSize, band_pixel_spacing_m
 from pretrain.artifact import read_tile_strata
 
-from . import arms, fill, masks, metrics, prereg, results, voids
+from . import arms, fill, masks, metrics, prereg, results, voids, zeroshot
 from .artifacts import EVAL_MASKS_NAME, TEST_TILES_NAME, file_md5
 from .config import BenchmarkConfig
 
@@ -181,36 +181,88 @@ def bands_for(cfg: BenchmarkConfig) -> voids.Bands:
 # --- The arm's fill -----------------------------------------------------------
 
 
-def _classical_fill(tile: Tile, void: np.ndarray, cfg: BenchmarkConfig) -> np.ndarray:
+#: What one instance's fill looks like once the cell is known: a tile and a void in, metres out.
+Filler = Callable[["Tile", np.ndarray], np.ndarray]
+
+#: How a convention turns *the cell* into one of those. A factory rather than a plain function,
+#: and #167 is why: a filler that runs an encoder has to load one, and a signature that took the
+#: config per instance would load a ViT-B thirty thousand times. It is also what lets a
+#: convention see the **arm** — ``token_drop`` is shared by A2-R5 and A2-R4, and a filler that
+#: could not tell them apart would score one cell's rows with the other's weights.
+FillerFor = Callable[[BenchmarkConfig, "arms.Arm"], Filler]
+
+
+def _classical_fill(cfg: BenchmarkConfig, arm: arms.Arm) -> Filler:
     """A1 — §2.4's classical interpolation over the raw metres the shard holds."""
-    return fill.fill(tile.raw_i16, void, recipe=cfg.fill)
+
+    def fill_one(tile: Tile, void: np.ndarray) -> np.ndarray:
+        return fill.fill(tile.raw_i16, void, recipe=cfg.fill)
+
+    return fill_one
 
 
-def _unbuilt(convention: str, what: str, ticket: str) -> Callable[..., np.ndarray]:
+def _token_drop(cfg: BenchmarkConfig, arm: arms.Arm) -> Filler:
+    """A2 — §4.3's native MAE inpainting, no trained head (#167, :mod:`benchmark.zeroshot`).
+
+    The model is loaded **once here**, when the pass is built, and its own refusals fire before
+    the first instance rather than 30,000 rows in — the same rule §8's two gates follow, and for
+    the same reason: a refusal that costs an eval pass is one nobody consults until the bill
+    arrives.
+
+    A3 shares this convention and is not this ticket's: it trains ``encoder+decoder``, so what it
+    needs from a checkpoint is #162's question. It reaches the branch below and is told so.
+    """
+    if not arm.runs_pretrained_decoder:
+        return _unbuilt(
+            "token_drop",
+            f"{arm.name} trains {arm.trains} over this convention, and the fine-tune that "
+            f"produces those weights is not built",
+            "#162",
+        )(cfg, arm)
+
+    field = arms.ENCODERS[arm.encoder].mae_checkpoint_field
+    path = None if field is None else getattr(cfg.paths, field)
+    if path is None:
+        raise FileNotFoundError(
+            f"{arm.name} runs the pretrained MAE decoder and this box has not mounted one. "
+            f"§14 exports encoder-only weights, so the release `encoder.pt` cannot drive it — "
+            f"see the resolution line's `mae checkpoint` row"
+        )
+    inpainter = zeroshot.load_inpainter(path, expect=arms.ENCODERS[arm.encoder])
+    inpainter.check_ready()
+
+    def fill_one(tile: Tile, void: np.ndarray) -> np.ndarray:
+        return inpainter.infill(tile.raw_i16, void)
+
+    return fill_one
+
+
+def _unbuilt(convention: str, what: str, ticket: str) -> FillerFor:
     """A convention that is registered and not yet built, saying which ticket builds it."""
 
-    def refuse(tile: Tile, void: np.ndarray, cfg: BenchmarkConfig) -> np.ndarray:
-        raise NotImplementedError(
-            f"the {convention!r} input convention is not built: {what} ({ticket}). A1 runs "
-            f"first and its numbers gate every learned arm, because each of them is a residual "
-            f"over this fill (§2.4, §4.5)"
-        )
+    def build(cfg: BenchmarkConfig, arm: arms.Arm) -> Filler:
+        def refuse(tile: Tile, void: np.ndarray) -> np.ndarray:
+            raise NotImplementedError(
+                f"the {convention!r} input convention is not built: {what} ({ticket}). A1 runs "
+                f"first and its numbers gate every learned arm, because each of them is a "
+                f"residual over this fill (§2.4, §4.5)"
+            )
 
-    return refuse
+        return refuse
+
+    return build
 
 
 #: One entry per :data:`benchmark.arms.INPUT_CONVENTIONS` value — the table §1's rows vary over.
 #: Complete rather than partial, so an unbuilt arm names its ticket instead of failing as a
 #: missing key, and so that adding a convention to the registry without building it is a visible
 #: gap here rather than a `KeyError` on a rented box.
-FILLERS: Final[dict[str, Callable[[Tile, np.ndarray, BenchmarkConfig], np.ndarray]]] = {
+FILLERS: Final[dict[str, FillerFor]] = {
     "classical_fill": _classical_fill,
     "a1_fill_plus_mask": _unbuilt(
         "a1_fill_plus_mask", "the §4.1 shared head over a frozen encoder", "#159, #160, #161"
     ),
-    "token_drop": _unbuilt(
-        "token_drop", "DEMAE's native MAE inpainting path", "#160's zero-shot and fine-tuned arms"
-    ),
+    "token_drop": _token_drop,
     "a1_fill_through_tokenizer": _unbuilt(
         "a1_fill_through_tokenizer", "A9's encode/FSQ/diffusion-decode pass", "#163"
     ),
@@ -440,7 +492,7 @@ def score_instance(
     instance: Instance,
     cfg: BenchmarkConfig,
     *,
-    arm: arms.Arm,
+    filler: Filler,
     bands: voids.Bands,
     bar: prereg.Bar,
 ) -> Scored:
@@ -470,7 +522,7 @@ def score_instance(
             f"`freeze` and none is ever trimmed, so this mask did not come from the generator — "
             f"the usual cause is a decode that inverted the void"
         )
-    filled = FILLERS[arm.input_convention](tile, void, cfg)
+    filled = filler(tile, void)
     return Scored(
         tile_id=instance.tile_id,
         family=instance.family,
@@ -531,6 +583,11 @@ def run_pass(
     bar = metrics.bar_for(cfg)
     gates: dict[str, Any] = {"golden_tile": golden_gate(cfg, bar)}
 
+    # Built here, with the gates, and for the gates' reason: an arm that loads an 86M-parameter
+    # model refuses an unmounted checkpoint — or a decoder with no registered inversion (#167) —
+    # while the clock is still cheap. A1's factory does nothing at all, so this costs it nothing.
+    filler = FILLERS[arm.input_convention](cfg, arm)
+
     instances = read_instances(cfg)
     store = TileStore(cfg.paths.corpus_dir)
     bands = bands_for(cfg)
@@ -547,7 +604,7 @@ def run_pass(
                 store.read(instance.tile_id),
                 instance,
                 cfg,
-                arm=arm,
+                filler=filler,
                 bands=bands,
                 bar=bar,
             )

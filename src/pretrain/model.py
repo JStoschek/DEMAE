@@ -209,6 +209,70 @@ def random_masking(
     return kept, torch.gather(mask, 1, ids_restore), ids_restore
 
 
+def keep_masking(x: Tensor, keep: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    """:func:`random_masking`'s sibling for a keep-set that is **read** rather than drawn.
+
+    Returns the same triple in the same conventions — the kept tokens ``(N, n_keep, D)``, the
+    binary mask ``(N, L)`` in patch order with 1 where a token was hidden, and the restore
+    permutation — so a caller can hand either function's output to
+    :meth:`MaskedAutoencoder.forward_decoder` without knowing which drew the mask.
+
+    Here rather than in the benchmark because it is the model's own question: *this* MAE's
+    ``ids_restore`` convention is what a keep-set has to be turned into, and a second
+    implementation of the unshuffle living next to the caller is one that can drift from
+    :meth:`~MaskedAutoencoder.forward_decoder`'s gather without either one changing.
+
+    §4.3's zero-shot arm is what wants it: the patches a void touches are dropped, so the mask
+    is a fact about the void and not a draw. Two consequences follow, and both are refusals
+    below rather than surprises later:
+
+    * **The keep count must be uniform across the batch.** One gather has one width, and a
+      ragged keep-set would silently truncate every row to the narrowest. A void-driven mask is
+      per-tile ragged by nature, so the caller batches by keep count or runs one tile at a time.
+    * **A row must keep at least one token.** A void touching every patch leaves the encoder
+      nothing to condition on, and what comes back is the decoder's unconditional prior — a
+      well-shaped, plausible tile that is not a reconstruction of anything.
+
+    The kept tokens come out in **ascending patch order**, which is the property that makes this
+    agree with :func:`random_masking` on the one keep-set they can both produce.
+    """
+    if keep.dtype != torch.bool:
+        raise ValueError(f"keep is a boolean keep-set, not a {keep.dtype} tensor")
+    if keep.shape != x.shape[:2]:
+        raise ValueError(f"keep {tuple(keep.shape)} does not index tokens {tuple(x.shape[:2])}")
+
+    # Onto `x`'s device before anything is indexed: the keep-set is built from a numpy void mask
+    # on the CPU and the model may be on mps or cuda, and a `gather` whose indices live on the
+    # other device raises halfway through a pass rather than at its edge.
+    keep = keep.to(x.device)
+    counts = keep.sum(dim=1)
+    n_keep = int(counts[0])
+    ragged = (counts != counts[0]).nonzero()
+    if ragged.numel():
+        other = int(ragged[0, 0])
+        raise ValueError(
+            f"row 0 keeps {n_keep} tokens and row {other} keeps {int(counts[other])}: one "
+            f"gather has one width, so a batch is grouped by keep count (or run one at a time)"
+        )
+    if n_keep == 0:
+        raise ValueError(
+            "every token is hidden, so the encoder has no visible token to condition on and "
+            "the decoder would return its unconditional prior rather than a reconstruction"
+        )
+
+    # `argsort` on the *descending* keep flag puts the kept indices first, and `stable=True` is
+    # what holds each half in ascending patch order — which is the ordering `random_masking`
+    # produces only by accident of the draw and this function promises.
+    ids_shuffle = torch.argsort(~keep, dim=1, stable=True)
+    ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+    ids_keep = ids_shuffle[:, :n_keep]
+    kept = torch.gather(x, 1, ids_keep.unsqueeze(-1).expand(-1, -1, x.shape[2]))
+    # fp32 regardless of `x`'s dtype, matching `random_masking`: the mask is bookkeeping, not an
+    # activation, and every consumer multiplies it against a loss §4 computes in fp32.
+    return kept, (~keep).to(dtype=torch.float32), ids_restore
+
+
 class MaskedAutoencoder(nn.Module):
     """ViT encoder over the visible tokens, shallow decoder over all of them (§2).
 
@@ -480,6 +544,24 @@ class MaskedAutoencoder(nn.Module):
         tokens, mask, ids_restore = random_masking(
             self.embed_tokens(imgs), self.n_visible, generator=generator
         )
+        return self._transform(tokens), mask, ids_restore
+
+    def encode_visible(
+        self, imgs: Tensor, keep: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """:meth:`forward_encoder` over a keep-set the caller supplies: no draw, no ratio.
+
+        The third of this class's three encoder paths, and the axis they differ on is *which
+        tokens the encoder sees*: :meth:`encode` sees all of them, :meth:`forward_encoder` sees
+        a random :attr:`n_visible`, and this sees exactly what ``keep`` names. Everything else —
+        the embedding, the CLS token, the blocks, the final norm — is the one shared path, which
+        is what lets the triple it returns go straight to :meth:`forward_decoder`.
+
+        ``keep`` is ``(N, n_patches)`` boolean, 1 where the encoder should see the patch. §4.3's
+        zero-shot inpainting builds it from the patches a void touches; see :func:`keep_masking`
+        for the two refusals that come with a mask nobody drew.
+        """
+        tokens, mask, ids_restore = keep_masking(self.embed_tokens(imgs), keep)
         return self._transform(tokens), mask, ids_restore
 
     def encode(self, imgs: Tensor) -> Tensor:
