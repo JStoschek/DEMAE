@@ -709,12 +709,31 @@ class Runtime(_Frozen):
     #: fill of each banked void is the cost, not the frozen forward — so this is the knob that
     #: decides whether a GPU sits idle, and it is the reason this group exists at all.
     loader_workers: int = 4
+    #: How many of :attr:`Head.batch_size`'s samples cross the GPU at once, 0 for all of them.
+    #: **Not a smaller batch** — the gradient is accumulated over the whole batch and the
+    #: optimizer steps once, so the recipe's effective batch is unchanged and A7 goes on training
+    #: under §4.1's declared 128 (#162).
+    #:
+    #: It is here rather than in :class:`Head` because it is a fact about the card. §4.4's UNet
+    #: runs 48 channels at the full 224 px from its first layer — unlike §4.1's head, which
+    #: reaches full resolution last and narrow — and that costs a **measured 0.24 GiB/sample**,
+    #: so the declared batch of 128 needs ~30.7 GiB and a 32 GB 5090 has 31.36 GiB. Measured on
+    #: the box: 64 peaks at 15.33 GiB, 32 at 7.83 GiB.
+    #:
+    #: The same shape `pretrain.config.Optimizer.accum_iter` already uses, and the same honesty
+    #: applies as for :attr:`device`: splitting is exact in arithmetic but not bit-identical,
+    #: because float summation is not associative. This group never claimed bit-identity — CUDA
+    #: training here is not reproducible to the bit at a fixed seed regardless (#159's tuning
+    #: pass measured a run-to-run spread up to 0.058 m).
+    micro_batch: int = 0
     #: Where per-epoch head checkpoints land. Not committed and not in git: they are 4.7 MB each
     #: and the artifact a cell produces is its parquet rows (§7's "heads checkpoint per epoch
     #: like everything else in this repo and that is the whole of it").
     checkpoint_dir: str = "data/task1/heads"
 
     def __post_init__(self) -> None:
+        if self.micro_batch < 0:
+            raise ValueError(f"micro_batch {self.micro_batch} must be >= 0 (0 = the whole batch)")
         if self.loader_workers < 0:
             raise ValueError(f"loader_workers {self.loader_workers} must be >= 0")
         if not self.device:

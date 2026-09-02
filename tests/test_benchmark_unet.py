@@ -284,3 +284,86 @@ def test_a_head_arm_is_refused_by_the_from_scratch_pass(box, flags, frozen):
     ).config
     with pytest.raises(train.TrainError, match="trains 'head'"):
         train.train_unet(cfg, arms.get("A6"))
+
+
+# --- The micro-batch split is exact, not approximate ---------------------------
+
+
+def test_splitting_a_batch_leaves_the_gradient_where_it_was():
+    """`runtime.micro_batch` must not be a smaller batch wearing the recipe's name (#162).
+
+    §4.4 trains A7 under §4.1's declared batch of 128, and a 32 GB card cannot forward that many
+    224 px tiles through a trunk that is 48 channels wide from its first layer — a measured
+    0.24 GiB/sample, so ~30.7 GiB against 31.36 available. The split is how the recipe survives
+    the card, so what has to be true is that it changes *nothing about the number*.
+
+    Asserted against the unsplit gradient itself rather than against convergence: two runs that
+    both descend prove nothing, and §4.1's loss is a mean over **void pixels**, which is exactly
+    the quantity a naive split gets wrong when the pieces carry unequal void.
+    """
+    torch = pytest.importorskip("torch")
+    from benchmark import head as head_module
+    from benchmark import train
+
+    rng = np.random.default_rng(0)
+    n = 6
+    # Deliberately unequal void per sample, which is what a naive split mishandles.
+    void = np.zeros((n, 32, 32), dtype=bool)
+    for i in range(n):
+        void[i, 2 : 4 + 3 * i, 2 : 4 + 3 * i] = True
+    batch = train.Composed(
+        raw_i16=rng.integers(-100, 100, (n, 32, 32)).astype(np.int16),
+        a1_fill=rng.normal(0, 10, (n, 32, 32)).astype(np.float32),
+        a1_i16=rng.integers(-100, 100, (n, 32, 32)).astype(np.int16),
+        valid=~void,
+        void=void,
+    )
+
+    def gradient(size: int) -> list:
+        built = unet.build(config.Unet(depth=1, base_width=48), seed=0)
+        module = built.module
+        module.zero_grad(set_to_none=True)
+        pixels = float(batch.void.sum())
+        for piece in train.micro_batches(batch, size):
+            v = torch.from_numpy(piece.void.astype(np.float32)).unsqueeze(1)
+            image = torch.from_numpy(piece.a1_fill).unsqueeze(1)
+            truth = torch.from_numpy(piece.raw_i16.astype(np.float32)).unsqueeze(1)
+            a1 = torch.from_numpy(piece.a1_fill).unsqueeze(1)
+            prediction = a1 + module(image, v) * v
+            terms = head_module.loss(prediction, truth, v, slope_weight=0.1)
+            (terms.total * (float(piece.void.sum()) / pixels)).backward()
+        return [p.grad.clone() for p in module.parameters() if p.grad is not None]
+
+    whole = gradient(0)
+    split = gradient(2)
+    assert len(whole) == len(split) and whole
+    for a, b in zip(whole, split):
+        assert torch.allclose(a, b, rtol=1e-5, atol=1e-7)
+
+
+def test_micro_batches_partition_the_batch_in_order():
+    from benchmark import train
+
+    n = 7
+    batch = train.Composed(
+        raw_i16=np.arange(n * 4, dtype=np.int16).reshape(n, 2, 2),
+        a1_fill=np.zeros((n, 2, 2), np.float32),
+        a1_i16=np.zeros((n, 2, 2), np.int16),
+        valid=np.ones((n, 2, 2), bool),
+        void=np.ones((n, 2, 2), bool),
+    )
+    pieces = train.micro_batches(batch, 3)
+    assert [p.raw_i16.shape[0] for p in pieces] == [3, 3, 1]
+    assert np.array_equal(np.concatenate([p.raw_i16 for p in pieces]), batch.raw_i16)
+    # 0 and "bigger than the batch" both mean the batch itself.
+    assert train.micro_batches(batch, 0)[0] is batch
+    assert train.micro_batches(batch, 99)[0] is batch
+
+
+def test_the_micro_batch_is_environment_and_never_moves_the_hash():
+    """It is a fact about the card, so two boxes must produce comparable rows (#162)."""
+    base = config.BenchmarkConfig(arm="A7")
+    split = config.BenchmarkConfig(
+        arm="A7", runtime=base.runtime.replace(micro_batch=64)
+    )
+    assert split.config_hash == base.config_hash

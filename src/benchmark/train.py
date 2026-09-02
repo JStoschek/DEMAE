@@ -874,6 +874,24 @@ def _training_inputs(cfg: BenchmarkConfig) -> Inputs:
     return Inputs(tiles=tiles, train_ids=train_ids, banked=banked, val=val)
 
 
+def micro_batches(batch: Composed, size: int) -> list[Composed]:
+    """Split one composed batch into GPU-sized pieces. ``size`` 0 (or >= N) is the batch itself.
+
+    The pieces are contiguous slices of the same five arrays, so the *order* samples reach the
+    model in is exactly the order the unsplit batch would have used — which is what lets the
+    accumulated gradient below be the same quantity rather than merely a similar one.
+    """
+    total = batch.raw_i16.shape[0]
+    if size <= 0 or size >= total:
+        return [batch]
+    return [
+        Composed(**{
+            name: getattr(batch, name)[start : start + size] for name in COMPOSED_FIELDS
+        })
+        for start in range(0, total, size)
+    ]
+
+
 @dataclass(frozen=True)
 class Fitted:
     """What :func:`_fit` produced: the epoch lines, the one it kept, and where they were written.
@@ -952,21 +970,31 @@ def _fit(
         lr = recipe.lr
         for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
             lr = schedule.apply(optimizer, step)
-            residual, void = residual_of(batch, stack, precision=recipe.precision)
-            truth = torch.from_numpy(
-                batch.raw_i16.astype(np.float32)
-            ).unsqueeze(1).to(device)
-            a1 = torch.from_numpy(batch.a1_fill).unsqueeze(1).to(device)
-            # §2.4's convention, in torch and in metres, and the same one `predict` applies in
-            # numpy: the prediction is the fill plus the residual *inside the void*.
-            prediction = a1 + residual * void
-            terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
             optimizer.zero_grad(set_to_none=True)
-            terms.total.backward()
+            # §4.1's loss is a mean over the batch's **void pixels**, so a split whose pieces
+            # each contributed their own mean would silently reweight a batch by how much void
+            # happened to fall in each piece — §3.2's masks span ~100x in area, so the pieces are
+            # not interchangeable. Weighting each piece by its share of the batch's void pixels
+            # makes the accumulated gradient the gradient of the whole batch's loss, exactly:
+            # sum_i (S_i + w T_i/2)/P is what one unsplit backward computes.
+            pixels = float(batch.void.sum())
+            pieces = micro_batches(batch, cfg.runtime.micro_batch)
+            for piece in pieces:
+                residual, void = residual_of(piece, stack, precision=recipe.precision)
+                truth = torch.from_numpy(
+                    piece.raw_i16.astype(np.float32)
+                ).unsqueeze(1).to(device)
+                a1 = torch.from_numpy(piece.a1_fill).unsqueeze(1).to(device)
+                # §2.4's convention, in torch and in metres, and the same one `predict` applies
+                # in numpy: the prediction is the fill plus the residual *inside the void*.
+                prediction = a1 + residual * void
+                terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
+                share = float(piece.void.sum()) / pixels if pixels else 1.0 / len(pieces)
+                (terms.total * share).backward()
+                for key, value in terms.detached().items():
+                    totals[key] += value * share
             optimizer.step()
             step += 1
-            for key, value in terms.detached().items():
-                totals[key] += value
 
         module.eval()
         scored = val_rmse(val, cfg, stack, tiles=tiles)
