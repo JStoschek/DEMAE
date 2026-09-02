@@ -1076,3 +1076,46 @@ def test_the_cli_precondition_is_checked_before_the_expensive_verification(tmp_p
     precondition = text.index("--destroy needs the vastai CLI")
     deep_verify = text.index("Deep verify — re-read the bytes")
     assert precondition < deep_verify, "the CLI check still runs after the deep verify"
+
+
+# --- §11's RAM floor is pretraining's, and Task 1 says so ----------------------
+
+
+def test_the_ram_floor_defaults_to_section_11s_pretraining_number():
+    """The default is unchanged by #162 — a benchmark flag must not relax the normal path."""
+    assert int(call(PROVISION, "printf %s $MIN_RAM_GB")) == 60
+
+
+def test_the_ram_floor_is_a_flag_because_the_workload_sets_it():
+    """`--min-ram-gb`, on `--max-corpus-min`'s own rule (#162).
+
+    §11 wants >=64 GB so the **whole 47 GB corpus** page-caches, because pretraining streams all
+    500k tiles every epoch. A Task 1 benchmark run reads §3.1's draws — 20,000 head-train + 2,000
+    val + 5,000 test — which is 27,000 tiles at 98 KiB, a 2.71 GB working set out of a memmap the
+    kernel pages lazily. A 30 GB box is refused for pretraining and ample for this, and the floor
+    is therefore a property of the workload rather than of the plan.
+
+    Asserted as *parseable and honoured*, both ways, because a flag that parsed and did not move
+    the check would read exactly like this test passing.
+    """
+    assert "--min-ram-gb" in PROVISION.read_text()
+    # Parsed off the command line at all.
+    assert (
+        call(PROVISION, 'set -- --min-ram-gb 24; while [[ $# -gt 0 ]]; do case "$1" in '
+                        '--min-ram-gb) MIN_RAM_GB="$2"; shift 2 ;; *) shift ;; esac; done; '
+                        'printf %s "$MIN_RAM_GB"')
+        == "24"
+    )
+
+
+@pytest.mark.parametrize(
+    "ram,floor,passes",
+    [
+        (30, 60, False),  # this benchmark's box under §11's pretraining floor
+        (30, 24, True),   # ...and over a floor set for the 2.71 GB Task 1 working set
+        (30, 0, True),    # 0 waives it entirely
+        (64, 60, True),   # §11's own box, unaffected
+    ],
+)
+def test_the_floor_admits_and_refuses_the_boxes_it_should(ram, floor, passes):
+    assert truth(PROVISION, f'[[ {floor} -eq 0 || {ram} -ge {floor} ]]') is passes
