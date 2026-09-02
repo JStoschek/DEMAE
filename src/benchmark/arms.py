@@ -407,10 +407,10 @@ class Arm:
     def trains_everything(self) -> bool:
         """Does this arm train §4.4's from-scratch UNet? A7, and only A7 (#162).
 
-        :attr:`trains_head`'s sibling and its argument a third time: four questions are asked of
-        it — what A7's parameter pair is, whether `run` trains before it scores, which pass it
-        trains through, and whether §3.4's bank is an input — and the string comparison spelled
-        at each site is one typo away from an arm that scores an untrained UNet.
+        :attr:`trains_head`'s sibling and its argument a third time: three questions are asked
+        of it — what A7's parameter pair is, whether `run` trains before it scores, and what the
+        resolution line prints about the recipe it trains under — and the string comparison
+        spelled at each site is one typo away from an arm that scores an untrained UNet.
         """
         return self.trains == "everything"
 

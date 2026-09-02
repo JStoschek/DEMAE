@@ -90,7 +90,12 @@ def resolve(args: argparse.Namespace) -> Resolution:
     if args.verb == "run":
         if getattr(args, "tune", False):
             tune.assert_tuning_arm(cfg)
-        if arm.trains_head:
+        if arm.trains_head or arm.trains_everything:
+            # Both, and #162 is why the second half is here: §4.4 trains A7 under §4.1's loss,
+            # schedule length and seeds, so a moved `head.lr` is exactly as much a drift for A7
+            # as it is for A4 — and an arm exempted from this check could be trained at a recipe
+            # the frozen arms never saw, which is the one thing C3's bar must not be.
+            #
             # A tuning pass is exempted from the *record* half of the guard — it is the thing
             # that resolves a record/config disagreement, so refusing it would make that state
             # unrecoverable. See `tune.assert_frozen`.
@@ -230,8 +235,9 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     """
     # §4.1's "tuned once, then frozen for every arm", enforced before anything is stat'd, let
     # alone spent — it is a fact about the recipe, so it belongs beside the config-typo refusal
-    # rather than after a 104 MB hash. Asked only of the arms that train a head: A1 and A7 have
-    # no §4.1 recipe to have drifted from.
+    # rather than after a 104 MB hash. Asked of every arm that trains under that recipe, which
+    # since #162 means A7 as well as the three frozen arms: A1 is the only one with no §4.1
+    # recipe to have drifted from.
     missing = resolution.missing
     if missing:
         raise FileNotFoundError(

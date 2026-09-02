@@ -72,7 +72,7 @@ def test_conditioning_standardizes_over_valid_pixels_only():
     raw[0, 4:] = 9999.0  # inside the void, so it must not reach the statistic
     valid = np.ones((1, 8, 8), dtype=bool)
     valid[0, 4:] = False
-    image, std = unet.condition(raw, valid)
+    image, std = unet.condition(raw, np.rint(raw).astype(np.int16), valid)
     # mean 150, std 50 over the valid half — and nothing from the 9999s.
     assert std[0] == pytest.approx(50.0, rel=1e-5)
     assert image[0][valid[0]].mean() == pytest.approx(0.0, abs=1e-5)
@@ -83,7 +83,7 @@ def test_conditioning_is_finite_on_a_flat_tile():
     """A perfectly flat tile has zero std; the floor is what keeps the division finite."""
     raw = np.full((1, 8, 8), 42.0, dtype=np.float32)
     valid = np.ones((1, 8, 8), dtype=bool)
-    image, std = unet.condition(raw, valid)
+    image, std = unet.condition(raw, np.rint(raw).astype(np.int16), valid)
     assert np.isfinite(image).all()
     assert std[0] > 0
 
@@ -111,13 +111,29 @@ def test_a_unet_recipe_that_grew_a_head_knob_is_refused():
         config.assert_shares_head_recipe(("lr", "depth"))
 
 
-def test_a7_reads_the_same_recipe_object_the_frozen_arms_do():
-    cfg = config.BenchmarkConfig(arm="A7")
-    from benchmark import train
+def test_a7_is_refused_a_moved_head_knob_exactly_as_a_frozen_arm_is():
+    """The enforcing half of #162's second criterion, and the one that has teeth.
 
-    train.assert_shares_frozen_recipe(cfg, cfg.head)
-    with pytest.raises(train.TrainError, match="§4.4"):
-        train.assert_shares_frozen_recipe(cfg, dataclasses.replace(cfg.head, epochs=3))
+    §4.1's recipe is tuned once on A6 and frozen for every arm; `benchmark.tune.assert_frozen`
+    is what refuses a run that moved it. A7 trains under that recipe, so it has to be inside
+    that gate — an arm exempted from it could be trained at a learning rate the frozen arms
+    never saw, converge normally, and print a C3 bar that is not comparable to the thing it is
+    a bar for.
+
+    Asserted against A6 in the same test so the two are the *same* refusal rather than a second
+    one written for A7: if the gate ever stops covering one of them, this fails.
+    """
+    from benchmark import launch, tune
+
+    parser = launch.build_parser()
+    for arm in ("A6", "A7"):
+        with pytest.raises(tune.TuningError):
+            launch.resolve(
+                parser.parse_args(["run", "--arm", arm, "--set", "head.lr=0.0003"])
+            )
+    # And the unmoved recipe resolves for both — the gate refuses drift, not A7.
+    for arm in ("A6", "A7"):
+        launch.resolve(parser.parse_args(["run", "--arm", arm]))
 
 
 # --- The registry's pair -------------------------------------------------------
@@ -219,8 +235,13 @@ def test_a7_trains_under_the_frozen_arms_schedule(box, flags, frozen):
     assert train.head.loss is head_module.loss
 
 
-def test_a7_reads_the_committed_bank_rather_than_drawing(box, flags):
-    """#162's third criterion. Same assertion #159 makes of the head, for the same reason."""
+def test_a7_reads_the_committed_bank_rather_than_drawing(box, flags, frozen):
+    """#162's third criterion. Same assertion #159 makes of the head, for the same reason.
+
+    ``frozen`` is needed here for the same reason A6's tests need it: since #162 put A7 inside
+    `tune.assert_frozen`'s gate, a test-scale `head.epochs` is a drift for A7 exactly as it is
+    for A4 — which is the property `test_a7_is_refused_a_moved_head_knob...` asserts on purpose.
+    """
     cfg = launch.resolve(
         launch.build_parser().parse_args(["run", "--arm", "A7", *flags])
     ).config

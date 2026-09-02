@@ -83,9 +83,11 @@ GROUPS: Final = 16
 
 #: The smallest per-tile std :func:`condition` will divide by, in metres. A flat tile — a salt
 #: flat, a lake margin — has a true std of 0, and the floor is what keeps its standardized image
-#: finite. :func:`benchmark.extract.STD_FLOOR`'s rule at this seam, restated rather than
-#: imported for :func:`condition`'s own reason (see the module docstring).
-STD_FLOOR: Final = 1e-3
+#: finite. :data:`benchmark.extract.STD_FLOOR`'s **value**, restated rather than imported the
+#: way that module restates :data:`dataset.loader._STD_FLOOR`'s: the guard is one number this
+#: repo standardizes by everywhere, and A7 conditioning at a different floor from the diet every
+#: other arm is fed would be a difference between arms that nothing in §4.4 asks for.
+STD_FLOOR: Final = 1e-6
 
 
 class UnetError(ValueError):
@@ -141,7 +143,13 @@ PARAMETERS: Final[dict[int, int]] = {48: 17_465_377}
 
 
 def format_parameters(recipe: Unet | None = None) -> str:
-    """The resolution line's UNet row — the count, and what it is being read against."""
+    """The resolution line's UNet row — the count, and the shape it is derived from.
+
+    Pre-flight, so the count is the *derived* one: nothing has been built when the resolution
+    line prints. :func:`format_counted` is its post-hoc twin, for a pass that has a real module
+    and should quote what it actually counted rather than re-deriving it from a recipe the
+    caller has to remember to pass.
+    """
     recipe = Unet() if recipe is None else recipe
     return (
         f"§4.4 UNet, {recipe.depth}-down/{recipe.depth}-up at base {recipe.base_width}: "
@@ -149,27 +157,45 @@ def format_parameters(recipe: Unet | None = None) -> str:
     )
 
 
+def format_counted(parameters: int) -> str:
+    """The trained line's UNet row, from the count the pass measured.
+
+    Takes the number rather than the recipe on purpose: a caller holding a trained module holds
+    its real parameter count, and re-deriving one from a default recipe is how a run at
+    ``--set unet.base_width=64`` prints 17,465,377 in one line and 31,042,945 in another.
+    """
+    return f"§4.4 UNet: {parameters:,} parameters, all trainable"
+
+
 def condition(
-    a1_fill: np.ndarray, valid: np.ndarray
+    a1_fill: np.ndarray, a1_i16: np.ndarray, valid: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Standardize the A1 fill per tile over its valid pixels. Returns ``(image, std)``.
 
     ``std`` comes back because the caller needs it to put the residual back in metres — see the
-    module docstring. Both arrays are batched: ``a1_fill`` and ``valid`` are ``(N, H, W)``, the
-    image is ``(N, H, W)`` float32 and ``std`` is ``(N,)``.
+    module docstring. All three arrays are batched ``(N, H, W)``; the image is float32 and
+    ``std`` is ``(N,)``.
 
-    The statistic is taken over ``valid = land ∧ ¬void`` (ADR-0012 §1), which is what the batch
-    already carries — so the void's *filled* values, which are A1's guess rather than measured
-    ground, do not set the scale the network reads them at.
+    The statistic is taken over ``valid = land ∧ ¬void`` (ADR-0012 §1) — so the void's *filled*
+    values, which are A1's guess rather than measured ground, do not set the scale the network
+    reads them at.
+
+    Both the float fill and its int16 rounding are taken as arguments because
+    :class:`benchmark.train.Composed` already carries the pair: ``a1_i16`` is the fill at the
+    corpus's own quantization and is ADR-0012 §1's door — :func:`benchmark.extract.tile_statistics`
+    takes int16 metres and refuses anything else — while the image the trunk reads is
+    standardized from the unrounded fill. Re-deriving the rounding here would be a second
+    rounding of the same array, and the one place the two could differ.
     """
     from .extract import tile_statistics
 
     raw = np.asarray(a1_fill, dtype=np.float32)
+    quantized = np.asarray(a1_i16, dtype=np.int16)
     mask = np.asarray(valid, dtype=bool)
     image = np.empty(raw.shape, dtype=np.float32)
     stds = np.empty(raw.shape[0], dtype=np.float32)
     for i in range(raw.shape[0]):
-        mean, std = tile_statistics(np.rint(raw[i]).astype(np.int16), mask[i])
+        mean, std = tile_statistics(quantized[i], mask[i])
         std = max(float(std), STD_FLOOR)
         image[i] = (raw[i] - np.float32(mean)) / np.float32(std)
         stds[i] = np.float32(std)
@@ -243,10 +269,6 @@ class Built:
 
     module: Any
     parameters: int
-
-    @property
-    def line(self) -> str:
-        return format_parameters()
 
 
 def build(recipe: Unet | None = None, *, seed: int = 0, tile_px: int = 224) -> Built:

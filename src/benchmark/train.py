@@ -595,7 +595,7 @@ class ScratchStack:
         """
         import torch
 
-        image, stds = unet.condition(batch.a1_fill, batch.valid)
+        image, stds = unet.condition(batch.a1_fill, batch.a1_i16, batch.valid)
         void = _void_channel(batch, self.device)
         tensor = torch.from_numpy(image).unsqueeze(1).to(self.device)
         scale = torch.from_numpy(stds).view(-1, 1, 1, 1).to(self.device)
@@ -844,68 +844,81 @@ def val_rmse(
     return math.sqrt(squares / count)
 
 
-def train_head(
-    cfg: BenchmarkConfig,
-    arm: arms.Arm,
-    *,
-    extractor=None,
-    epochs: int | None = None,
-    recipe=None,
-    on_epoch: Callable[[Epoch], None] | None = None,
-) -> Trained:
-    """Train §4.1's head for one cell. The encoder is frozen and asserted so on the way out.
+@dataclass(frozen=True)
+class Inputs:
+    """§3.1's two draws and §3.4's bank, restricted to one cell. See :func:`_training_inputs`."""
 
-    ``recipe`` overrides ``cfg.head`` **for the tuning pass and nothing else**
-    (:func:`benchmark.tune.tune`); a `run` passes none and gets the frozen one, which
-    :func:`benchmark.tune.assert_frozen` has already checked. ``epochs`` is the tuning pass's
-    other short-cut, for the same reason and with the same restriction.
+    tiles: TrainingTiles
+    train_ids: list[str]
+    banked: BankedVoids
+    val: list[ValInstance]
 
-    The order below is the argument:
 
-    1. **The two draws, behind the guard** — :class:`TrainingTiles`, which is the only tile
-       source opened here and which cannot reach a test tile.
-    2. **The bank, restricted to this cell's tiles.** Read, never drawn.
-    3. **The encoder, checksummed.** Before a step, so that "no parameter moved" is a comparison
-       rather than an assertion about intent.
-    4. **Fifty epochs, val-scored, best-epoch restored.** §4.1 says *early stop on val RMSE*, and
-       what that means here is **checkpoint selection**: the full cosine runs and the weights the
-       pass returns are the lowest-val epoch's. Stopping the schedule early instead would need a
-       patience §4.1 does not state, and would leave a cosine-to-0 curve cut off mid-decay — two
-       recipes fighting, one of them invented here. Every epoch is checkpointed either way, so a
-       run that wants a different rule can apply it to the files rather than re-training.
+def _training_inputs(cfg: BenchmarkConfig) -> Inputs:
+    """Everything a training pass reads, opened once and the same way for every arm.
+
+    One function rather than five lines repeated per pass, and #162's third criterion is the
+    reason it is worth a name: *training reads the train mask bank*. A7 reading the committed
+    bank "as well" would be a second call site that could later be edited to draw instead; A7
+    reading it **here** is the same code path the frozen arms read it through, so the per-epoch
+    void geometry is the same draws by construction rather than by two functions agreeing.
+
+    The split guard comes with it: :meth:`TrainingTiles.read` is the only tile source any pass
+    opens, and :func:`assert_reads_val_only` refuses a pass that reached for the test list.
     """
-    import torch
-
-    started = time.perf_counter()
-    recipe = cfg.head if recipe is None else recipe
-    epochs = recipe.epochs if epochs is None else epochs
-    device = resolve_device(cfg)
-    encoder = arms.ENCODERS[arm.encoder] if arm.encoder else None
-    if encoder is None:
-        raise TrainError(
-            f"arm {arm.name} runs no encoder, and §4.1's head reads patch tokens. A7's UNet "
-            f"trains from scratch and is #162's, not this path's"
-        )
-
     tiles = TrainingTiles.read(cfg)
     assert_reads_val_only(tiles.sources)
     train_ids = list(tiles.head_train[: cfg.train_tiles])
     banked = read_bank(cfg, train_ids)
     val = val_instances(cfg, tiles.val)
+    return Inputs(tiles=tiles, train_ids=train_ids, banked=banked, val=val)
 
-    if extractor is None:
-        extractor = extract.Extractor(
-            extract.load_spec(extract.spec_path(cfg)), cfg, device=device
-        )
-    model = extractor.encoder(arm.name)
-    model.eval()
-    for param in model.parameters():
-        param.requires_grad_(False)
-    before = encoder_checksums(model)
 
-    built = head.build(encoder.width, recipe, seed=cfg.seed)
-    module = built.module.to(device)
-    stack = Stack(extractor=extractor, module=module, arm=arm.name, device=device)
+@dataclass(frozen=True)
+class Fitted:
+    """What :func:`_fit` produced: the epoch lines, the one it kept, and where they were written.
+
+    A small return type rather than a 3-tuple because all three are quoted by :class:`Trained`
+    and two of them are quoted together (``best`` names the file ``directory`` holds).
+    """
+
+    history: tuple[Epoch, ...]
+    best: Epoch | None
+    directory: Path
+
+
+def _fit(
+    cfg: BenchmarkConfig,
+    recipe,
+    *,
+    module,
+    stack: Stack | ScratchStack,
+    epochs: int,
+    train_ids: Sequence[str],
+    banked: BankedVoids,
+    val: Sequence[ValInstance],
+    tiles: TrainingTiles,
+    device: str,
+    on_epoch: Callable[[Epoch], None] | None,
+) -> Fitted:
+    """§4.1's schedule, run over whatever trainable part the caller built.
+
+    **The one copy of the pass**, and that is the whole point of the function existing. §4.4
+    gives A7 the frozen arms' loss, schedule length and seeds, and #162 asks for that *asserted
+    rather than configured by hand*. A second loop that happened to sequence the same helpers in
+    the same order would satisfy the letter of it on the day it was written and drift on any day
+    after — so `train_head` and `train_unet` do not each have one. They differ in what they
+    build and in what they assert about it afterwards, which is exactly what is left in them.
+
+    The optimizer, the cosine and the epoch order are all derived from ``recipe`` and
+    ``cfg.seed`` here, so "A5 trained for twenty epochs beside A4's fifty" — §4.1's own example
+    of the unfairness C1 must not have — is not a thing any arm can do to itself.
+
+    ``recipe`` is passed rather than read off ``cfg`` because §4.1's tuning pass legitimately
+    varies it (:func:`benchmark.tune.tune`); every other caller hands over ``cfg.head``.
+    """
+    import torch
+
     optimizer = torch.optim.AdamW(
         parameter_groups(module, weight_decay=recipe.weight_decay),
         lr=recipe.lr,
@@ -979,17 +992,95 @@ def train_head(
             torch.load(directory / BEST_CHECKPOINT, map_location=device)["state_dict"]
         )
     module.eval()
+    return Fitted(history=tuple(history), best=best, directory=directory)
+
+
+def train_head(
+    cfg: BenchmarkConfig,
+    arm: arms.Arm,
+    *,
+    extractor=None,
+    epochs: int | None = None,
+    recipe=None,
+    on_epoch: Callable[[Epoch], None] | None = None,
+) -> Trained:
+    """Train §4.1's head for one cell. The encoder is frozen and asserted so on the way out.
+
+    ``recipe`` overrides ``cfg.head`` **for the tuning pass and nothing else**
+    (:func:`benchmark.tune.tune`); a `run` passes none and gets the frozen one, which
+    :func:`benchmark.tune.assert_frozen` has already checked. ``epochs`` is the tuning pass's
+    other short-cut, for the same reason and with the same restriction.
+
+    The order below is the argument:
+
+    1. **The two draws, behind the guard** — :class:`TrainingTiles`, which is the only tile
+       source opened here and which cannot reach a test tile.
+    2. **The bank, restricted to this cell's tiles.** Read, never drawn.
+    3. **The encoder, checksummed.** Before a step, so that "no parameter moved" is a comparison
+       rather than an assertion about intent.
+    4. **Fifty epochs, val-scored, best-epoch restored.** §4.1 says *early stop on val RMSE*, and
+       what that means here is **checkpoint selection**: the full cosine runs and the weights the
+       pass returns are the lowest-val epoch's. Stopping the schedule early instead would need a
+       patience §4.1 does not state, and would leave a cosine-to-0 curve cut off mid-decay — two
+       recipes fighting, one of them invented here. Every epoch is checkpointed either way, so a
+       run that wants a different rule can apply it to the files rather than re-training.
+    """
+    import torch
+
+    started = time.perf_counter()
+    recipe = cfg.head if recipe is None else recipe
+    epochs = recipe.epochs if epochs is None else epochs
+    device = resolve_device(cfg)
+    encoder = arms.ENCODERS[arm.encoder] if arm.encoder else None
+    if encoder is None:
+        raise TrainError(
+            f"arm {arm.name} runs no encoder, and §4.1's head reads patch tokens. A7's UNet "
+            f"trains from scratch and is #162's, not this path's"
+        )
+
+    inputs = _training_inputs(cfg)
+    tiles, train_ids = inputs.tiles, inputs.train_ids
+    banked, val = inputs.banked, inputs.val
+
+    if extractor is None:
+        extractor = extract.Extractor(
+            extract.load_spec(extract.spec_path(cfg)), cfg, device=device
+        )
+    model = extractor.encoder(arm.name)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    before = encoder_checksums(model)
+
+    built = head.build(encoder.width, recipe, seed=cfg.seed)
+    module = built.module.to(device)
+    stack = Stack(extractor=extractor, module=module, arm=arm.name, device=device)
+    fitted = _fit(
+        cfg,
+        recipe,
+        module=module,
+        stack=stack,
+        epochs=epochs,
+        train_ids=train_ids,
+        banked=banked,
+        val=val,
+        tiles=tiles,
+        device=device,
+        on_epoch=on_epoch,
+    )
     assert_encoder_frozen(model, name=encoder.name, before=before)
 
     return Trained(
         module=module,
         width=built.width,
         parameters=built.parameters,
-        best_epoch=-1 if best is None else best.epoch,
-        best_val_rmse=math.inf if best is None else best.val_rmse,
-        history=tuple(history),
+        best_epoch=-1 if fitted.best is None else fitted.best.epoch,
+        best_val_rmse=math.inf if fitted.best is None else fitted.best.val_rmse,
+        history=fitted.history,
         seconds=time.perf_counter() - started,
-        checkpoint=None if best is None else str(directory / BEST_CHECKPOINT),
+        checkpoint=(
+            None if fitted.best is None else str(fitted.directory / BEST_CHECKPOINT)
+        ),
         tiles=len(train_ids),
         sources=tiles.sources,
         stack=stack,
@@ -999,32 +1090,6 @@ def train_head(
 
 
 # --- §4.4's from-scratch arm --------------------------------------------------
-
-
-def assert_shares_frozen_recipe(cfg: BenchmarkConfig, recipe) -> None:
-    """Refuse an A7 pass handed anything but §4.1's own recipe object (#162).
-
-    §4.4 says A7 trains under the *same loss, the same schedule length and the same seeds* as the
-    frozen arms. The strongest available form of that is not an equality check on a handful of
-    fields — a field added to §4.1's recipe next month would slip straight past one — but
-    identity: A7 reads ``cfg.head``, the object A4, A5 and A6 read, and there is no second
-    recipe for it to have been configured with.
-
-    :data:`benchmark.config.SHARED_WITH_HEAD` makes the same statement one layer down, where it
-    refuses a :class:`~benchmark.config.Unet` that grows an ``lr`` or an ``epochs`` field at all.
-    Between them, "matches the frozen arms" stops being a property a reviewer checks and becomes
-    one the code cannot express the negation of.
-
-    ``recipe is not cfg.head`` rather than ``recipe != cfg.head``: a *copy* carrying identical
-    values is still a second place the recipe lives, and the next edit to it is the drift this
-    refusal exists to prevent.
-    """
-    if recipe is not cfg.head:
-        raise TrainError(
-            "§4.4 trains A7 under §4.1's loss, schedule length and seeds, so this pass reads "
-            "`cfg.head` and not a recipe of its own. What was passed is a different object — "
-            "if it carries the same values today, it is still the second copy that drifts"
-        )
 
 
 def assert_everything_trains(module, *, expected: int) -> None:
@@ -1089,100 +1154,51 @@ def train_unet(
             f"arm {arm.name} trains {arm.trains!r}; §4.4's from-scratch pass is for the arm that "
             f"trains everything. A4, A5 and A6 train §4.1's head and go through `train_head`"
         )
-    # §4.4's recipe is §4.1's. Asserted before a tile is read, so a pass that could not have
-    # matched the frozen arms refuses at the top rather than after an epoch.
+    # §4.4's recipe is §4.1's — the object A4, A5 and A6 read, not a copy of its values. That
+    # it has not drifted from the tuned one is `tune.assert_frozen`'s question and is asked in
+    # `launch.resolve`, before this pass is reached; that A7 cannot own one of those knobs in
+    # the first place is `config.SHARED_WITH_HEAD`'s.
     recipe = cfg.head
-    assert_shares_frozen_recipe(cfg, recipe)
     epochs = recipe.epochs if epochs is None else epochs
     device = resolve_device(cfg)
 
-    tiles = TrainingTiles.read(cfg)
-    assert_reads_val_only(tiles.sources)
-    train_ids = list(tiles.head_train[: cfg.train_tiles])
-    banked = read_bank(cfg, train_ids)
-    val = val_instances(cfg, tiles.val)
+    inputs = _training_inputs(cfg)
+    tiles, train_ids = inputs.tiles, inputs.train_ids
+    banked, val = inputs.banked, inputs.val
 
     built = unet.build(cfg.unet, seed=cfg.seed)
     module = built.module.to(device)
     assert_everything_trains(module, expected=unet.parameter_count(cfg.unet))
     stack = ScratchStack(module=module, arm=arm.name, device=device)
-    optimizer = torch.optim.AdamW(
-        parameter_groups(module, weight_decay=recipe.weight_decay),
-        lr=recipe.lr,
-        weight_decay=recipe.weight_decay,
+    fitted = _fit(
+        cfg,
+        recipe,
+        module=module,
+        stack=stack,
+        epochs=epochs,
+        train_ids=train_ids,
+        banked=banked,
+        val=val,
+        tiles=tiles,
+        device=device,
+        on_epoch=on_epoch,
     )
-    steps_per_epoch = max(1, math.ceil(len(train_ids) / recipe.batch_size))
-    schedule = Cosine.of(recipe, steps_per_epoch=steps_per_epoch, epochs=epochs)
-
-    directory = Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    order = np.random.default_rng(cfg.seed)
-    history: list[Epoch] = []
-    best: Epoch | None = None
-    step = 0
-
-    for epoch in range(epochs):
-        epoch_started = time.perf_counter()
-        module.train()
-        # §3.4's epoch-`e` draw per tile, in this seed's order — `train_head`'s two-things note.
-        shuffled = [
-            (train_ids[i], banked.rle(train_ids[i], epoch))
-            for i in order.permutation(len(train_ids))
-        ]
-        totals = {"loss": 0.0, "l1_m": 0.0, "slope_l1": 0.0}
-        lr = recipe.lr
-        for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
-            lr = schedule.apply(optimizer, step)
-            residual, void = residual_of(batch, stack, precision=recipe.precision)
-            truth = torch.from_numpy(
-                batch.raw_i16.astype(np.float32)
-            ).unsqueeze(1).to(device)
-            a1 = torch.from_numpy(batch.a1_fill).unsqueeze(1).to(device)
-            prediction = a1 + residual * void
-            terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
-            optimizer.zero_grad(set_to_none=True)
-            terms.total.backward()
-            optimizer.step()
-            step += 1
-            for key, value in terms.detached().items():
-                totals[key] += value
-
-        module.eval()
-        scored = val_rmse(val, cfg, stack, tiles=tiles)
-        line = Epoch(
-            epoch=epoch,
-            loss=totals["loss"] / steps_per_epoch,
-            elevation=totals["l1_m"] / steps_per_epoch,
-            slope=totals["slope_l1"] / steps_per_epoch,
-            lr=lr,
-            val_rmse=scored,
-            seconds=time.perf_counter() - epoch_started,
-        )
-        history.append(line)
-        save_checkpoint(module, line, directory / EPOCH_CHECKPOINT.format(epoch=epoch))
-        if best is None or line.val_rmse < best.val_rmse:
-            best = line
-            save_checkpoint(module, line, directory / BEST_CHECKPOINT)
-        if on_epoch is not None:
-            on_epoch(line)
-
-    if best is not None:
-        module.load_state_dict(
-            torch.load(directory / BEST_CHECKPOINT, map_location=device)["state_dict"]
-        )
-    module.eval()
+    # The count is re-checked after the pass for `assert_encoder_frozen`'s reason one arm over:
+    # "everything trained" is a claim about the module that actually stepped, and the run record
+    # prints it. Before *and* after, so a pass that froze something mid-flight is caught.
     assert_everything_trains(module, expected=unet.parameter_count(cfg.unet))
 
     return Trained(
         module=module,
         width=None,
         parameters=built.parameters,
-        best_epoch=-1 if best is None else best.epoch,
-        best_val_rmse=math.inf if best is None else best.val_rmse,
-        history=tuple(history),
+        best_epoch=-1 if fitted.best is None else fitted.best.epoch,
+        best_val_rmse=math.inf if fitted.best is None else fitted.best.val_rmse,
+        history=fitted.history,
         seconds=time.perf_counter() - started,
-        checkpoint=None if best is None else str(directory / BEST_CHECKPOINT),
+        checkpoint=(
+            None if fitted.best is None else str(fitted.directory / BEST_CHECKPOINT)
+        ),
         tiles=len(train_ids),
         sources=tiles.sources,
         stack=stack,
@@ -1192,6 +1208,7 @@ def train_unet(
     )
 
 
+
 def format_trained(trained: Trained) -> list[str]:
     """What `run` prints once the trainable part is fitted — the counts, and the epoch it kept.
 
@@ -1199,7 +1216,7 @@ def format_trained(trained: Trained) -> list[str]:
     is the only one that names what was trained; the other three are about the pass.
     """
     if trained.kind == "unet":
-        first = f"{'unet':<16} {unet.format_parameters()}"
+        first = f"{'unet':<16} {unet.format_counted(trained.parameters)}"
     else:
         first = f"{'head':<16} {head.format_parameters(trained.width)}"
     return [
