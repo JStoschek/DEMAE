@@ -674,11 +674,18 @@ class BenchmarkConfig(_Frozen):
 
     @property
     def synthetic_eval_instances(self) -> int:
-        """§3.2 — every eval tile appears once per bucket, for the two synthetic families.
+        """§3.2's **ceiling** on synthetic instances: every test tile, once per bucket, twice.
 
-        30,000 at the committed draw. The real family has no bucket axis and is drawn at its
-        natural size distribution (§3.2), so its count is a property of the artifact rather
-        than a number this config can derive.
+        30,000 at the committed draw's tile budget, and an upper bound rather than the row
+        count. :func:`benchmark.masks.scoreable_tiles` drops the part-ocean tiles before the
+        draw — 4,523 of 5,000 survive it, for 27,138 rows — and *which* tiles those are is a
+        property of the corpus's manifest, not of this config, so a config that returned the
+        real number would have to read 500,000 manifest rows to answer.
+
+        A ceiling is the right thing for the one job this has: #163 prices A9's decode against
+        it, and a cost model that rounds up is the safe direction to be wrong in. Nothing
+        checks an artifact against it — the real family has no bucket axis and is drawn at its
+        natural size distribution (§3.2), so the committed count was never derivable here.
         """
         return self.tiles.test * len(self.masks.synthetic_families) * len(self.masks.buckets)
 

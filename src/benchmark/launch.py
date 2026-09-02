@@ -139,11 +139,11 @@ def _freeze(resolution: Resolution) -> NoReturn:
     has moved.
 
     **The eval mask list** goes next (#150, #153), because it is a function of the
-    test list two stages above it — §3.2's 30,000 synthetic rows are 5,000 test tiles x two
-    families x three buckets, and §3.3's real family is transplanted onto hosts drawn from that
-    same list — and it reads the list back off disk rather than out of the draw, on the contract
-    family's rule that the committed file is what later phases re-read. It carries the same §3.4
-    guard the spec does, and the same generator config hash the bank does.
+    test list two stages above it — §3.2's 27,138 synthetic rows are the 4,523 clean test tiles
+    x two families x three buckets, and §3.3's real family is transplanted onto hosts drawn from
+    that same filtered list — and it reads the list back off disk rather than out of the draw,
+    on the contract family's rule that the committed file is what later phases re-read. It
+    carries the same §3.4 guard the spec does, and the same generator config hash the bank does.
 
     It is also the one stage that is not purely local: §3.3's real family needs #127's 24
     granules on disk and reads one GLO-30 COG per cell for the band the void is matched on. A

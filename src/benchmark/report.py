@@ -301,8 +301,10 @@ def instances_and_tiles(frame: Frame, rows: np.ndarray) -> tuple[int, int]:
 
     *Instances, not rows.* A cell pools every seed that scored it, so an arm carrying three seeds
     has three rows per instance. R8's floor is stated in *instances* — §5 counts "1,250 per (row,
-    band)" from 5,000 test tiles x 2 families x 3 buckets, which is one pass — so counting rows
-    would let a three-seed arm clear a floor on 34 instances that a single-pass arm fails on 99.
+    band)" from 5,000 test tiles x 2 families x 3 buckets, which the part-ocean tiles
+    `masks.scoreable_tiles` drops take to 1,111-1,158, and either way it is one pass — so
+    counting rows would let a three-seed arm clear a floor on 34 instances a single pass fails
+    on 99.
     An instance is identified within a cell by ``(bucket, tile_id, instance)``: the bucket is in
     the key because the blob section pools three of them and the same tile carries one void in
     each.

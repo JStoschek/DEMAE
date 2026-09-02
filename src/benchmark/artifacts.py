@@ -349,12 +349,14 @@ class Resolution:
             f"{cfg.tiles.test:,} test",
             f"{'bank':<16} {cfg.bank_rows:,} rows "
             f"({cfg.masks.bank_draws_per_tile} draws x {cfg.tiles.head_train:,} tiles)",
-            # The synthetic half is derivable and the real half is not: the real family has no
-            # bucket axis and is drawn at its natural size distribution (§3.2), so its count is
-            # a property of the artifact rather than a number this config can compute.
-            f"{'instances':<16} {cfg.synthetic_eval_instances:,} synthetic "
+            # A ceiling on the synthetic half, and nothing at all on the real half: the real
+            # family has no bucket axis and is drawn at its natural size distribution (§3.2),
+            # and the synthetic half loses the part-ocean tiles `masks.scoreable_tiles` filters
+            # out, which is a property of the corpus rather than a number this config computes.
+            f"{'instances':<16} at most {cfg.synthetic_eval_instances:,} synthetic "
             f"({cfg.tiles.test:,} test tiles x {len(cfg.masks.synthetic_families)} families "
-            f"x {len(cfg.masks.buckets)} buckets), plus the real family's own rows",
+            f"x {len(cfg.masks.buckets)} buckets, less the part-ocean tiles), plus the real "
+            f"family's own rows",
         ]
 
     # --- what the run record carries
