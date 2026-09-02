@@ -295,6 +295,17 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # key map turn it into the single-channel timm encoder A6 reads; `pretrain.init` owns
         # both, and `benchmark.extract` reuses them rather than writing a second map.
         checkpoint_format="mmselfsup_rgb",
+        # **Measured 2026-09-01 (#159)**, on the encoder `benchmark.extract` actually builds, and
+        # it is the published count minus §8's collapse rather than a number this registry
+        # guessed: mmselfsup publishes 85,798,656 for the RGB backbone
+        # (`pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E.encoder_parameters`), and folding the
+        # 3-channel patch embed down to one drops 768x(3-1)x16x16 = 393,216 of them. A test pins
+        # that arithmetic, so this stays a derivation and not a transcription.
+        #
+        # It was `None` until A6's first real cells ran, and §6 item 4 prints parameter counts
+        # **total and trainable** — so A6's row was printing an em-dash where A4's prints 86.4M,
+        # which is the misreading that item exists to prevent.
+        params=85_405_440,
         # **Pinned 2026-09-01 (#159).** This entry read "unpinned ... that md5 is the 485 MB
         # *full* MAE file, and what A6 reads is the encoder half of it", and the second clause
         # confuses what A6 *uses* with what a box *mounts*. `checkpoint_format` here is

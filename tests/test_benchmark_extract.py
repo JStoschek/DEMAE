@@ -954,6 +954,27 @@ def test_the_registrys_imagenet_mae_md5_is_pretrain_inits_own():
     assert published.licence == "Apache-2.0"
 
 
+def test_a6s_parameter_count_is_the_published_one_minus_section_eights_collapse():
+    """§6 item 4 prints total *and* trainable, so A6's total has to be a number (#159).
+
+    Derived rather than transcribed: mmselfsup publishes the RGB backbone's count, and the only
+    thing §8's collapse changes is the patch embed's input channels. If either the published
+    figure or the collapse moves, this fails rather than the registry quietly disagreeing with
+    the model `benchmark.extract` builds.
+    """
+    from dataset import config as dataset_config
+    from pretrain.init import MMSELFSUP_MAE_VIT_B16_1600E as published
+
+    patch = dataset_config.PATCH_PX
+    collapse = arms.ENCODERS["imagenet-mae"].width * (3 - 1) * patch * patch
+    assert arms.ENCODERS["imagenet-mae"].params == published.encoder_parameters - collapse
+    assert arms.ENCODERS["imagenet-mae"].params == 85_405_440
+
+    # And the pair §6 item 4 actually prints, for the arm this ticket ran.
+    counts = arms.parameter_counts(arms.get("A6"))
+    assert counts == {"total": 85_405_440 + 1_181_089, "trainable": 1_181_089}
+
+
 def test_every_encoder_a_registered_arm_reads_publishes_an_md5():
     """An unpinned encoder is one `Extractor._checked_path` refuses to load — so it is not a
     state an arm this benchmark scores may be left in.
