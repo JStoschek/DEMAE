@@ -803,7 +803,7 @@ class TestTheRealFamilyAgainstTheLiveBucket:
         assert int(metadata[b"real_scored_components"]) == 9_978
         assert int(metadata[b"real_excluded_in_gaps"]) == 705
         assert int(metadata[b"real_excluded_above_top"]) == 182
-        assert table.num_rows == 30_000 + 9_273
+        assert table.num_rows == CLEAN_TEST_TILES * len(CELLS) + 9_273 == 36_411
 
     def test_every_real_mask_is_interior_and_files_under_its_own_sub_row(self, built):
         """The whole real half, decoded — the pass the synthetic half gets against its buckets."""
@@ -844,7 +844,7 @@ class TestTheRealFamilyAgainstTheLiveBucket:
 
     def test_the_freeze_says_what_the_tile_geometry_cut_off(self, built):
         _, said = built
-        assert "9,273 real" in said and "39,273 eval mask rows" in said
+        assert "9,273 real" in said and "36,411 eval mask rows" in said
         assert "9,978 scored components" in said
         assert "705" in said and "182" in said
 
