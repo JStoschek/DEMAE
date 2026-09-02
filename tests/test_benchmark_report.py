@@ -20,10 +20,12 @@ is the shape R5 fixed before any real one existed.
 from __future__ import annotations
 
 import io
+import math
 from contextlib import contextmanager, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from benchmark import arms, launch, prereg, report, results
@@ -111,13 +113,15 @@ def bar(tmp_path_factory) -> prereg.Bar:
 THIN = 20
 
 
-def _write_results(box, bar, *, thin=(), half_tile_arms=(), extra_arms=()):
+def _write_results(box, bar, *, thin=(), half_tile_arms=(), extra_arms=(), undefined=()):
     """The parquet.
 
     ``thin`` cuts any ``(arm, family, band)`` to :data:`THIN` instances, which is how R8's floor
     is made to fire. ``half_tile_arms`` scores an arm on only the lower half of the tiles, which
     is how a box where two arms saw different ground is built — the state a pre-registered pair's
-    interval must not notice.
+    interval must not notice. ``undefined`` sets one metric to NaN on the first row of an
+    ``(arm, family, band)``, which is the state `benchmark.metrics.score` genuinely produces —
+    a flat void has no aspect — and which a plain mean would spread over the whole cell.
     """
     cfg = BenchmarkConfig()
     thinned = set(thin)
@@ -131,6 +135,14 @@ def _write_results(box, bar, *, thin=(), half_tile_arms=(), extra_arms=()):
             return False
         return True
 
+    undefined_at = {(a, f, b): m for a, f, b, m in undefined}
+
+    def blank(row):
+        metric = undefined_at.get((row.arm, row.family, row.band))
+        if metric is not None and row.void_area_px - 200 == 0:
+            row.metrics[metric] = float("nan")
+        return row
+
     rows = []
     for arm in (*SCORED_ARMS, *extra_arms):
         seeds = (0, 1, 2) if arm in THREE_SEED_ARMS else (0,)
@@ -140,7 +152,7 @@ def _write_results(box, bar, *, thin=(), half_tile_arms=(), extra_arms=()):
         for size in ("1k", "5k"):
             rows.extend(_rows(bar, cfg, arm=arm, seed=0, size=size))
     results.append_rows(
-        [row for row in rows if keep(row)],
+        [blank(row) for row in rows if keep(row)],
         box / "results.parquet",
         metrics=bar.registered_metrics,
     )
@@ -163,13 +175,18 @@ def _flags(box) -> list[str]:
     ]
 
 
-def _make_box(root, bar, *, thin=(), half_tile_arms=(), extra_arms=()):
+def _make_box(root, bar, *, thin=(), half_tile_arms=(), extra_arms=(), undefined=()):
     """A box carrying the registered bar and a results parquet with six of eleven arms scored."""
     directory = root / "artifacts"
     directory.mkdir(exist_ok=True)
     prereg.write_bar(directory / BAR_NAME, plan=PLAN)
     _write_results(
-        root, bar, thin=thin, half_tile_arms=half_tile_arms, extra_arms=extra_arms
+        root,
+        bar,
+        thin=thin,
+        half_tile_arms=half_tile_arms,
+        extra_arms=extra_arms,
+        undefined=undefined,
     )
     return root
 
@@ -536,3 +553,64 @@ def test_a_figure_that_lost_its_load_bearing_marking_is_refused(built):
         report.assert_load_bearing(
             [_replace(built.figures[0], load_bearing=False), *built.figures[1:]]
         )
+
+
+# --- An undefined metric is a count, not a poisoned cell ----------------------
+
+
+def test_a_metric_with_no_defined_value_is_averaged_around_rather_than_spread(
+    tmp_path, bar
+):
+    """One undefined instance must not take its whole cell with it.
+
+    `benchmark.metrics.score` returns NaN for `aspect_error` when no pixel in the void has a
+    slope, because a flat void has no aspect to get wrong. That is a correct answer about one
+    instance. Under a plain `np.mean` it became a NaN for the entire (row, band) cell — 12,000
+    instances' worth of column deleted by two of them — which is what this asserts is gone.
+    """
+    box = _make_box(
+        tmp_path, bar, undefined=[("A6", "blob", "R1", "aspect_error")]
+    )
+    with cheap_bootstrap():
+        built = report.build(_config(_flags(box)))
+    cell = built.table.cell("A6", "blob", "R1")
+
+    assert cell.values is not None, "the cell still has its other five columns"
+    assert math.isfinite(cell.values["aspect_error"]), "one NaN row must not poison the cell"
+    # And every other cell is untouched by the one that had a gap.
+    other = built.table.cell("A6", "blob", "R2")
+    assert math.isfinite(other.values["aspect_error"])
+
+
+def test_the_rows_it_averaged_around_are_counted_in_a_footnote_rather_than_hidden(
+    tmp_path, bar
+):
+    """`np.nanmean` alone would be the same silence one layer down — see `report.finite_mean`."""
+    box = _make_box(
+        tmp_path, bar, undefined=[("A6", "blob", "R1", "aspect_error")]
+    )
+    with cheap_bootstrap():
+        built = report.build(_config(_flags(box)))
+    cell = built.table.cell("A6", "blob", "R1")
+
+    # Nine, and the arithmetic is the point: A6 carries three seeds, the printed row pools
+    # §3.2's three size buckets, and the fixture blanks the first row of each — so the count is
+    # over *scored rows*, which is the unit the mean it corrects was taken over.
+    assert cell.undefined == {"aspect_error": 9}
+    assert any(
+        "A6 blob R1" in note and "aspect_error" in note for note in built.table.footnotes
+    ), "the drop has to reach the printed page, not just the object"
+    assert built.table.cell("A6", "blob", "R2").undefined == {}
+
+
+def test_a_cell_with_no_defined_value_at_all_is_nan_rather_than_zero():
+    """The degenerate end of the rule: nothing to average is not the same as averaging to zero."""
+    value, dropped = report.finite_mean(np.array([np.nan, np.nan]))
+
+    assert math.isnan(value) and dropped == 2
+
+
+def test_the_mean_is_over_the_rows_that_have_a_number():
+    value, dropped = report.finite_mean(np.array([1.0, 3.0, np.nan]))
+
+    assert value == 2.0 and dropped == 1

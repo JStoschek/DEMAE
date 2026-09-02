@@ -369,6 +369,31 @@ def cell_rows(frame: Frame, arm: str, section: str, band: str, *, size: str) -> 
 # --- The printed table --------------------------------------------------------
 
 
+def finite_mean(values: np.ndarray) -> tuple[float, int]:
+    """A cell's mean over the rows that have a number, and how many rows did not.
+
+    Plain ``np.mean`` is wrong here in a way that is invisible: one undefined instance makes the
+    **whole cell** NaN, so a column that means something for 12,000 instances prints as nothing
+    because two of them had no aspect to get wrong. ``np.nanmean`` is wrong in the opposite
+    direction and worse — it returns a confident number and says nothing about what it dropped.
+
+    So the rule is both halves: aggregate over the finite rows, and hand back the count that did
+    not qualify, which :func:`table` turns into a footnote. An undefined instance is not a
+    missing measurement, it is a measurement that does not exist — :func:`benchmark.metrics.
+    score` returns NaN for ``aspect_error`` when no pixel in the void has a slope (a flat void
+    has no aspect) and for ``profile_curvature`` when the ZT quadratic's denominator collapses
+    for the same reason. Both are correct answers, and both are concentrated in R1 because R1 is
+    the flattest band.
+
+    A cell whose rows are *all* undefined is NaN with everything dropped, which is the honest
+    answer rather than a zero: there is no number, and the footnote says how many there weren't.
+    """
+    a = np.asarray(values, dtype=float)
+    ok = np.isfinite(a)
+    dropped = int((~ok).sum())
+    return (float(a[ok].mean()) if ok.any() else float("nan")), dropped
+
+
 @dataclass(frozen=True)
 class Cell:
     """One (row, band) cell: six numbers, or a count and the rule that withheld them."""
@@ -385,6 +410,9 @@ class Cell:
     values: dict[str, float] | None
     #: Why there is no metric. Empty when there is one.
     note: str = ""
+    #: Metric -> scored rows that had no defined value and are excluded from that mean. Empty
+    #: for almost every cell; :func:`finite_mean` says why it is a count rather than a silence.
+    undefined: Mapping[str, int] = field(default_factory=dict)
     #: Which of R6's four marked pairs this cell is the claim-side row of, and on which metric.
     marks: tuple[str, ...] = ()
 
@@ -423,6 +451,11 @@ def build_table(
     means when it defines mean per-instance |bias| as *averaged within an instance, then over
     instances* — so one aggregation rule serves all six columns rather than each column carrying
     its own.
+
+    That rule is :func:`finite_mean`: over the rows that have a number, with a count of the rows
+    that did not, which lands in :attr:`Cell.undefined` and then in a footnote. A metric can be
+    genuinely undefined for an instance — a flat void has no aspect — and neither poisoning the
+    whole cell nor quietly averaging around it is a way of saying so.
     """
     floor = bar.cell_floor
     marks = _marks_by_cell(intervals, bar)
@@ -435,10 +468,11 @@ def build_table(
         elif count < floor:
             values, note = None, f"below R8's {floor}-instance floor"
         else:
-            values = {
-                name: float(np.mean(frame.columns[name][rows]))
-                for name in bar.headline_metrics
-            }
+            values, undefined = {}, {}
+            for name in bar.headline_metrics:
+                values[name], dropped = finite_mean(frame.columns[name][rows])
+                if dropped:
+                    undefined[name] = dropped
             note = ""
         cells.append(
             Cell(
@@ -450,13 +484,28 @@ def build_table(
                 values=values,
                 note=note,
                 marks=marks.get((arm, section, band), ()),
+                undefined=undefined if values is not None else {},
             )
         )
     return Table(
         columns=tuple(bar.headline_metrics),
         cells=tuple(cells),
-        footnotes=_real_family_footnotes(frame, size=size),
+        footnotes=_real_family_footnotes(frame, size=size)
+        + _undefined_footnotes(tuple(cells)),
     )
+
+
+def _undefined_footnotes(cells: Sequence[Cell]) -> tuple[str, ...]:
+    """One line per cell that averaged over fewer rows than it holds — see :func:`finite_mean`."""
+    out = []
+    for cell in cells:
+        for metric, dropped in sorted(cell.undefined.items()):
+            out.append(
+                f"{cell.arm} {cell.section} {cell.band}: {metric} is the mean over "
+                f"{dropped:,} fewer scored row(s) than the cell holds — that many had no "
+                f"defined value (a void with no slope has no aspect, and no profile curvature)"
+            )
+    return tuple(out)
 
 
 #: §3.3's third published row. It carries a **count and no metric by construction** — it is not
@@ -605,7 +654,13 @@ def rank_block(
                 )
                 counts[arm] = int(keep.sum())
                 if counts[arm] >= bar.cell_floor:
-                    means[arm] = float(np.mean(frame.columns[metric][keep]))
+                    # The table's rule (:func:`finite_mean`), because a rank built on a
+                    # NaN-poisoned mean would drop the arm out of the ordering entirely — it
+                    # would sort last or not at all, which reads as "worst" rather than "one of
+                    # its instances had no aspect".
+                    mean, _ = finite_mean(frame.columns[metric][keep])
+                    if np.isfinite(mean):
+                        means[arm] = mean
             order = sorted(means, key=lambda arm: (means[arm], arm))
             rank_of = {arm: i + 1 for i, arm in enumerate(order)}
             for arm in arms.PRINTED_ROWS:
@@ -1046,8 +1101,11 @@ def _mean_by_bin(
         inside = (diameter >= lo) & (diameter < hi if hi != edges[-1] else diameter <= hi)
         if int(inside.sum()) < floor:
             continue
+        y, _ = finite_mean(rmse[inside])
+        if not np.isfinite(y):
+            continue
         xs.append(float(np.mean(diameter[inside])))
-        ys.append(float(np.mean(rmse[inside])))
+        ys.append(y)
     return Series(label=arm, x=tuple(xs), y=tuple(ys)) if xs else None
 
 
@@ -1077,8 +1135,10 @@ def label_efficiency(frame: Frame) -> Figure:
         for size in LABEL_EFFICIENCY_SIZES:
             keep = frame.select(arm=arm, size=size, family=BLOB_FAMILY)
             if keep.any():
-                xs.append(float(SIZE_TILES[size]))
-                ys.append(float(np.mean(frame.columns["rmse"][keep])))
+                y, _ = finite_mean(frame.columns["rmse"][keep])
+                if np.isfinite(y):
+                    xs.append(float(SIZE_TILES[size]))
+                    ys.append(y)
         if len(xs) > 1:
             series.append(Series(label=arm, x=tuple(xs), y=tuple(ys)))
     return replace(declared("label-efficiency"), series=tuple(series))
