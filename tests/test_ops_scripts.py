@@ -273,7 +273,15 @@ def test_the_push_ships_the_sha_file_with_the_code():
     assert plan.returncode == 0, plan.stderr
     rsync = [ln for ln in plan.stdout.splitlines() if "rsync" in ln]
     assert rsync, f"no rsync in the plan:\n{plan.stdout}"
-    assert all(".git_sha" in ln for ln in rsync)
+    # **The transfer that carries the code** carries the sha, which is the invariant — stated
+    # against `src` rather than against "every rsync" since #162 added a second transfer for the
+    # plan. That one ships a document Task 1 scoring reads and no code at all, so requiring the
+    # sha in it would assert something this test does not mean; requiring it wherever `src` goes
+    # is exactly what R0 needed and is stronger than counting lines.
+    code = [ln for ln in rsync if " src" in ln or ln.rstrip().endswith("src")]
+    assert code, f"no rsync carries src:\n{plan.stdout}"
+    assert all(".git_sha" in ln for ln in code)
+    assert not any(" src" in ln for ln in rsync if ".git_sha" not in ln)
     # And it is regenerated in the same breath rather than trusted from last time: a `.git_sha`
     # from three pushes ago is a confident wrong answer, which is worse than the `unknown` it
     # replaced.
@@ -1119,3 +1127,39 @@ def test_the_ram_floor_is_a_flag_because_the_workload_sets_it():
 )
 def test_the_floor_admits_and_refuses_the_boxes_it_should(ram, floor, passes):
     assert truth(PROVISION, f'[[ {floor} -eq 0 || {ram} -ge {floor} ]]') is passes
+
+
+# --- The plan is an input on a Task 1 box, not documentation -------------------
+
+
+def test_the_push_ships_the_plan_because_scoring_reads_it():
+    """#162. `prereg.read_bar` re-checks §6 against the plan text every time it opens the bar.
+
+    "The box trains, it does not get read on" is Phase 1's rule and stays true of `docs/` as a
+    whole — pretraining never opens the plan. Task 1's scoring path does, so this one file is a
+    runtime input, and a box without it fails in `run_pass` *after* the training it just paid
+    for. Asserted on the script rather than trusted, because the failure costs a whole seed.
+    """
+    text = PUSH.read_text()
+    assert "docs/research/task1-void-fill-plan.md" in text
+    # With --relative, or it lands at the destination root where nothing looks for it.
+    assert "rsync -azR" in text
+    # And the wider docs/ tree is still not shipped.
+    assert "PAYLOAD=(src tests artifacts scripts" in text
+
+
+def test_the_plan_the_push_ships_is_the_one_the_config_reads():
+    """One path, asserted against the config default rather than typed twice."""
+    from benchmark.config import Paths
+
+    assert Paths().plan_path in PUSH.read_text()
+
+
+def test_the_dry_run_names_both_transfers():
+    """A dry run that hid half of what a real push does would be the wrong kind of preview."""
+    done = subprocess.run(
+        ["bash", str(PUSH), "--host", "nowhere.invalid", "--dry-run"],
+        capture_output=True, text=True, cwd=REPO,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "task1-void-fill-plan.md" in done.stdout
