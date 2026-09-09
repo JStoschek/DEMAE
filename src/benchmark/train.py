@@ -16,7 +16,7 @@ be a seam nobody is on both sides of, which is the failure Phase 1 shipped four 
 :func:`compose` builds the model's input — A1 fill, valid mask, void — and :func:`residual_of`
 runs the encoder and the head over it. **Both are called from the eval path too**
 (:func:`predict`, which `benchmark.evaluate` reaches through
-:class:`benchmark.evaluate.Learned`). That is not code tidiness. A head trained against one
+:func:`benchmark.evaluate._head_fill`). That is not code tidiness. A head trained against one
 composition and scored against a slightly different one — a valid mask that included the void, a
 fill computed at a different variant, a normalization applied twice — converges normally and
 prints a table exactly as wide as a good one. There is one composition because there is one way
@@ -579,7 +579,7 @@ def predict(
     """§2.4's fill for a trained arm: the A1 fill plus the head's residual, inside the void.
 
     The eval path's entry into this module, reached through
-    :class:`benchmark.evaluate.Learned`. Returns one float32 tile per input, in metres, ready for
+    :func:`benchmark.evaluate._head_fill`. Returns one float32 tile per input, in metres, ready for
     :func:`benchmark.metrics.score` — and, when the head's output convolution is still zero,
     returns arrays **equal** to A1's (:func:`benchmark.head.apply_residual`).
     """
@@ -716,11 +716,22 @@ class Trained:
     precision_declared: str = "bf16"
     precision_used: str = "bf16"
 
+    @property
+    def arm(self) -> str:
+        """Which registered arm these weights are for.
+
+        Read off :attr:`stack` rather than stored beside it, so there is one answer:
+        :func:`benchmark.evaluate._head_fill` refuses a head trained for another arm, and a copy
+        of the name that could disagree with the encoder the stack actually holds would make that
+        refusal check the wrong thing.
+        """
+        return "" if self.stack is None else self.stack.arm
+
     def predict(
         self, raw_i16: Sequence[np.ndarray], voids: Sequence[np.ndarray], cfg
     ) -> list[np.ndarray]:
-        """:func:`predict`, bound to this trained head — what :class:`benchmark.evaluate.Learned`
-        carries across the seam."""
+        """:func:`predict`, bound to this trained head — what the ``a1_fill_plus_mask`` factory
+        closes over when `run` hands it this object (:func:`benchmark.evaluate._head_fill`)."""
         return predict(raw_i16, voids, cfg, self.stack)
 
     def to_dict(self) -> dict:

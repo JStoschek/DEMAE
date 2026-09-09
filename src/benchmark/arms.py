@@ -115,6 +115,16 @@ class Encoder:
     pos_encoding: str
     #: The :class:`benchmark.config.Paths` field naming this encoder's checkpoint.
     checkpoint_field: str
+    #: The :class:`benchmark.config.Paths` field naming this encoder's **pretraining**
+    #: checkpoint — encoder *and* decoder — or ``None`` for a family that has none.
+    #:
+    #: A second field rather than a second value of :attr:`checkpoint_field`, because on a given
+    #: box they are two different states of two different files. §14 exports encoder-only weights
+    #: and discards the decoder, so the release `encoder.pt` every other arm initializes from
+    #: cannot drive A2: zero-shot inpainting *is* the pretrained decoder (§4.3). Declared here so
+    #: the resolution line names the file before a run spends anything, rather than a `load` deep
+    #: inside the pass discovering that 74 tensors are absent.
+    mae_checkpoint_field: str | None = None
     #: One of :data:`POS_EMB_DERIVATIONS` — how the tensor the model *runs with* is derived from
     #: the one above. ADR-0011 Decision 2 is a value of this field and not a line in extraction
     #: code, because it is a fact about this encoder that a reader has to be able to find from
@@ -233,6 +243,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d",
         checkpoint_field="demae_r5_checkpoint",
+        mae_checkpoint_field="demae_r5_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R5_MD5,
     ),
@@ -244,6 +255,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # *transpose* of MAE's (P102 §4). Every name and every shape matches under either.
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="demae_r4_checkpoint",
+        mae_checkpoint_field="demae_r4_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R4_MD5,
     ),
@@ -413,6 +425,23 @@ class Arm:
         the string comparison spelled at each site is one typo away from exactly that.
         """
         return self.trains == "head"
+
+    @property
+    def runs_pretrained_decoder(self) -> bool:
+        """Does this arm run the pretraining **decoder**, as pretrained? A2, and only A2.
+
+        Read off two declared fields rather than off the name, on :func:`benchmark.artifacts.
+        _required_for`'s rule: ``token_drop`` is the convention whose output *is* the decoder's,
+        and :attr:`is_inference_only` is what says nothing was retrained on the way. A3 shares
+        the convention and trains ``encoder+decoder``, so it initializes a decoder rather than
+        running one, and answers ``False`` here — which is right: what a fine-tune needs from a
+        checkpoint is its own ticket's question (#162), not this one's.
+
+        The consequence is a second file. §14 exports encoder-only weights, so an arm for which
+        this is true cannot be driven by the release `encoder.pt` every other arm reads
+        (:attr:`Encoder.mae_checkpoint_field`).
+        """
+        return self.input_convention == "token_drop" and self.is_inference_only
 
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:

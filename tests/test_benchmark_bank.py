@@ -234,7 +234,9 @@ def test_the_sidecar_carries_the_bank_md5_and_the_generator_config_hash(cfg):
     assert committed["tiles"] == 4
 
 
-def test_both_mask_artifacts_carry_one_contract_rather_than_two(cfg, frozen_tiles):
+def test_both_mask_artifacts_carry_one_contract_rather_than_two(
+    cfg, frozen_tiles, tmp_path, corpus_factory
+):
     """§3.4's sentence, as a check: the same generator and the same config hash, in both files.
 
     Asserted on the artifacts rather than on the config that made them, because the claim is
@@ -244,9 +246,18 @@ def test_both_mask_artifacts_carry_one_contract_rather_than_two(cfg, frozen_tile
     """
     from benchmark.artifacts import EVAL_MASKS_NAME, TEST_TILES_NAME
 
+    from tests.conftest import SPLIT_COGS, build_corpus
+
+    # A built corpus rather than fabricated ids: the eval half reads a manifest now, because
+    # `masks.scoreable_tiles` drops the part-ocean test tiles before the draw. The bank half
+    # still does not — it draws over §3.1's head-train list, which is why this test writes two
+    # lists. That asymmetry is the subject of #150's follow-up, not of this test.
+    corpus = build_corpus(tmp_path / "eval-corpus", SPLIT_COGS, tiles_per_cog=2)
+    listed = pq.read_table(corpus / "manifest.parquet", columns=["tile_id"])["tile_id"].to_pylist()
     write_tile_strata(
-        [(tile, i % 20) for i, tile in enumerate(tile_ids(4))], frozen_tiles / TEST_TILES_NAME
+        [(tile, i % 20) for i, tile in enumerate(listed[:4])], frozen_tiles / TEST_TILES_NAME
     )
+    cfg = cfg.replace(paths=cfg.paths.replace(corpus_dir=str(corpus)))
     # §3.2's half alone — `RealFamily.none()` is #153's way of *saying* a list has no real
     # family rather than defaulting into one, and this test is about the contract both artifacts
     # carry, which the synthetic rows establish on their own.

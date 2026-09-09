@@ -14,21 +14,15 @@ lets the results file be tested without a corpus and the pass be tested without 
 is emphatically not here is a ``main``: `launch` is the only entry point (ADR-0009), and this
 module is documented as **not a way to produce a result** exactly as ``pretrain.train`` is.
 
-## Two conventions today, a table tomorrow
+## A1 today, a table tomorrow
 
 :data:`FILLERS` dispatches on the arm's **input convention** rather than on its name, because
 that is the field §1's table actually varies: ``classical_fill`` is A1 and is built here;
-``a1_fill_plus_mask`` is A4, A5 and A6's frozen-encoder-plus-head and arrived with #159;
-``token_drop`` and ``a1_fill_through_tokenizer`` are the two the later arm tickets attach to,
-and each names its own ticket when asked for rather than failing as an unknown key. Dispatching
-on the convention is what made §2.4's residual rule expressible without a second pass, and it is
-why A4, A5 and A6 are one entry rather than three: what differs between them is the encoder the
-registry names, which this module never asks about.
-
-The head is **not built here**. A learned cell is train-then-score, and what crosses into this
-module is :class:`Learned` — a callable and a batch size — so that the pass scores the weights
-the training run early-stopped rather than a fresh head, and so that A1's scoring path still
-imports no torch.
+``a1_fill_plus_mask``, ``token_drop`` and ``a1_fill_through_tokenizer`` are the three the later
+arm tickets attach to, and each names its own ticket when asked for rather than failing as an
+unknown key. Dispatching on the convention is also what makes §2.4's residual rule expressible
+later without a second pass: three of the four conventions *begin* with the fill this one
+produces.
 
 ## Reading tiles without torch
 
@@ -64,16 +58,16 @@ looks normal (§8's risk row):
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final, Mapping, Sequence
+from typing import Any, Callable, Final, Sequence
 
 import numpy as np
 
 from dataset.geometry import PixelSize, band_pixel_spacing_m
 from pretrain.artifact import read_tile_strata
 
-from . import arms, fill, masks, metrics, prereg, results, voids
+from . import arms, fill, masks, metrics, prereg, results, voids, zeroshot
 from .artifacts import EVAL_MASKS_NAME, TEST_TILES_NAME, file_md5
 from .config import BenchmarkConfig
 
@@ -187,101 +181,156 @@ def bands_for(cfg: BenchmarkConfig) -> voids.Bands:
 # --- The arm's fill -----------------------------------------------------------
 
 
+#: What a **batch** of fills looks like once the cell is known: tiles and voids in, one filled
+#: tile in metres out per instance.
+#:
+#: Batched rather than per-instance, and #159 is why: A4, A5 and A6 run a frozen ViT-B over every
+#: instance, and one forward per instance is 36,411 of them where one per batch of 128 is 285.
+#: A1 and A2 are unaffected — they declare a batch of one below and loop inside — so the batch
+#: axis costs nothing to a convention that cannot use it.
+Filler = Callable[[Sequence["Tile"], Sequence[np.ndarray]], list]
+
+#: How a convention turns *the cell* into one of those. A factory rather than a plain function,
+#: and #167 is why: a filler that runs an encoder has to load one, and a signature that took the
+#: config per instance would load a ViT-B thirty thousand times. It is also what lets a
+#: convention see the **arm** — ``token_drop`` is shared by A2-R5 and A2-R4, and a filler that
+#: could not tell them apart would score one cell's rows with the other's weights.
+#: ``trained`` is #159's half and is keyword-only with a default, so the conventions that train
+#: nothing never mention it. It carries :class:`benchmark.train.Trained` for the arms that train
+#: §4.1's head — the *weights*, not a recipe for getting them. A factory cannot train one itself:
+#: training inside the eval pass is the seam that would let a cell be scored against a head no
+#: run record describes, and `launch` trains before it scores for that reason.
+FillerFor = Callable[..., "Fill"]
+
+
 @dataclass(frozen=True)
-class Learned:
-    """A trained arm's inference half, handed to the pass rather than built by it (#159).
+class Fill:
+    """What a convention hands the pass: how to fill a batch, and how big a batch it wants.
 
-    :mod:`benchmark.train` assembles this — the frozen encoder, the trained head, the device —
-    and `launch` passes it in. This module deliberately does **not** import that one: the eval
-    pass is torch-free for A1 (§3.4), and a scoring path that imported a training module to score
-    a classical interpolation would have made that untrue for the sake of one type annotation.
-    What crosses the seam is a callable and a batch size.
-
-    ``predict`` has :func:`benchmark.train.predict`'s signature — raw int16 tiles and boolean
-    voids in, one float32 fill in metres per instance out — and it is the *same function the
-    training loop scored its val set with*. That identity is the whole reason the head is passed
-    in already trained rather than rebuilt here.
+    The batch size travels **with** the filler rather than being the pass's to choose, because it
+    is a fact about the convention: a frozen-encoder arm wants §4.1's 128 so one forward covers
+    the batch, and A1 wants one so its memory stays flat over 36,411 instances. A pass that
+    picked the number would be deciding something only the convention knows.
     """
 
-    #: The registered arm this was trained for, checked against the pass's own arm.
-    arm: str
-    #: ``(raw_i16, voids, cfg) -> [filled]``. See above.
-    predict: Callable[[Sequence[np.ndarray], Sequence[np.ndarray], BenchmarkConfig], list]
-    #: How many instances go through one encoder forward. One here, so that a `Learned` built
-    #: without thinking about it behaves like A1's per-instance loop; `benchmark.launch` passes
-    #: §4.1's training batch, because the eval pass runs the identical composition and a frozen
-    #: forward has no reason to be narrower here than it was there.
-    batch_size: int = 1
-    #: What the run record says about the head behind this — :meth:`benchmark.train.Trained.to_dict`.
-    detail: Mapping[str, Any] = field(default_factory=dict)
+    fill: Filler
+    #: Instances per call. One unless the convention says otherwise.
+    batch: int = 1
+
+    def __post_init__(self) -> None:
+        if self.batch < 1:
+            raise ValueError(f"a filler's batch is at least one instance; got {self.batch}")
 
 
-def _classical_fill(
-    tiles: Sequence[Tile],
-    voids: Sequence[np.ndarray],
-    cfg: BenchmarkConfig,
-    learned: Learned | None,
-) -> list[np.ndarray]:
-    """A1 — §2.4's classical interpolation over the raw metres the shard holds."""
-    return [fill.fill(tile.raw_i16, void, recipe=cfg.fill) for tile, void in zip(tiles, voids)]
+def _classical_fill(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
+    """A1 — §2.4's classical interpolation over the raw metres the shard holds.
+
+    A batch of one, which is what it wants: `fillnodata` is CPU work with no fixed cost to
+    amortize, so batching would buy nothing and would hold 128 tiles in memory to do it.
+    """
+
+    def fill_batch(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+        return [fill.fill(t.raw_i16, v, recipe=cfg.fill) for t, v in zip(tiles, voids)]
+
+    return Fill(fill=fill_batch)
 
 
-def _head_fill(
-    tiles: Sequence[Tile],
-    voids: Sequence[np.ndarray],
-    cfg: BenchmarkConfig,
-    learned: Learned | None,
-) -> list[np.ndarray]:
+def _token_drop(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
+    """A2 — §4.3's native MAE inpainting, no trained head (#167, :mod:`benchmark.zeroshot`).
+
+    The model is loaded **once here**, when the pass is built, and its own refusals fire before
+    the first instance rather than 30,000 rows in — the same rule §8's two gates follow, and for
+    the same reason: a refusal that costs an eval pass is one nobody consults until the bill
+    arrives.
+
+    A3 shares this convention and is not this ticket's: it trains ``encoder+decoder``, so what it
+    needs from a checkpoint is #162's question. It reaches the branch below and is told so.
+    """
+    if not arm.runs_pretrained_decoder:
+        return _unbuilt(
+            "token_drop",
+            f"{arm.name} trains {arm.trains} over this convention, and the fine-tune that "
+            f"produces those weights is not built",
+            "#162",
+        )(cfg, arm)
+
+    field = arms.ENCODERS[arm.encoder].mae_checkpoint_field
+    path = None if field is None else getattr(cfg.paths, field)
+    if path is None:
+        raise FileNotFoundError(
+            f"{arm.name} runs the pretrained MAE decoder and this box has not mounted one. "
+            f"§14 exports encoder-only weights, so the release `encoder.pt` cannot drive it — "
+            f"see the resolution line's `mae checkpoint` row"
+        )
+    inpainter = zeroshot.load_inpainter(path, expect=arms.ENCODERS[arm.encoder])
+    inpainter.check_ready()
+
+    def fill_batch(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+        # One at a time: #167's inpainter takes a tile. The batch axis is available to it the day
+        # someone measures that batching the decoder is worth the memory, and costs nothing until.
+        return [inpainter.infill(t.raw_i16, v) for t, v in zip(tiles, voids)]
+
+    return Fill(fill=fill_batch)
+
+
+def _head_fill(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
     """A4, A5 and A6 — the A1 fill plus §4.1's head residual, inside the void (§2.4, #159).
 
-    The head is **not** built here. A cell of this convention is *train, then score*, and the
-    thing scored has to be the object the training pass early-stopped: a pass that instantiated
-    a fresh head at eval time would score a zero-output head, which by construction scores
-    exactly A1 — the quietest possible way for a whole arm to be wrong.
+    The head is **not built here**, and that is the one thing this factory does differently from
+    :func:`_token_drop`'s. A2's model is pretrained, so loading it is all there is to do; a head
+    has to be *trained*, and training inside the eval pass would let a cell be scored against
+    weights no run record describes. So `launch` trains first and hands the result in, and this
+    refuses rather than improvising when it is handed nothing — because a freshly built head
+    outputs zero, and a zero-output head scores **exactly A1** (:func:`benchmark.head.build`
+    zeroes the output convolution). That is the quietest possible way for a whole arm to be
+    wrong: A4's row would be A1's row wearing A4's name, and no column would say so.
+
+    §4.1's batch, because the composition here is the training loop's: one frozen forward covers
+    128 instances (:func:`benchmark.train.predict`).
     """
-    if learned is None:
+    if trained is None:
         raise NotImplementedError(
-            "an `a1_fill_plus_mask` cell is train-then-score and this pass was handed no "
-            "trained head. `benchmark.launch` trains one (§4.1, #159) and passes it in; a pass "
-            "reached any other way has nothing to score but A1 wearing another arm's name"
+            f"{arm.name} scores §4.1's head over a frozen encoder and this pass was handed no "
+            f"trained head. `benchmark.launch` trains one before it scores (#159); a pass "
+            f"reached any other way has nothing to score but A1 wearing another arm's name"
         )
-    return learned.predict([tile.raw_i16 for tile in tiles], voids, cfg)
+    if trained.arm != arm.name:
+        raise ValueError(
+            f"this pass is scoring {arm.name} and was handed a head trained for {trained.arm}. "
+            f"A4, A5 and A6 share one head *architecture* (§4.1) and never one set of weights — "
+            f"the weights are what C1 compares"
+        )
+
+    def fill_batch(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+        return trained.predict([t.raw_i16 for t in tiles], voids, cfg)
+
+    return Fill(fill=fill_batch, batch=cfg.head.batch_size)
 
 
-def _unbuilt(convention: str, what: str, ticket: str) -> Callable[..., list[np.ndarray]]:
+def _unbuilt(convention: str, what: str, ticket: str) -> FillerFor:
     """A convention that is registered and not yet built, saying which ticket builds it."""
 
-    def refuse(
-        tiles: Sequence[Tile],
-        voids: Sequence[np.ndarray],
-        cfg: BenchmarkConfig,
-        learned: Learned | None,
-    ) -> list[np.ndarray]:
-        raise NotImplementedError(
-            f"the {convention!r} input convention is not built: {what} ({ticket}). A1 runs "
-            f"first and its numbers gate every learned arm, because each of them is a residual "
-            f"over this fill (§2.4, §4.5)"
-        )
+    def build(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
+        def refuse(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+            raise NotImplementedError(
+                f"the {convention!r} input convention is not built: {what} ({ticket}). A1 runs "
+                f"first and its numbers gate every learned arm, because each of them is a "
+                f"residual over this fill (§2.4, §4.5)"
+            )
 
-    return refuse
+        return Fill(fill=refuse)
+
+    return build
 
 
 #: One entry per :data:`benchmark.arms.INPUT_CONVENTIONS` value — the table §1's rows vary over.
 #: Complete rather than partial, so an unbuilt arm names its ticket instead of failing as a
 #: missing key, and so that adding a convention to the registry without building it is a visible
 #: gap here rather than a `KeyError` on a rented box.
-#:
-#: Every filler takes and returns a **batch**. One instance at a time is what A1 wants and what
-#: keeps its memory flat; one encoder forward per instance is not what the frozen arms want, and
-#: a table whose signature could only express the first would have made the second a second pass.
-FILLERS: Final[
-    dict[str, Callable[[Sequence[Tile], Sequence[np.ndarray], BenchmarkConfig, Any], list]]
-] = {
+FILLERS: Final[dict[str, FillerFor]] = {
     "classical_fill": _classical_fill,
     "a1_fill_plus_mask": _head_fill,
-    "token_drop": _unbuilt(
-        "token_drop", "DEMAE's native MAE inpainting path", "#160's zero-shot and fine-tuned arms"
-    ),
+    "token_drop": _token_drop,
     "a1_fill_through_tokenizer": _unbuilt(
         "a1_fill_through_tokenizer", "A9's encode/FSQ/diffusion-decode pass", "#163"
     ),
@@ -509,13 +558,14 @@ def read_instances(cfg: BenchmarkConfig) -> list[Instance]:
 def decode_void(tile: Tile, instance: Instance, cfg: BenchmarkConfig) -> np.ndarray:
     """The committed RLE for this instance, decoded and checked against §3.2's area cap.
 
-    Separate from the scoring below because the two happen at different rhythms once an arm
-    batches: every instance in a batch is decoded and checked before any of them is filled, and
-    the cap is a **polarity guard** that has to fire before a fill rather than after one.
+    Separate from the scoring below because the two happen at different rhythms once a convention
+    batches (#159): every instance in a batch is decoded and checked *before* any of them is
+    filled, and the cap is a **polarity guard** that has to fire before a fill rather than after
+    one.
 
-    `freeze` checks every draw against this cap and never trims, so a committed mask over it did
-    not come from the generator: an inverted decode is the way that happens, and it turns a 3%
-    void into a 97% one, which scores a plausible table nothing refuses.
+    The band comes off the **tile's** ``slope_mean`` rather than the void's own terrain, on
+    :class:`benchmark.voids.Bands`' rule: the bands describe the ground a void sits on, so a band
+    index means the same thing here as it does for every other tile in the corpus.
     """
     void = masks.decode_rle(instance.mask_rle)
     if void.shape != tile.raw_i16.shape:
@@ -523,6 +573,10 @@ def decode_void(tile: Tile, instance: Instance, cfg: BenchmarkConfig) -> np.ndar
             f"the committed mask for {instance.tile_id} decodes to {void.shape} and the tile is "
             f"{tile.raw_i16.shape}"
         )
+    # §3.2's area cap, re-checked on the *decoded* mask — the polarity guard the identity gate
+    # cannot be. `freeze` checks every draw against this cap and never trims, so a committed mask
+    # over it did not come from the generator: an inverted decode is the way that happens, and it
+    # turns a 3% void into a 97% one, which scores a plausible table nothing refuses.
     area = int(void.sum())
     cap = cfg.masks.max_area_frac * void.size
     if area > cap:
@@ -567,22 +621,6 @@ def score_filled(
     )
 
 
-def score_instance(
-    tile: Tile,
-    instance: Instance,
-    cfg: BenchmarkConfig,
-    *,
-    arm: arms.Arm,
-    bands: voids.Bands,
-    bar: prereg.Bar,
-    learned: Learned | None = None,
-) -> Scored:
-    """One instance, end to end — the batch of one the pass below generalizes."""
-    void = decode_void(tile, instance, cfg)
-    filled = FILLERS[arm.input_convention]([tile], [void], cfg, learned)[0]
-    return score_filled(tile, instance, void, filled, bands=bands, bar=bar)
-
-
 def format_gates(gates: dict[str, Any]) -> str:
     """The two gates, on one line, as something a build session can read at a glance.
 
@@ -615,7 +653,7 @@ def run_pass(
     cfg: BenchmarkConfig,
     arm: arms.Arm,
     *,
-    learned: Learned | None = None,
+    trained=None,
     progress: Callable[[int, int], None] | None = None,
 ) -> Pass:
     """Score one cell over the committed eval mask list, both gates first.
@@ -625,25 +663,22 @@ def run_pass(
     the corpus is opened. A gate that fired after 30,000 instances had been scored would be a
     gate that costs 2.0–5.2 CPU-hours to consult.
 
-    ``learned`` is a trained arm's inference half (:class:`Learned`, #159). ``None`` is A1 and
-    every arm that trains nothing; a convention that needs one and is handed ``None`` refuses
-    rather than scoring an untrained head, which by construction would score exactly A1.
+    ``trained`` is :class:`benchmark.train.Trained` for the arms that train §4.1's head, and
+    ``None`` for every other (#159). It is handed *in* rather than made here: `launch` trains
+    before it scores, so a cell's weights exist — and are described by its run record — before a
+    single instance is filled.
 
-    Instances are scored in batches of :attr:`Learned.batch_size`, which is **one** when there is
-    no learned arm. That keeps A1 exactly where #158 left it — one tile in memory at a time over
-    30,000 instances — while letting a frozen encoder see §4.1's batch in one forward instead of
-    128 of them.
+    Instances are scored in batches of :attr:`Fill.batch`, which the convention chose: one for
+    A1 and A2, §4.1's 128 for the frozen-encoder arms.
     """
     started = time.perf_counter()
     bar = metrics.bar_for(cfg)
     gates: dict[str, Any] = {"golden_tile": golden_gate(cfg, bar)}
 
-    if learned is not None and learned.arm != arm.name:
-        raise ValueError(
-            f"this pass is scoring {arm.name} and was handed a head trained for {learned.arm}. "
-            f"A4, A5 and A6 share one head *architecture* (§4.1) and never one set of weights — "
-            f"the weights are what C1 compares"
-        )
+    # Built here, with the gates, and for the gates' reason: an arm that loads an 86M-parameter
+    # model refuses an unmounted checkpoint — or a decoder with no registered inversion (#167) —
+    # while the clock is still cheap. A1's factory does nothing at all, so this costs it nothing.
+    filler = FILLERS[arm.input_convention](cfg, arm, trained=trained)
 
     instances = read_instances(cfg)
     store = TileStore(cfg.paths.corpus_dir)
@@ -654,16 +689,17 @@ def run_pass(
     # deterministic, which matters for a gate that gets quoted in a run record.
     gates["identity_mask"] = identity_gate(store.read(instances[0].tile_id), cfg)
 
-    batch_size = 1 if learned is None else max(1, learned.batch_size)
-    filler = FILLERS[arm.input_convention]
     scored: list[Scored] = []
-    for start in range(0, len(instances), batch_size):
-        chunk = instances[start : start + batch_size]
+    for start in range(0, len(instances), filler.batch):
+        chunk = instances[start : start + filler.batch]
         tiles = [store.read(item.tile_id) for item in chunk]
-        chunk_voids = [
-            decode_void(tile, item, cfg) for tile, item in zip(tiles, chunk)
-        ]
-        filled = filler(tiles, chunk_voids, cfg, learned)
+        chunk_voids = [decode_void(t, item, cfg) for t, item in zip(tiles, chunk)]
+        filled = filler.fill(tiles, chunk_voids)
+        if len(filled) != len(chunk):
+            raise ValueError(
+                f"the {arm.input_convention!r} filler returned {len(filled)} fills for "
+                f"{len(chunk)} instances — a batched filler answers one per instance, in order"
+            )
         for tile, item, void, out in zip(tiles, chunk, chunk_voids, filled):
             scored.append(score_filled(tile, item, void, out, bands=bands, bar=bar))
         if progress is not None:

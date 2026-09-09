@@ -642,8 +642,10 @@ def test_the_encoder_is_asserted_frozen_on_the_way_out(box, flags, stub, frozen,
 def test_an_untrained_head_is_not_something_the_pass_will_score(box, flags, stub, frozen):
     """A zero-output head scores exactly A1, which is the quietest way for an arm to be wrong."""
     cfg = launch.resolve(launch.build_parser().parse_args(["run", "--arm", "A6", *flags])).config
+    # The factory refuses, not the filler it would have returned: a pass that got this far with
+    # no head has nothing to score, and finding out per instance would be 36,411 refusals.
     with pytest.raises(NotImplementedError, match="no trained head"):
-        evaluate.FILLERS["a1_fill_plus_mask"]([], [], cfg, None)
+        evaluate.FILLERS["a1_fill_plus_mask"](cfg, arms.get("A6"), trained=None)
 
 
 # --- The tuning pass through the shipping command ------------------------------

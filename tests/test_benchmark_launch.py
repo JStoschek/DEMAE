@@ -299,9 +299,21 @@ def test_a_run_past_the_dry_run_reaches_its_inputs_rather_than_naming_a_stage(fr
     assert "DEMAE Task 1" in capsys.readouterr().out
 
 
-def test_report_refuses_the_same_way(frozen, flags):
-    with pytest.raises(NotImplementedError, match="renders nothing yet"):
-        launch.main(["report", *flags])
+def test_a_report_past_the_dry_run_reaches_the_parquet_rather_than_naming_a_stage(
+    frozen, flags, box, capsys
+):
+    """#169 built `report`, so the one thing it no longer does is refuse as unbuilt.
+
+    This box has committed inputs and has scored nothing, which is the state a frozen box is in
+    before the first `run`. So `report` fails **reading the results parquet**, and that is the
+    assertion: it got past the seam and into the file it is a pure function of. What a report
+    does on a box that holds results is `tests/test_benchmark_report.py`'s subject.
+    """
+    with pytest.raises(FileNotFoundError, match="no results at"):
+        launch.main(["report", *flags, "--set", f'paths.results_path="{box / "none.parquet"}"'])
+    # The resolution is still printed first, because what a failure is *about* is the box it
+    # happened on — and it is what says this got past the seam rather than short of it.
+    assert "DEMAE Task 1" in capsys.readouterr().out
 
 
 # --- What `freeze` writes today -----------------------------------------------

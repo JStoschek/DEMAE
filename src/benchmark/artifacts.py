@@ -217,6 +217,12 @@ class Resolution:
     checkpoint: Resolved | None
     #: The committed inputs, in the order the resolution line prints them.
     inputs: tuple[Resolved, ...]
+    #: The **pretraining** checkpoint — encoder and decoder — for the arm that runs the decoder
+    #: as pretrained, or ``None`` for every arm that does not (:attr:`benchmark.arms.Arm.
+    #: runs_pretrained_decoder`). Resolved beside :attr:`checkpoint` rather than replacing it:
+    #: they are two files, and which of them a box is missing is the difference between "mount
+    #: the release" and "mount the run this release was exported from".
+    mae_checkpoint: Resolved | None = None
 
     @property
     def encoder(self) -> arms.Encoder | None:
@@ -298,6 +304,8 @@ class Resolution:
         ]
         if self.checkpoint is not None:
             lines.append(self.checkpoint.line())
+        if self.mae_checkpoint is not None:
+            lines.append(self.mae_checkpoint.line())
         lines.append(
             f"{'trains':<16} {self.arm.trains}, input {self.arm.input_convention}, "
             f"{self.arm.normalization} normalization"
@@ -351,12 +359,14 @@ class Resolution:
             f"{cfg.tiles.test:,} test",
             f"{'bank':<16} {cfg.bank_rows:,} rows "
             f"({cfg.masks.bank_draws_per_tile} draws x {cfg.tiles.head_train:,} tiles)",
-            # The synthetic half is derivable and the real half is not: the real family has no
-            # bucket axis and is drawn at its natural size distribution (§3.2), so its count is
-            # a property of the artifact rather than a number this config can compute.
-            f"{'instances':<16} {cfg.synthetic_eval_instances:,} synthetic "
+            # A ceiling on the synthetic half, and nothing at all on the real half: the real
+            # family has no bucket axis and is drawn at its natural size distribution (§3.2),
+            # and the synthetic half loses the part-ocean tiles `masks.scoreable_tiles` filters
+            # out, which is a property of the corpus rather than a number this config computes.
+            f"{'instances':<16} at most {cfg.synthetic_eval_instances:,} synthetic "
             f"({cfg.tiles.test:,} test tiles x {len(cfg.masks.synthetic_families)} families "
-            f"x {len(cfg.masks.buckets)} buckets), plus the real family's own rows",
+            f"x {len(cfg.masks.buckets)} buckets, less the part-ocean tiles), plus the real "
+            f"family's own rows",
         ]
 
     # --- what the run record carries
@@ -382,6 +392,9 @@ class Resolution:
             "arm": self.arm.name,
             "encoder": None if self.encoder is None else self.encoder.name,
             "checkpoint": None if self.checkpoint is None else self.checkpoint.to_dict(),
+            "mae_checkpoint": (
+                None if self.mae_checkpoint is None else self.mae_checkpoint.to_dict()
+            ),
             "artifacts": {item.key: item.to_dict() for item in self.inputs},
             "git_sha": git_sha(),
         }
@@ -411,7 +424,14 @@ def _required_for(key: str, arm: arms.Arm) -> bool:
     if key in TRAINING_ONLY_INPUTS:
         return not arm.is_inference_only
     if key == "extractor_spec":
-        return arm.encoder is not None
+        # ADR-0012's contract governs what comes *out of a frozen encoder* — twelve
+        # intermediates and an `output`, at a declared dtype, under a declared diet. A2 asks an
+        # encoder for none of that: it runs the whole pretrained autoencoder and reads pixels off
+        # the decoder, so the committed spec says nothing about it and gating it on one would
+        # refuse an arm for a contract it never consults (#167). It still applies §2.1's declared
+        # diet, and that arrives through `benchmark.extract`'s functions rather than through the
+        # spec file.
+        return arm.encoder is not None and not arm.runs_pretrained_decoder
     return True
 
 
@@ -436,6 +456,11 @@ def _checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
     if arm.encoder is None:
         return None
     field = arms.ENCODERS[arm.encoder].checkpoint_field
+    # A2 declares this encoder — it is what says *whose* weights the arm runs — and reads the
+    # pretraining checkpoint instead of the release export of them. Resolved and printed either
+    # way, because what is on this box is a fact about the box; what changes is that its absence
+    # does not stop the run (#167, and `missing`'s own rule).
+    required = not arm.runs_pretrained_decoder
     path = getattr(cfg.paths, field)
     if path is None:
         return Resolved(
@@ -444,10 +469,63 @@ def _checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
             path=None,
             md5=None,
             absent_note=f"not mounted on this box — set paths.{field}",
+            required=required,
         )
     return Resolved(
         key="checkpoint",
         label="checkpoint",
+        path=str(path),
+        md5=file_md5(path),
+        absent_note=f"missing — check paths.{field}",
+        required=required,
+    )
+
+
+def _mae_checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
+    """The pretraining checkpoint A2 runs the decoder out of, resolved — or why there is none.
+
+    Three states, and each is *said* rather than left to an absence, on
+    :func:`_checkpoint_for`'s rule:
+
+    * this arm does not run a pretrained decoder — ``None``, and nothing is printed;
+    * its encoder's family publishes no pretraining checkpoint at all (ViT-S has no released
+      run, so it has no source run either) — named, so a reader is not left to infer it;
+    * the file is declared and this box has not mounted it — named, with the field to set.
+
+    The absent note points at the release manifest because that is where the answer is: each
+    release records the ``source_checkpoint`` it was exported from, by path and by md5.
+    """
+    if not arm.runs_pretrained_decoder:
+        return None
+    encoder = arms.ENCODERS[arm.encoder]
+    field = encoder.mae_checkpoint_field
+    if field is None:
+        return Resolved(
+            key="mae_checkpoint",
+            label="mae checkpoint",
+            path=None,
+            md5=None,
+            absent_note=(
+                f"this plan publishes no pretraining checkpoint for {encoder.name}, and "
+                f"zero-shot inpainting is the pretrained decoder (§4.3)"
+            ),
+        )
+    path = getattr(cfg.paths, field)
+    if path is None:
+        return Resolved(
+            key="mae_checkpoint",
+            label="mae checkpoint",
+            path=None,
+            md5=None,
+            absent_note=(
+                f"not mounted on this box — set paths.{field}. §14 exports encoder-only "
+                f"weights, so the release `encoder.pt` cannot drive this arm; the release "
+                f"manifest's `source_checkpoint` names the file that can"
+            ),
+        )
+    return Resolved(
+        key="mae_checkpoint",
+        label="mae checkpoint",
         path=str(path),
         md5=file_md5(path),
         absent_note=f"missing — check paths.{field}",
@@ -480,5 +558,9 @@ def resolve(cfg: BenchmarkConfig, arm: arms.Arm | None = None) -> Resolution:
         for key, (label, path) in at.items()
     )
     return Resolution(
-        config=cfg, arm=arm, checkpoint=_checkpoint_for(arm, cfg), inputs=inputs
+        config=cfg,
+        arm=arm,
+        checkpoint=_checkpoint_for(arm, cfg),
+        inputs=inputs,
+        mae_checkpoint=_mae_checkpoint_for(arm, cfg),
     )
