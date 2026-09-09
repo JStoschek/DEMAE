@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Final, Iterable, Sequence
 
@@ -114,6 +114,30 @@ def resolve_device(cfg: BenchmarkConfig) -> str:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _clock(device: str):
+    """A wall clock that waits for the accelerator before reading itself.
+
+    Without the synchronize, every phase timer measures how fast Python *queued* work rather than
+    how long the device took to do it — which on a GPU attributes almost everything to whichever
+    call happens to block first, and is how a profile lies.
+    """
+    import torch
+
+    if device == "cuda":
+        def mark() -> float:
+            torch.cuda.synchronize()
+            return time.perf_counter()
+
+        return mark
+    if device == "mps":
+        def mark() -> float:
+            torch.mps.synchronize()
+            return time.perf_counter()
+
+        return mark
+    return time.perf_counter
 
 
 def precision_on(device: str, precision: str) -> str:
@@ -682,12 +706,25 @@ class Epoch:
     lr: float
     val_rmse: float
     seconds: float
+    #: Wall seconds per phase — ``load`` (waiting on the dataloader), ``forward`` (the frozen
+    #: encoder plus the head), ``backward`` (loss, gradients, optimizer step) and ``val``.
+    #:
+    #: Here because an epoch time on its own cannot say *what* is slow, and this benchmark spent
+    #: three wrong diagnoses finding that out (#159): the tile index, then `normalize`, then the
+    #: unused intermediates, each argued from the code and each refuted by a measurement. A run
+    #: that reports where its own seconds went is cheaper than a fourth argument.
+    phases: dict = field(default_factory=dict)
 
     def line(self) -> str:
         return (
             f"epoch {self.epoch:>3}  loss {self.loss:9.4f}  l1 {self.elevation:8.4f} m  "
             f"slope {self.slope:7.4f}  lr {self.lr:.2e}  val_rmse {self.val_rmse:8.4f} m  "
             f"{self.seconds:6.1f}s"
+            + (
+                "  [" + " ".join(f"{k} {v:.1f}s" for k, v in self.phases.items()) + "]"
+                if self.phases
+                else ""
+            )
         )
 
 
@@ -918,8 +955,16 @@ def train_head(
             for i in order.permutation(len(train_ids))
         ]
         totals = {"loss": 0.0, "l1_m": 0.0, "slope_l1": 0.0}
+        phases = {"load": 0.0, "forward": 0.0, "backward": 0.0, "val": 0.0}
         lr = recipe.lr
+        # GPU work is asynchronous, so a wall clock that does not synchronize measures how fast
+        # Python queued the kernels rather than how long they ran. `mark` is the only honest way
+        # to attribute seconds to a phase on an accelerator.
+        mark = _clock(device)
+        tick = mark()
         for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size, index=index):
+            phases["load"] += mark() - tick
+            tick = mark()
             lr = schedule.apply(optimizer, step)
             residual, void = residual_of(batch, stack, precision=recipe.precision)
             truth = torch.from_numpy(
@@ -930,15 +975,21 @@ def train_head(
             # numpy: the prediction is the fill plus the residual *inside the void*.
             prediction = a1 + residual * void
             terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
+            phases["forward"] += mark() - tick
+            tick = mark()
             optimizer.zero_grad(set_to_none=True)
             terms.total.backward()
             optimizer.step()
             step += 1
             for key, value in terms.detached().items():
                 totals[key] += value
+            phases["backward"] += mark() - tick
+            tick = mark()
 
         module.eval()
+        tick = mark()
         scored = val_rmse(val, cfg, stack, tiles=tiles, index=index)
+        phases["val"] = mark() - tick
         line = Epoch(
             epoch=epoch,
             loss=totals["loss"] / steps_per_epoch,
@@ -947,6 +998,7 @@ def train_head(
             lr=lr,
             val_rmse=scored,
             seconds=time.perf_counter() - epoch_started,
+            phases={k: round(v, 1) for k, v in phases.items()},
         )
         history.append(line)
         save_checkpoint(module, line, directory / EPOCH_CHECKPOINT.format(epoch=epoch))
