@@ -524,6 +524,31 @@ class Examples:
         )
 
 
+#: Batches a worker should have to itself before another worker is worth starting. Two, so a
+#: worker that finishes one has a second queued and the pipeline never stalls waiting for a
+#: process that has nothing left to do.
+BATCHES_PER_WORKER: Final = 2
+
+
+def workers_for(items: int, batch_size: int, ceiling: int) -> int:
+    """How many loader processes this many instances can actually keep busy.
+
+    Starting a worker is not free — it forks a process holding the parent's address space, and
+    the cost is paid **per :class:`~torch.utils.data.DataLoader`**, which :func:`batches` builds
+    once per epoch for training and once more for val. Measured on a 192-core box: 64 workers
+    cost ~15 s to start, and the val pass paid it in full to serve *sixteen batches* — 2,000
+    tiles costing 15-18 s against the 20,000-tile training pass's 51 (#159).
+
+    So the ceiling is what the box allows and this is what the work needs: enough workers for
+    :data:`BATCHES_PER_WORKER` each, and never more. A val pass stops paying a training pass's
+    startup, and a ``--size 1k`` rung stops paying a 20k one's.
+    """
+    if ceiling <= 0:
+        return 0
+    needed = max(1, items // max(1, batch_size * BATCHES_PER_WORKER))
+    return max(1, min(ceiling, needed))
+
+
 def batches(
     cfg,
     items: Sequence[tuple[str, str]],
@@ -539,7 +564,7 @@ def batches(
     worker per shard would spend more time on process setup than on the four tiles it composes.
     """
     dataset = Examples(cfg, items, tiles, index)
-    workers = cfg.runtime.loader_workers
+    workers = workers_for(len(items), batch_size, cfg.runtime.loader_workers)
     if workers <= 0:
         for start in range(0, len(dataset), batch_size):
             yield collate(
