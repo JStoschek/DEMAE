@@ -463,10 +463,22 @@ class Examples:
     crosses that boundary intact.
     """
 
-    def __init__(self, cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles) -> None:
+    def __init__(
+        self,
+        cfg,
+        items: Sequence[tuple[str, str]],
+        tiles: TrainingTiles,
+        index: dict | None = None,
+    ) -> None:
         self.cfg = cfg
         self.items = list(items)
         self.tiles = tiles
+        #: :meth:`benchmark.evaluate.TileStore.index_for` for the tiles this pass can reach,
+        #: built **once by the caller** and inherited by every worker. A worker that built its
+        #: own read the whole 499,934-row manifest to do it — 1.24 s each, per epoch — which at
+        #: 64 workers over 50 epochs is 66 minutes of a cell spent re-deriving one table, and is
+        #: why a 192-core box ran slower than a 16-core one (#159).
+        self.index = index
         self._store = None
 
     def __len__(self) -> int:
@@ -476,7 +488,7 @@ class Examples:
         if self._store is None:
             from .evaluate import TileStore
 
-            self._store = TileStore(self.cfg.paths.corpus_dir)
+            self._store = TileStore(self.cfg.paths.corpus_dir, index=self.index)
         return self._store
 
     def __getitem__(self, index: int) -> dict[str, np.ndarray]:
@@ -488,14 +500,21 @@ class Examples:
         )
 
 
-def batches(cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles, *, batch_size: int):
+def batches(
+    cfg,
+    items: Sequence[tuple[str, str]],
+    tiles: TrainingTiles,
+    *,
+    batch_size: int,
+    index: dict | None = None,
+):
     """Yield :class:`Composed` batches over ``items``, in order, on ``runtime.loader_workers``.
 
     Zero workers is a plain loop rather than a one-worker :class:`~torch.utils.data.DataLoader`,
     because the suite runs sharded under ``pytest-xdist`` and a fixture-sized pass that forked a
     worker per shard would spend more time on process setup than on the four tiles it composes.
     """
-    dataset = Examples(cfg, items, tiles)
+    dataset = Examples(cfg, items, tiles, index)
     workers = cfg.runtime.loader_workers
     if workers <= 0:
         for start in range(0, len(dataset), batch_size):
@@ -764,6 +783,7 @@ def val_rmse(
     stack: Stack,
     *,
     tiles: TrainingTiles,
+    index: dict | None = None,
 ) -> float:
     """Pooled RMSE in metres over every val void — the number §4.1 early-stops on.
 
@@ -776,7 +796,7 @@ def val_rmse(
     squares = 0.0
     count = 0
     items = [(item.tile_id, item.mask_rle) for item in instances]
-    for batch in batches(cfg, items, tiles, batch_size=cfg.head.batch_size):
+    for batch in batches(cfg, items, tiles, batch_size=cfg.head.batch_size, index=index):
         filled = predict_composed(batch, stack, precision=cfg.head.precision)
         for i, out in enumerate(filled):
             void = batch.void[i]
@@ -870,6 +890,15 @@ def train_head(
     directory = Path(cfg.runtime.checkpoint_dir) / (cell if tag is None else f"{cell}-{tag}")
     directory.mkdir(parents=True, exist_ok=True)
 
+    # Built once here and inherited by every worker of every epoch. See `Examples.index`: a
+    # worker that builds its own reads the whole manifest, and that cost is paid per worker per
+    # epoch rather than once per run.
+    from .evaluate import TileStore
+
+    index = TileStore.index_for(
+        cfg.paths.corpus_dir, [*train_ids, *(item.tile_id for item in val)]
+    )
+
     order = np.random.default_rng(cfg.seed)
     history: list[Epoch] = []
     #: The lowest-val epoch so far, as the :class:`Epoch` line itself rather than as a pair of
@@ -890,7 +919,7 @@ def train_head(
         ]
         totals = {"loss": 0.0, "l1_m": 0.0, "slope_l1": 0.0}
         lr = recipe.lr
-        for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
+        for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size, index=index):
             lr = schedule.apply(optimizer, step)
             residual, void = residual_of(batch, stack, precision=recipe.precision)
             truth = torch.from_numpy(
@@ -909,7 +938,7 @@ def train_head(
                 totals[key] += value
 
         module.eval()
-        scored = val_rmse(val, cfg, stack, tiles=tiles)
+        scored = val_rmse(val, cfg, stack, tiles=tiles, index=index)
         line = Epoch(
             epoch=epoch,
             loss=totals["loss"] / steps_per_epoch,

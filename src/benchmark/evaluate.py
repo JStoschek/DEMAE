@@ -60,7 +60,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final, Sequence
+from typing import Any, Callable, Final, Iterable, Sequence
 
 import numpy as np
 
@@ -107,11 +107,36 @@ class TileStore:
     read would re-`mmap` the same handful of files 30,000 times.
     """
 
-    def __init__(self, corpus_dir: Path | str) -> None:
+    def __init__(self, corpus_dir: Path | str, *, index: dict | None = None) -> None:
+        """Open the corpus. ``index`` is :meth:`index_for`'s output, for a caller that has one.
+
+        Building the index reads the whole manifest — 499,934 rows, **1.24 s** — and a dataloader
+        worker that builds its own pays that per worker per epoch. At 64 workers over §4.1's 50
+        epochs that is 3,200 constructions and **66 minutes** of a cell spent re-deriving the
+        same table, which is what made a 192-core box slower than a 16-core one (#159). A caller
+        that knows which tiles it can reach builds the index once and hands it over; workers
+        inherit it by fork and read nothing.
+        """
+        self.corpus_dir = Path(corpus_dir)
+        self._memmaps: dict[int, np.memmap] = {}
+        if index is not None:
+            self._index = index
+            return
+        self._index = self.index_for(self.corpus_dir)
+
+    @staticmethod
+    def index_for(corpus_dir: Path | str, tile_ids: Iterable[str] | None = None) -> dict:
+        """``tile_id -> (shard_id, row_index, lat, slope_mean)`` — everything :meth:`read` needs.
+
+        ``tile_ids`` narrows it to the tiles a caller can actually reach, which is what makes the
+        result small enough to hand to workers: a training pass touches 27,000 of the corpus's
+        500,000, and the whole index for those is a few megabytes against the manifest's 40.
+        ``None`` indexes everything, which is what an eval pass over an unknown tile set wants.
+        """
         import pyarrow.parquet as pq
 
-        self.corpus_dir = Path(corpus_dir)
-        manifest = self.corpus_dir / "manifest.parquet"
+        corpus_dir = Path(corpus_dir)
+        manifest = corpus_dir / "manifest.parquet"
         if not manifest.is_file():
             raise FileNotFoundError(
                 f"{manifest} is not on this box, and the eval pass scores committed masks over "
@@ -122,14 +147,21 @@ class TileStore:
             name: table.column(name).to_numpy(zero_copy_only=False)
             for name in MANIFEST_COLUMNS
         }
-        self._row = {
-            str(tile_id): i for i, tile_id in enumerate(column["tile_id"].astype(str))
-        }
-        self._column = column
-        self._memmaps: dict[int, np.memmap] = {}
+        wanted = None if tile_ids is None else set(tile_ids)
+        out: dict[str, tuple] = {}
+        for i, tile_id in enumerate(column["tile_id"].astype(str)):
+            name = str(tile_id)
+            if wanted is None or name in wanted:
+                out[name] = (
+                    int(column["shard_id"][i]),
+                    int(column["row_index"][i]),
+                    float(column["lat"][i]),
+                    float(column["slope_mean"][i]),
+                )
+        return out
 
     def __contains__(self, tile_id: str) -> bool:
-        return tile_id in self._row
+        return tile_id in self._index
 
     def _memmap(self, shard_id: int) -> np.memmap:
         from dataset.shards import shard_path
@@ -145,7 +177,7 @@ class TileStore:
     def read(self, tile_id: str) -> Tile:
         """One tile, by id, in raw int16 metres."""
         try:
-            i = self._row[tile_id]
+            shard_id, row_index, lat, slope_mean = self._index[tile_id]
         except KeyError:
             raise KeyError(
                 f"{tile_id} is named by a committed artifact and is not in "
@@ -153,14 +185,13 @@ class TileStore:
                 f"come apart — re-freeze against this corpus, or mount the one the artifacts "
                 f"were frozen from (their md5s are in every run record)"
             ) from None
-        lat = float(self._column["lat"][i])
-        raw = self._memmap(int(self._column["shard_id"][i]))[int(self._column["row_index"][i])]
+        raw = self._memmap(shard_id)[row_index]
         return Tile(
             tile_id=tile_id,
             raw_i16=np.asarray(raw),
             lat=lat,
             px=band_pixel_spacing_m(lat),
-            slope_mean=float(self._column["slope_mean"][i]),
+            slope_mean=slope_mean,
         )
 
 
