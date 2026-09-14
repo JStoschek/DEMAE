@@ -61,6 +61,12 @@ def write_lists(directory: Path) -> None:
         )
 
 
+#: Test tiles §3.2 actually draws a synthetic void on, deliberately fewer than the
+#: {TEST_TILES_NAME} list names: #150 draws on clean ground only, so `tiles` and `listed_tiles`
+#: differ and the card has to say by how much. Equal values would let a card that printed either
+#: one pass.
+SCOREABLE_TILES = 6
+
 #: §3.3's measured attrition over #127's 24 granules, and it is an exact ladder:
 #: 10,291 − 182 above the top − 131 failed placements = 9,978 scored components, less the 705
 #: that fell in the sub-row gaps = 9,273 published rows. The real numbers rather than stand-ins,
@@ -99,10 +105,11 @@ def eval_masks(directory: Path, *, artifact_hash: str, real: masks.RealFamily) -
     path.write_bytes(b"thirty thousand synthetic rows, allegedly")
     return masks.EvalMaskList(
         path=path,
-        rows=48 + len(real.rows),
+        rows=SCOREABLE_TILES * 2 * 3 + len(real.rows),
         md5=file_md5(path),
         artifact_hash=artifact_hash,
-        tiles=LIST_ROWS[TEST_TILES_NAME],
+        tiles=SCOREABLE_TILES,
+        listed_tiles=LIST_ROWS[TEST_TILES_NAME],
         seconds=2.0,
         real=real,
     )
@@ -183,6 +190,23 @@ def test_the_card_names_both_mask_artifacts_by_their_md5(box, text):
     # The sidecar too: it is what git carries in the bank's place, so a reader looking for the
     # bank's md5 in the repository has to be told which file to look in.
     assert MASK_BANK_SIDECAR_NAME in text and banked.committed.draw_hash in text
+
+
+def test_the_card_counts_the_test_tiles_no_synthetic_void_is_drawn_on(box, text):
+    """#150's land filter, as a count rather than as a silence.
+
+    The tile-list table above prints what the committed test list *names*; the synthetic
+    arithmetic below it is over the tiles §3.2 could actually draw on, which since #150 is the
+    clean-ground subset. A card that printed both and explained neither would leave a reader to
+    reconcile two different numbers for "test tiles" on their own — the exact inference this
+    document exists to close.
+    """
+    _, evaluated, _ = box
+    excluded = evaluated.listed_tiles - evaluated.tiles
+    assert excluded > 0, "the fixture must exercise the gap, not paper over it"
+    assert f"{evaluated.listed_tiles:,} tiles" in text
+    assert f"{excluded:,}" in text
+    assert "clean ground" in text
 
 
 def test_the_card_states_the_row_counts_it_read_off_the_committed_files(box, text):

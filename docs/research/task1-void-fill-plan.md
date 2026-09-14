@@ -855,8 +855,16 @@ shippable under all three sets of terms.
 **The two mask artifacts.**
 
 - **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
-  row per eval instance, 30,000 synthetic rows plus the real-void family's
-  **9,273**, so ~39.3k rows. *(Amended 2026-08-13 —
+  row per eval instance, 27,138 synthetic rows plus the real-void family's
+  **9,273**, so ~36.4k rows. *(Amended 2026-09-02 — the synthetic count read
+  "30,000" until §3.2 was filtered to the **4,523** test tiles that are clean
+  ground. A synthetic void is placed by geometry alone and the generator never
+  opened the tile, so 400 of the 30,000 held painted ocean fill and 8 were
+  entirely ocean — which leaves every derivative metric undefined, and one NaN
+  takes a whole cell of the table with it. The 477 part-ocean tiles are dropped
+  whole; §3.1's test draw is unchanged at 5,000. §3.3's hosts were always the
+  clean tiles, so this also makes both halves of the artifact one population.)*
+  *(Amended 2026-08-13 —
   [#153](https://github.com/JStoschek/DEMAE/issues/153). This line read "9,978"
   until the build wrote the file. **9,978 is §3.3's scored-component count**, and
   it includes the 705 components that placed cleanly and fell in the gaps between
@@ -1073,6 +1081,36 @@ which is where the difference is read.
 Standard 4-down/4-up UNet (~17M params), 2-channel input (A1-filled tile, void
 mask), residual output, same loss, same schedule length, same seeds. Trained
 from scratch at each label-efficiency size.
+
+*(Amended 2026-09-01 — [#162](https://github.com/JStoschek/DEMAE/issues/162).
+Two things this bullet left implicit, resolved by the build rather than
+invented by it.*
+
+***The width.** "~17M" does not name a base width, and the count is quadratic
+in it: the 4-down/4-up shape lands **7.8M at base 32, 17.5M at 48 and 31.0M at
+64**. The build ships **base 48 — 17,465,377 parameters**, which is the only
+one of the three that reads as "~17M", and the number is derived arithmetically
+and asserted against the built module so the printed count is a measurement.
+GroupNorm at 16 groups rather than §4.1's 32, because 32 does not divide 48;
+GroupNorm rather than the textbook UNet's BatchNorm, because running statistics
+would make an eval fill depend on the batch it was scored in and would put a
+non-trainable number in the state dict, directly across the one column §6 item
+4 exists to print.*
+
+***The input scaling.** This bullet names the two input channels and says
+nothing about their units, and §2.1's `normalization` field cannot answer it:
+that field is the **frozen encoder's declared diet**, and A7's registry row
+declares `none` because it has no encoder to feed. A from-scratch trunk handed
+raw metres — the corpus spans roughly -400 to 8,800 — trains badly for reasons
+that have nothing to do with representation quality, and a baseline crippled by
+its input scaling is not the hard bar this section asks for. So A7 standardizes
+the A1 fill per tile over the valid pixels (`land ∧ ¬void`, ADR-0012 §1) and
+multiplies its residual back by the same per-tile std, which keeps §4.1's loss
+and §2.4's residual convention in the metres they are written in and keeps the
+zero-initialized output exactly equal to A1 at step 0. The arithmetic is
+`benchmark.extract.normalize`'s `per_tile` and is deliberately not a call to
+it — same formula, different question — but the std floor is the same 1e-6 this
+repo standardizes by everywhere.)*
 
 This bullet used to justify the UNet's size as "comparable order to
 ViT-S+head", an anchor that goes with ViT-S's demotion in §2.3. The honest
@@ -1329,8 +1367,9 @@ A1 from truth cannot separate the arms either.
   asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.
   This binds hardest on the
   real-void family, which takes whatever distribution SRTM gives it. **The
-  synthetic rows clear it with room** — 5,000 test tiles × 2 families × 3 buckets
-  is **30,000** instances, 1,250 per (row, band). **The real rows have now been
+  synthetic rows clear it with room** — the 4,523 clean test tiles × 2 families
+  × 3 buckets is **27,138** instances, 1,111–1,158 per (row, band) once the
+  part-ocean tiles are dropped (see §3.4's amendment), against a floor of 100. **The real rows have now been
   measured against it, and the rule fires on three bands of four**
   ([#135](https://github.com/JStoschek/DEMAE/issues/135),
   [`p135-void-ruggedness.md`](p135-void-ruggedness.md)): the realised histogram

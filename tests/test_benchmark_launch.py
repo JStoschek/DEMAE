@@ -263,11 +263,19 @@ def test_set_beats_the_cell_flag_it_duplicates(flags, capsys):
 
 
 def test_a_config_file_names_only_the_knobs_its_run_moves(box, flags, capsys):
+    """A partial dict, and the rest filled from the plan — what an arm's config file looks like.
+
+    The knob moved is §4.2's, not §4.1's. This test used `head.epochs` until #159, which froze
+    §4.1's recipe for every arm and made a moved head hyperparameter a refusal rather than a
+    config; the property being asserted here is the *plumbing*, so it moved to a group that has
+    no such guard rather than to an arm that dodges one.
+    """
     path = box / "arm.json"
-    path.write_text(json.dumps({"arm": "A6", "head": {"epochs": 5}}))
+    path.write_text(json.dumps({"arm": "A3-R5", "finetune": {"epochs": 5}}))
     launch.main(["run", "--dry-run", "--config", str(path), *flags])
     out = capsys.readouterr().out
-    assert BenchmarkConfig(arm="A6", head=BenchmarkConfig().head.replace(epochs=5)).config_hash in out
+    moved = BenchmarkConfig().finetune.replace(epochs=5)
+    assert BenchmarkConfig(arm="A3-R5", finetune=moved).config_hash in out
 
 
 # --- The far side of the seam -------------------------------------------------
@@ -291,9 +299,21 @@ def test_a_run_past_the_dry_run_reaches_its_inputs_rather_than_naming_a_stage(fr
     assert "DEMAE Task 1" in capsys.readouterr().out
 
 
-def test_report_refuses_the_same_way(frozen, flags):
-    with pytest.raises(NotImplementedError, match="renders nothing yet"):
-        launch.main(["report", *flags])
+def test_a_report_past_the_dry_run_reaches_the_parquet_rather_than_naming_a_stage(
+    frozen, flags, box, capsys
+):
+    """#169 built `report`, so the one thing it no longer does is refuse as unbuilt.
+
+    This box has committed inputs and has scored nothing, which is the state a frozen box is in
+    before the first `run`. So `report` fails **reading the results parquet**, and that is the
+    assertion: it got past the seam and into the file it is a pure function of. What a report
+    does on a box that holds results is `tests/test_benchmark_report.py`'s subject.
+    """
+    with pytest.raises(FileNotFoundError, match="no results at"):
+        launch.main(["report", *flags, "--set", f'paths.results_path="{box / "none.parquet"}"'])
+    # The resolution is still printed first, because what a failure is *about* is the box it
+    # happened on — and it is what says this got past the seam rather than short of it.
+    assert "DEMAE Task 1" in capsys.readouterr().out
 
 
 # --- What `freeze` writes today -----------------------------------------------

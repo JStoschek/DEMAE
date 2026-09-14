@@ -246,6 +246,47 @@ def read_rows(path: Path | str):
     return pq.read_table(Path(path))
 
 
+def rows_for_cell(
+    path: Path | str, *, arm: str, size: str, seed: int, columns: Sequence[str]
+) -> list[dict]:
+    """One cell's rows as plain dicts, or ``[]`` when the file holds none.
+
+    Here rather than at the caller because this module owns the file: which columns key a cell
+    is :meth:`ResultRow.cell`'s answer, and a second filter written beside a consumer is one that
+    can disagree with :func:`append_rows`' replacement rule about what "this cell" means.
+
+    ``[]`` for a missing file rather than a refusal, on :func:`read_run_records`' rule: a results
+    parquet that does not exist yet is a state, and the caller — #167's R12 comparison, which
+    needs A1's rows to read A2's row — has something specific to say about it that an exception
+    here would pre-empt.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    table = read_rows(path)
+    missing = [name for name in (*columns, *KEY_COLUMNS) if name not in table.schema.names]
+    if missing:
+        raise ValueError(
+            f"{path} has no {missing} column(s); it holds {table.schema.names}. The metric "
+            f"roster is the registered bar's (R1), so a file written under a different roster "
+            f"is a file this run cannot read a cell out of"
+        )
+    # Filtered in Arrow and *then* decoded, rather than the other way round. The full table is
+    # ~1.3M rows by the end of the sweep (eleven printed rows over three seeds) and one cell is
+    # ~40,000 of them, so decoding first would turn a per-run read into eight million Python
+    # objects to throw away.
+    import pyarrow.compute as pc
+
+    cell = table.filter(
+        pc.and_(
+            pc.and_(pc.equal(table["arm"], arm), pc.equal(table["size"], size)),
+            pc.equal(table["seed"], seed),
+        )
+    )
+    column = {name: cell.column(name).to_pylist() for name in columns}
+    return [{name: column[name][i] for name in columns} for i in range(cell.num_rows)]
+
+
 # --- The run record -----------------------------------------------------------
 
 
@@ -277,6 +318,62 @@ def run_id(resolution: Resolution) -> str:
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=8).hexdigest()
 
 
+def precision_block(resolution: Resolution, agreement: Mapping[str, Any] | None) -> dict:
+    """ADR-0012 §6's measured fp32-versus-compute-dtype agreement, as the record files it.
+
+    Two fields rather than one, and for :meth:`benchmark.artifacts.Resolved.to_dict`'s reason: a
+    null figure has several readings a reader cannot tell apart, and most of them are ordinary.
+    ``absent_because`` says which one it was — this arm runs no encoder, this arm consults no
+    extractor contract, the run declared the reference dtype and there was no second number to
+    compare, or a figure that should exist did not reach the record. One further reading is not a
+    value at all: *nobody measured*, which is the ``precision`` key being absent from the record
+    altogether, and is what every record written before this block existed looks like.
+
+    **A sub-threshold figure is recorded and refuses nothing**, and that is a decision rather than
+    an omission. ``immaterial`` travels on the figure (:meth:`benchmark.extract.Extractor.
+    _precision` sets it against #134's bar), so a reader has the verdict without re-deriving it —
+    but nothing here consults it. The argument for refusing is real: a run whose own compute dtype
+    moved features below the bar is a run whose table is about different features than fp32's. It
+    is not taken, because a refusal is a registered rule and ADR-0013's register is the place a
+    rule lives; adding a thirteenth there for a gate that fires on no encoder measured so far —
+    DEMAE at mean 0.999968, TerraMind at 0.99888 — would register a bar ahead of a case for it.
+    The asymmetry worth knowing when that case arrives is in p157: TerraMind's 1st-percentile
+    token sits at **0.9853**, below the bar its own mean clears, so *which statistic* a future
+    refusal reads is the whole decision and not a detail of it.
+
+    Deliberately **not** a field of :meth:`benchmark.artifacts.Resolution.to_dict`. ADR-0012 §7
+    keeps it out of Phase 1's frozen four-field data fingerprint, which four committed artifacts
+    quote; and `run_id` hashes that payload, so a figure measured on whichever batch arrived first
+    would hand an otherwise unchanged cell a new identity every time the sample moved.
+    """
+    if resolution.encoder is None:
+        return {"agreement": None, "absent_because": "this arm runs no encoder"}
+    if not resolution.reads("extractor_spec"):
+        # A2, whose mechanism *is* the pretrained decoder (#167): the committed spec governs
+        # nothing it does, so there is no contract for a dtype to have moved the features of.
+        # Read off the same predicate that decides whether the spec is an input at all, so the
+        # two answers cannot drift apart.
+        return {
+            "agreement": None,
+            "absent_because": "this arm consults no extractor contract",
+        }
+    extract_cfg = resolution.config.extract
+    if extract_cfg.compute_dtype == extract_cfg.reference_dtype:
+        return {
+            "agreement": None,
+            "absent_because": (
+                f"the run declares the reference dtype ({extract_cfg.reference_dtype})"
+            ),
+        }
+    if agreement is None:
+        # Not "the encoder ran at one dtype" — the three cases above have already claimed every
+        # reason there was nothing to measure, so reaching here means a measurement exists in
+        # principle and did not arrive. Today that is an arm whose extractor is not reachable
+        # from a trained stack; see :func:`benchmark.launch._measured_agreement`.
+        return {"agreement": None, "absent_because": "no measurement reached the record"}
+    return {"agreement": dict(agreement), "absent_because": None}
+
+
 def run_record(
     resolution: Resolution,
     *,
@@ -285,6 +382,9 @@ def run_record(
     parameters: Mapping[str, int | None],
     metrics: Sequence[str],
     gates: Mapping[str, Any] | None = None,
+    training: Mapping[str, Any] | None = None,
+    register: Mapping[str, Any] | None = None,
+    precision: Mapping[str, Any] | None = None,
 ) -> dict:
     """The provenance payload a results table is answerable to.
 
@@ -297,6 +397,15 @@ def run_record(
 
     ``parameters`` is §6 item 4's, and it is a mapping with two keys rather than two ints so that
     "not built yet" stays expressible — see :func:`benchmark.arms.parameter_counts`.
+
+    ``register`` is a **disposition**, not a rule: how this cell's row is to be read under
+    whichever registered rule governs it, computed rather than asserted. ADR-0013's register is
+    already committed in `task1-prereg-bar.json` and is not restated here. What a run can add is
+    the outcome — R12's majority-of-bands comparison and its verdict (:func:`benchmark.zeroshot.
+    disposition`) — for the rules whose trigger is a *result* rather than a threshold, and which
+    therefore have nothing a bar file could hold. ``None`` for a cell no such rule governs, and
+    the key is then absent rather than null: a block on every row is one a reviewer stops
+    reading, and an empty one would say "R12 found nothing" where nothing asked.
     """
     return {
         "run_id": run_id(resolution),
@@ -314,6 +423,18 @@ def run_record(
             "metrics": list(metrics),
         },
         "gates": dict(gates or {}),
+        # The training half, for the arms that have one (#159): the head's parameter count, the
+        # epoch val selected, the checkpoint holding it, and the committed lists the pass read.
+        # `{}` for A1 and every inference-only arm, which is a different fact from "not recorded"
+        # and reads as one because `parameters` above is already `None`-for-unknown.
+        "training": dict(training or {}),
+        # R12's disposition, for the arm that has one (#167). Omitted rather than empty, which
+        # is that ticket's own choice and is left alone.
+        **({"register": dict(register)} if register else {}),
+        # ADR-0012 §6's agreement (#171), built by :func:`precision_block` — which is where the
+        # three ordinary readings of a null figure are told apart, and why a fourth one is this
+        # key's absence. Beside `resolved` rather than inside it: see that function.
+        **({"precision": dict(precision)} if precision else {}),
     }
 
 
@@ -366,6 +487,9 @@ def write(
     seconds: float,
     parameters: Mapping[str, int | None],
     gates: Mapping[str, Any] | None = None,
+    training: Mapping[str, Any] | None = None,
+    register: Mapping[str, Any] | None = None,
+    precision: Mapping[str, Any] | None = None,
 ) -> tuple[Path, int, dict]:
     """Land one cell: the rows into the parquet, the record beside it. Returns both plus totals.
 
@@ -382,6 +506,9 @@ def write(
         parameters=parameters,
         metrics=metrics,
         gates=gates,
+        training=training,
+        register=register,
+        precision=precision,
     )
     append_run_record(record, run_record_path(path))
     return path, total, record

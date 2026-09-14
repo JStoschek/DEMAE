@@ -32,13 +32,25 @@ sidecar git carries in its place. #154 wrote the sixth and last, §3.4's dataset
 of §8's norm-inversion gates, and the rows and run record that come out the other side
 (:mod:`benchmark.evaluate`, :mod:`benchmark.results`).
 
-``report`` is the one verb still short of its stage. It raises past the work it has and names
-what has not been built — deliberately, because a verb that quietly returned 0 having done part
-of its job is precisely the shape of failure this module exists to prevent, and it is the shape
-that survived four tickets in Phase 1. It mattered more once a verb wrote real files than it did
-when none did: a ``freeze`` that lands three of six artifacts and exits 0 is read as a frozen
-box. ``freeze`` and ``run`` return 0 now because they finish what they start — ``run`` *for the
-arm it was asked for*, and an arm whose input convention has no implementation yet names its own
+#159 made ``run`` **train**. An arm whose trainable part is §4.1's head — A4, A5, A6 — is a
+train-then-score cell: :mod:`benchmark.train` fits :mod:`benchmark.head` against the committed
+train mask bank, early-stops on §3.1's val draw, and hands the pass the weights it kept. It also
+gave ``run`` its one mode, ``--tune``: §4.1's single hyperparameter search, on A6, over val,
+which writes ``head_tuning.json`` and deliberately scores nothing (:mod:`benchmark.tune`). Every
+later cell's head recipe is refused if it has drifted from the line that search froze, which is
+what "no thumb lands on the scale" is, as a mechanism.
+
+#169 made ``report`` real: the 396-number printed table, the 66-cell C4 rank block and §9's
+three figures, rendered from the results parquet and printing nothing R5 does not permit it to
+print. It re-runs no arm, which is what makes it free to re-render.
+
+With the dataset card, **every verb finishes what it starts**. Up to #154 each one raised past
+the work it had and named the stage that was missing — deliberately, because a verb that quietly
+returned 0 having done part of its job is precisely the shape of failure this module exists to
+prevent, and it is the shape that survived four tickets in Phase 1. It mattered more once a verb
+wrote real files than it did when none did: a ``freeze`` that lands three of six artifacts and
+exits 0 is read as a frozen box. What outlives that defence is narrower and still load-bearing:
+an arm whose input convention has no implementation yet names its own
 ticket rather than returning quietly (:data:`benchmark.evaluate.FILLERS`).
 
 ## Why the resolution line is printed before anything is spent
@@ -55,9 +67,23 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Final, NoReturn
+from typing import Final
 
-from . import arms, artifacts, card, evaluate, extract, masks, prereg, results, tiles
+from . import (
+    arms,
+    artifacts,
+    card,
+    evaluate,
+    extract,
+    masks,
+    prereg,
+    report,
+    results,
+    tiles,
+    train,
+    tune,
+    zeroshot,
+)
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -68,9 +94,33 @@ def resolve(args: argparse.Namespace) -> Resolution:
     The order is what makes *"a typo'd override stops before the corpus is touched"* true
     rather than nearly true: the config is built first, so an unknown knob raises before a
     single file is stat'd, let alone hashed.
+
+    §4.1's two recipe refusals are here for the same reason, and specifically **here rather than
+    in** :func:`_run` (#159): ``--dry-run`` returns before the verb runs, so a check inside `run`
+    would let ``--dry-run --set head.lr=3e-4`` exit 0 while the resolution line printed the moved
+    learning rate under the words *tuned once ... then frozen for every arm*. A pre-flight that
+    prints a drifted recipe as the frozen one is worse than no pre-flight.
+
+    Only for ``run``. `freeze` writes artifacts that are a function of the ``tiles`` and ``masks``
+    groups alone (:attr:`~benchmark.config.BenchmarkConfig.artifact_hash`), so refusing a freeze
+    over a head knob would be a refusal about a recipe that stage does not read.
     """
     cfg = config_from_args(args)
-    return artifacts.resolve(cfg, arms.get(cfg.arm))
+    arm = arms.get(cfg.arm)
+    if args.verb == "run":
+        if getattr(args, "tune", False):
+            tune.assert_tuning_arm(cfg)
+        if arm.trains_head or arm.trains_everything:
+            # Both, and #162 is why the second half is here: §4.4 trains A7 under §4.1's loss,
+            # schedule length and seeds, so a moved `head.lr` is exactly as much a drift for A7
+            # as it is for A4 — and an arm exempted from this check could be trained at a recipe
+            # the frozen arms never saw, which is the one thing C3's bar must not be.
+            #
+            # A tuning pass is exempted from the *record* half of the guard — it is the thing
+            # that resolves a record/config disagreement, so refusing it would make that state
+            # unrecoverable. See `tune.assert_frozen`.
+            tune.assert_frozen(cfg, tuning=getattr(args, "tune", False))
+    return artifacts.resolve(cfg, arm)
 
 
 def format_resolution(resolution: Resolution, *, verb: str) -> str:
@@ -82,27 +132,15 @@ def format_resolution(resolution: Resolution, *, verb: str) -> str:
     return "\n".join(resolution.lines(verb=verb))
 
 
-def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
-    """The far side of the seam, out loud.
-
-    Named rather than absent, and raising rather than returning 0, because the alternative is a
-    command that reports success having done part of its job — which is the failure ADR-0009
-    exists to close and the one this repo has a name for. It matters most now that one verb has
-    started writing real artifacts: a `freeze` that lands three of six files and exits 0 is read
-    as a frozen box.
-    """
-    raise NotImplementedError(
-        f"`{verb}` {state}. What belongs here is {produces} — see the stage tickets under the "
-        f"Task 1 map (#145) and `docs/task1-build-spec.md`."
-    )
+#: The three verbs take one resolution and the parsed arguments, and return an exit code. ``run``
+#: was the first one that did (#158), then `report` (#169) and now `freeze` (#154). None of them
+#: raises past its work any more, and the helper that named a missing stage went with the last of
+#: them: there is no stage left for it to name. The uniform parameters are what keep
+#: :data:`VERBS` a table rather than a cascade; ``args`` joined them at #159, which gave `run` a
+#: mode (``--tune``) rather than a knob.
 
 
-#: The three verbs take one resolution and return an exit code. ``freeze`` and ``run`` do (#154,
-#: #158); ``report`` renders nothing yet, so it is annotated ``NoReturn`` and says which stage is
-#: missing. The uniform parameter is what keeps :data:`VERBS` a table rather than a cascade.
-
-
-def _freeze(resolution: Resolution) -> int:
+def _freeze(resolution: Resolution, args: argparse.Namespace) -> int:
     """`freeze` — write every committed input. §4.5 step 1, CPU-only.
 
     All six are built, and the order is each ticket's own argument rather than the order they
@@ -125,18 +163,18 @@ def _freeze(resolution: Resolution) -> int:
     has moved.
 
     **The eval mask list** goes next (#150, #153), because it is a function of the
-    test list two stages above it — §3.2's 30,000 synthetic rows are 5,000 test tiles x two
-    families x three buckets, and §3.3's real family is transplanted onto hosts drawn from that
-    same list — and it reads the list back off disk rather than out of the draw, on the contract
-    family's rule that the committed file is what later phases re-read. It carries the same §3.4
-    guard the spec does, and the same generator config hash the bank does.
+    test list two stages above it — §3.2's 27,138 synthetic rows are the 4,523 clean test tiles
+    x two families x three buckets, and §3.3's real family is transplanted onto hosts drawn from
+    that same filtered list — and it reads the list back off disk rather than out of the draw,
+    on the contract family's rule that the committed file is what later phases re-read. It
+    carries the same §3.4 guard the spec does, and the same generator config hash the bank does.
 
     It is also the one stage that is not purely local: §3.3's real family needs #127's 24
     granules on disk and reads one GLO-30 COG per cell for the band the void is matched on. A
     box without the granules is **refused** here rather than committing a well-formed eval mask
     list of a benchmark with no C4 arm in it.
 
-    **§3.4's train mask bank** goes last (#151), because it is a function of the *head-train*
+    **§3.4's train mask bank** goes next (#151), because it is a function of the *head-train*
     list and because it is the expensive one: 1,000,000 draws is twenty minutes, against every
     other stage's seconds. A stage that fails above it therefore costs nothing to retry, and the
     bank's own guard reads the committed sidecar before it draws rather than after — it is the
@@ -185,7 +223,7 @@ def _freeze(resolution: Resolution) -> int:
     return 0
 
 
-def _run(resolution: Resolution) -> int:
+def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     """`run` — execute exactly one (arm, size, seed) cell, having refused a box it cannot.
 
     §4.5's step 2, and the first verb that produces a number. The order below is the argument:
@@ -204,7 +242,18 @@ def _run(resolution: Resolution) -> int:
 
     A1's numbers gate everything else (§4.5, user story 29), so the arms that are not built name
     their ticket rather than failing as an unknown key — :data:`benchmark.evaluate.FILLERS`.
+
+    Two refusals fire ahead of all of it, in :func:`resolve` rather than here, because they are
+    about the **recipe** rather than about the box: a cell whose head hyperparameters have drifted
+    from §4.1's frozen ones, and a ``--tune`` asked for an arm that is not the neutral one. They
+    belong beside the config-typo refusal, and they have to be upstream of ``--dry-run`` — see
+    :func:`resolve`.
     """
+    # §4.1's "tuned once, then frozen for every arm", enforced before anything is stat'd, let
+    # alone spent — it is a fact about the recipe, so it belongs beside the config-typo refusal
+    # rather than after a 104 MB hash. Asked of every arm that trains under that recipe, which
+    # since #162 means A7 as well as the three frozen arms: A1 is the only one with no §4.1
+    # recipe to have drifted from.
     missing = resolution.missing
     if missing:
         raise FileNotFoundError(
@@ -221,14 +270,47 @@ def _run(resolution: Resolution) -> int:
     if resolution.reads("mask_bank"):
         masks.assert_bank_matches(resolution.config)
     checkpoint = resolution.checkpoint
-    if checkpoint is not None and not checkpoint.present:
+    if checkpoint is not None and checkpoint.required and not checkpoint.present:
         raise FileNotFoundError(
             f"arm {resolution.arm.name} reads the {resolution.arm.encoder} encoder and "
             f"{checkpoint.absent_note}"
         )
+    # A2's second file, on the same rule and for a sharper reason: §14's release is encoder-only,
+    # so an arm whose whole mechanism *is* the pretrained decoder cannot be driven by the file
+    # every other arm initializes from (#167). Refused here rather than inside the pass so the
+    # message names the path and the field instead of a missing tensor.
+    mae = resolution.mae_checkpoint
+    if mae is not None and not mae.present:
+        raise FileNotFoundError(
+            f"arm {resolution.arm.name} runs the pretrained MAE decoder and {mae.absent_note}"
+        )
 
     cfg = resolution.config
-    scored = evaluate.run_pass(cfg, resolution.arm)
+    trained = None
+    if resolution.arm.trains_head:
+        if args.tune:
+            return _tune(resolution)
+        trained = train.train_head(
+            cfg, resolution.arm, on_epoch=lambda line: print(f"{'':<16} {line.line()}")
+        )
+        for line in train.format_trained(trained):
+            print(line)
+    elif resolution.arm.trains_everything:
+        # A7 (#162). A separate branch rather than a third case inside `train_head`, because the
+        # two passes differ in what they build and share everything after it — see
+        # `train.train_unet`. There is no `--tune` arm of this branch: §4.1's recipe is tuned on
+        # A6 and frozen for every arm, and `tune.assert_tuning_arm` has already refused any other
+        # arm inside `resolve`, before this function is reached.
+        trained = train.train_unet(
+            cfg, resolution.arm, on_epoch=lambda line: print(f"{'':<16} {line.line()}")
+        )
+        for line in train.format_trained(trained):
+            print(line)
+
+    # The trained head goes to the pass, which hands it to the convention's factory (#159 over
+    # #167's shape). It carries the encoder it was trained over, so the cell is scored against
+    # the object the val curve was measured on rather than a second load of the same file.
+    scored = evaluate.run_pass(cfg, resolution.arm, trained=trained)
     print(f"\n{'gates':<16} {evaluate.format_gates(scored.gates)}")
 
     rows = results.rows_from(
@@ -240,6 +322,7 @@ def _run(resolution: Resolution) -> int:
         run=results.run_id(resolution),
         config_hash=cfg.config_hash,
     )
+    register = _register_disposition(resolution, scored)
     path, total, record = results.write(
         rows,
         resolution,
@@ -247,20 +330,130 @@ def _run(resolution: Resolution) -> int:
         seconds=scored.seconds,
         parameters=arms.parameter_counts(resolution.arm),
         gates=scored.gates,
+        training=None if trained is None else trained.to_dict(),
+        register=register,
+        precision=results.precision_block(resolution, _measured_agreement(resolution, trained)),
     )
     for line in results.format_written(path, rows=len(rows), total=total, record=record):
         print(line)
+    if register is not None:
+        print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
 
 
-def _report(resolution: Resolution) -> NoReturn:
-    """`report` — render the table from the results parquet, re-running no arm."""
-    _unbuilt(
-        "report",
-        "renders nothing yet",
-        "the 396-number printed table, the 66-cell C4 rank block and the three figures, read "
-        "from the results parquet and printing nothing R5 does not permit it to print (#136)",
+def _measured_agreement(resolution: Resolution, trained) -> dict | None:
+    """This run's own fp32-versus-compute-dtype agreement, off the encoder that actually ran.
+
+    Read from the *trained* stack rather than from a second :class:`benchmark.extract.Extractor`
+    built here, on `_head_fill`'s rule: a figure measured on a fresh load of the same file would
+    describe a forward pass this cell never made. It is the same object the val curve was measured
+    on, which is the only one the rows are answerable to.
+
+    ``None`` from every arm with no extractor in the loop — A1, A7's scratch UNet, and the
+    inference-only arms that hand `run_pass` no trained stack. Which of those it was is
+    :func:`benchmark.results.precision_block`'s question, not this one's; all this reports is
+    whether there is a number.
+
+    **The trained stack is the only seam this reaches through, and A9 will not fit it.** A9 trains
+    nothing, so `launch` holds no :class:`benchmark.train.Trained` for it, while its eval pass does
+    run an extractor — inside the filler, which :class:`benchmark.evaluate.Pass` does not carry
+    back. So A9 would record *no measurement reached the record* for a figure that was in fact
+    taken. Left rather than plumbed because A9's input convention is unbuilt
+    (`a1_fill_through_tokenizer`, #163) and a seam added now would be a seam added against a
+    guess at what that pass looks like; the arm that builds it should carry the filler's
+    extractor out of `run_pass` and hand it here. ADR-0012 §6 requires A9's figure to be A9's own,
+    which the encoder-name key already guarantees — `terramind-tokenizer` is a separate registry
+    entry from A5's `terramind` — so what is deferred is *recording* it, never inheriting it.
+    """
+    extractor = getattr(trained, "stack", None)
+    extractor = None if extractor is None else getattr(extractor, "extractor", None)
+    if extractor is None:
+        return None
+    return extractor.precision_agreement(resolution.arm.name)
+
+
+def _tune(resolution: Resolution) -> int:
+    """`run --arm A6 --tune` — §4.1's one tuning pass, and the record it leaves (#159).
+
+    Scores nothing, and says so. The pass selects a recipe on **val**; A6's own primary cells are
+    three ordinary `run --arm A6 --seed {0,1,2}` invocations afterwards, at the full 50 epochs.
+    Folding the two together would have made the tuning pass produce a printed row, which is the
+    one thing a val-only selection must not do.
+    """
+    cfg = resolution.config
+    tuning = tune.tune(cfg, on_point=lambda point: print(f"{'':<16} {point.line()}"))
+    written = tune.write_tuning(cfg, tuning)
+    print()
+    for line in tuning.lines():
+        print(line)
+    print(f"{'wrote':<16} {written}")
+    print(
+        f"{'scored':<16} nothing — the tuning pass reads val only. A6's own primary cells are "
+        f"`run --arm {tune.TUNING_ARM} --seed {{0,1,2}}` at §4.1's full "
+        f"{cfg.head.epochs} epochs"
     )
+    return 0
+
+
+def _register_disposition(resolution: Resolution, scored: evaluate.Pass) -> dict | None:
+    """How this cell's row is to be read, for the one registered rule whose trigger is a result.
+
+    R12 governs A2 and nothing else, so this is ``None`` for every other arm and the run record
+    carries no ``register`` block at all (:func:`benchmark.results.run_record`).
+
+    The comparison is against **A1's rows in the same cell** — same size, same seed — read back
+    out of the results parquet rather than recomputed, because §4.5 already runs A1 first and its
+    numbers gate every learned arm. A2's own rows come from the pass in memory, before
+    :func:`benchmark.results.write` lands them: the disposition is part of the record that
+    describes those rows, so it cannot be computed from a file they are not in yet.
+
+    Nothing here decides anything. R12 is discursive (ADR-0013) — the enforcement is the
+    writeup's and the reviewer's — so a run that trips the contingency still writes its rows and
+    still exits 0. What changes is that the record says so, which is the whole of what a
+    discursive rule can be held to.
+    """
+    arm = resolution.arm
+    if not zeroshot.governs(arm):
+        return None
+    cfg = resolution.config
+    return zeroshot.disposition(
+        arm,
+        a1_rows=results.rows_for_cell(
+            cfg.paths.results_path,
+            arm="A1",
+            size=cfg.size,
+            seed=cfg.seed,
+            columns=zeroshot.COMPARISON_COLUMNS,
+        ),
+        a2_rows=[
+            {
+                "band": item.band,
+                "family": item.family,
+                "bucket": item.bucket,
+                "tile_id": item.tile_id,
+                "instance": item.instance,
+                zeroshot.COMPARISON_METRIC: item.metrics[zeroshot.COMPARISON_METRIC],
+            }
+            for item in scored.scored
+        ],
+    )
+
+
+def _report(resolution: Resolution, args: argparse.Namespace) -> int:
+    """`report` — render the table from the results parquet, re-running no arm (#169).
+
+    The one verb that reads no committed input except the registered bar and writes nothing into
+    ``artifacts_dir``. It is a **pure function of the results parquet** and the run records
+    beside it (#136's "computed and printed are different questions"), which is what makes
+    re-rendering free: a reviewer asking a question the table's shape did not anticipate is
+    asking it of a file that already holds the answer, not of a rented box.
+
+    Unlike `run` it takes no cell. The table is every printed arm at the headline size, so
+    ``--arm``/``--size``/``--seed`` would name a cell the render does not have — what it renders
+    is whatever the parquet holds, and a row nobody has scored says so in its own cells.
+    """
+    report.render(resolution.config)
+    return 0
 
 
 #: The whole command surface. A fourth verb is an argparse refusal, and a second entry point
@@ -284,6 +477,9 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="assemble the config, the artifacts, the extractor and the arm; write nothing",
         )
+        # Set for every verb so `args.tune` is answerable without asking which one ran; only
+        # `run` offers the flag that moves it.
+        sub.set_defaults(tune=False)
         return sub
 
     add("freeze", "write every committed input (CPU-only; reads GLO-30 for §3.3)")
@@ -297,6 +493,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--size", default=None, help=f"label-efficiency subset: {list(LABEL_EFFICIENCY_SIZES)}"
     )
     run.add_argument("--seed", type=int, default=None, help="§4.1's seed for this cell")
+    # A mode rather than a knob: it does not change what a cell *is*, it changes whether this
+    # command produces one. Only `run` has it, and only on `--arm A6` does it do anything but
+    # refuse (§4.1, #159).
+    run.add_argument(
+        "--tune",
+        action="store_true",
+        help=f"§4.1's one tuning pass, on {tune.TUNING_ARM}, over val — writes "
+        f"{tune.TUNING_NAME} and scores nothing",
+    )
     add("report", "render the printed table, the C4 rank block and the three figures")
     return parser
 
@@ -309,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print("\n--dry-run: nothing was written")
         return 0
-    return VERBS[args.verb](resolution)
+    return VERBS[args.verb](resolution, args)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

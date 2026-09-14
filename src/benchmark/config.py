@@ -60,7 +60,7 @@ import argparse
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Final
@@ -334,7 +334,16 @@ class Head(_Frozen):
     #: §4.1's optimizer block. **Tuned once on A6 — the neutral encoder — using val only, then
     #: frozen for every arm**; tuning on the arm you hope wins is the classic thumb on the scale.
     optimizer: str = "adamw"
-    lr: float = 1e-3
+    #: **Tuned 2026-09-01 on A6/val, and moved from §4.1's 1e-3 to 3e-3** (#159). The pass is
+    #: recorded in ``head_tuning.json``; the short version is that 3e-3 won an interior maximum
+    #: over `(3e-4, 1e-3, 3e-3, 1e-2, 3e-2)` — 35.177 m against 35.371 at 1e-2 and 35.822 at
+    #: §4.1's own value — so the grid brackets it rather than stopping at a wall.
+    #:
+    #: The margin is worth stating beside the number. Re-running three of those points measured a
+    #: **run-to-run spread of up to 0.058 m** at a fixed seed, because CUDA training here is not
+    #: bit-reproducible; the gap to the nearest rival is 0.194 m, about 3x that floor, and the gap
+    #: to 1e-3 is 0.645 m. So this is a real selection and not a large one.
+    lr: float = 3e-3
     weight_decay: float = 0.05
     decay: str = "cosine"
     warmup_frac: float = 0.05
@@ -358,6 +367,14 @@ class Head(_Frozen):
             raise ValueError(f"unknown decay {self.decay!r} (§4.1 chose cosine to 0)")
         if self.precision not in ("bf16", "fp32"):
             raise ValueError(f"precision {self.precision!r}: §4.1 trains in bf16")
+        # Checked here rather than left for the training loop to ignore: this field is in
+        # `TUNED_FIELDS`, so it is part of what "frozen for every arm" covers, and a frozen knob
+        # nothing reads is one a reader is entitled to think does something.
+        if self.early_stop_metric != "val_rmse":
+            raise ValueError(
+                f"unknown early_stop_metric {self.early_stop_metric!r} (§4.1 stops on val RMSE, "
+                f"and `benchmark.train` computes exactly that one number over §3.1's val draw)"
+            )
         if self.lr <= 0:
             raise ValueError(f"lr {self.lr} must be positive")
         for name in ("weight_decay", "slope_weight"):
@@ -371,6 +388,55 @@ class Head(_Frozen):
                      "appendix_seeds"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} {getattr(self, name)} must be >= 1")
+
+    @property
+    def tuned(self) -> dict[str, Any]:
+        """The knobs :mod:`benchmark.tune`'s one pass is allowed to move, and their values.
+
+        A subset rather than the whole object, because the three seed *counts* beside them are
+        not hyperparameters — they are how many observations §4.1 asks for, and moving one is a
+        different kind of change from moving the learning rate. The guard
+        (:func:`benchmark.tune.assert_frozen`) reads this and nothing else, so a smoke run at
+        ``head.seeds=1`` is not mistaken for a thumb on the scale and ``--set head.lr=3e-4`` is.
+        """
+        return {name: getattr(self, name) for name in TUNED_FIELDS}
+
+
+#: What "tuned once, on A6, using val only, then frozen for every arm" ranges over. Everything
+#: §4.1 states as a *recipe* number — the architecture's two width knobs, the loss's shape and
+#: its 0.1 slope weight, and the whole optimizer block — and nothing that is a count of
+#: observations.
+TUNED_FIELDS: Final = (
+    "proj_dim",
+    "stage_dims",
+    "loss",
+    "slope_weight",
+    "optimizer",
+    "lr",
+    "weight_decay",
+    "decay",
+    "warmup_frac",
+    "precision",
+    "batch_size",
+    "epochs",
+    "early_stop_metric",
+)
+
+#: **The** head recipe — the frozen result of §4.1's one tuning pass (#159).
+#:
+#: A module-level singleton rather than a fresh :class:`Head` per config, and the identity is the
+#: point: :attr:`BenchmarkConfig.head` defaults to *this object*, so A4, A5, A6 and A7 do not
+#: merely agree about the learning rate, they load the same one. "Tuned once, on A6, using val
+#: only, and then frozen for every arm" is a claim about the benchmark, and the cheapest way to
+#: make it checkable was to make it a claim about an object a test can compare with ``is``.
+#:
+#: The values are §4.1's own cited defaults. That is what the tuning pass *selects from* rather
+#: than a placeholder for what it will produce: :func:`benchmark.tune.tune` searches
+#: :data:`benchmark.tune.GRID` around them on A6/val, writes what it found to
+#: ``head_tuning.json``, and :func:`benchmark.tune.assert_frozen` refuses any later run whose
+#: recipe has drifted from what that artifact selected. So a tuning pass that moves a knob moves
+#: it *here*, in one committed line, and every arm afterwards loads the moved one.
+TUNED_HEAD: Final = Head()
 
 
 # --- §4.2 The DEMAE native fine-tune ------------------------------------------
@@ -432,13 +498,42 @@ class Finetune(_Frozen):
 # --- §4.4 The from-scratch baseline -------------------------------------------
 
 
+#: §4.1's recipe knobs, which §4.4 says A7 **shares** rather than owns: *same loss, same
+#: schedule length, same seeds*. Named here so :func:`assert_shares_head_recipe` can refuse a
+#: :class:`Unet` that grows one, which is #162's second acceptance criterion in its structural
+#: form — "asserted rather than configured by hand" is a claim that A7 *cannot* drift, not a
+#: claim that two numbers happen to be equal in today's defaults.
+#:
+#: Read off :class:`Head`'s own fields minus its two shape knobs, rather than typed out: a knob
+#: added to §4.1's recipe later is one A7 must go on sharing, and a hand-written list would
+#: silently stop covering it.
+SHARED_WITH_HEAD: Final[tuple[str, ...]] = tuple(
+    name for name in Head.__dataclass_fields__ if name not in ("proj_dim", "stage_dims")
+)
+
+
+def assert_shares_head_recipe(names: Iterable[str]) -> None:
+    """Refuse a §4.4 recipe that declares one of §4.1's knobs. See :data:`SHARED_WITH_HEAD`."""
+    owned = sorted(set(names) & set(SHARED_WITH_HEAD))
+    if owned:
+        raise ValueError(
+            f"§4.4 trains A7 under §4.1's loss, schedule length and seeds, so the UNet recipe "
+            f"cannot declare {owned}. A7 reads `cfg.head` for those; what belongs here is the "
+            f"trunk's shape"
+        )
+
+
 @dataclass(frozen=True)
 class Unet(_Frozen):
     """A7 — the PANGAEA bar, and a hard one (plan §4.4).
 
-    ~17M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
+    ~17.5M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
     total *and* trainable counts: a totals-only column reads A7 as handicapped when it is the
     opposite.
+
+    **Shape only.** The loss, the optimizer, the schedule and the seed counts are §4.1's and are
+    read from :class:`Head` — see :data:`SHARED_WITH_HEAD`, which refuses this class if it ever
+    grows one of them.
     """
 
     #: §4.4 — a standard 4-down / 4-up UNet.
@@ -447,10 +542,18 @@ class Unet(_Frozen):
     in_channels: int = 2
     #: §4.4/§2.4 — residual over the A1 fill, like every learned arm.
     residual: bool = True
+    #: The stage-1 width the rest double from. 48 is what lands §4.4's "~17M" — 17,465,377 by
+    #: :func:`benchmark.unet.parameter_count`, against 64's 31.0M and 32's 7.8M. Named as a knob
+    #: rather than hard-coded because it is the one number that sets this arm's capacity, and
+    #: §4.4's whole argument is about capacity.
+    base_width: int = 48
 
     def __post_init__(self) -> None:
+        assert_shares_head_recipe(self.__dataclass_fields__)
         if self.depth < 1:
             raise ValueError(f"depth {self.depth} must be >= 1")
+        if self.base_width < 1:
+            raise ValueError(f"base_width {self.base_width} must be >= 1")
         if self.in_channels != 2:
             raise ValueError(
                 f"in_channels {self.in_channels}: §4.4's input is the A1-filled tile plus the "
@@ -556,6 +659,13 @@ class Paths(_Frozen):
     demae_r5_checkpoint: str | None = ".release-work/release-R5-v2/encoder.pt"
     demae_r4_checkpoint: str | None = ".release-work/release-R4-v2/encoder.pt"
     demae_vits_checkpoint: str | None = None
+    #: The **pretraining** checkpoints those encoders were exported from — the only files in
+    #: this benchmark that carry an MAE decoder. ``None`` until a box mounts one, and that is
+    #: the honest default: §14's release is encoder-only, so the decoder A2 runs is not in the
+    #: released artifact and is not in this repository. Each release manifest names the file it
+    #: came from in its ``source_checkpoint`` field, which is where to look.
+    demae_r5_mae_checkpoint: str | None = None
+    demae_r4_mae_checkpoint: str | None = None
     #: TerraMind's DEM tokenizer and the ImageNet MAE. ``None`` until a box mounts them —
     #: an unmounted checkpoint is *named* at resolution time rather than silently absent, which
     #: is the whole reason these are fields rather than lookups inside a loader.
@@ -580,6 +690,69 @@ class Paths(_Frozen):
                 )
 
 
+# --- The box this runs on -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Runtime(_Frozen):
+    """What the box does, as opposed to what the benchmark computes (#159).
+
+    **Environment, not recipe**, and marked so — none of it reaches
+    :attr:`BenchmarkConfig.config_hash`. §11's argument carried down one level: a rented A10 and
+    this laptop compute the same head from the same recipe, and a hash that moved with the device
+    string would read every relaunch as a recipe change. What *is* recipe is in :class:`Head`,
+    and the seed that separates a cell's three runs is a top-level scalar.
+
+    Nothing here may change a number. ``device`` and ``loader_workers`` change how long a cell
+    takes; ``checkpoint_dir`` changes where the per-epoch state lands. A knob that would change a
+    score belongs in :class:`Head` and therefore in the hash — ``precision`` is the near miss,
+    and it is in :class:`Head` for exactly that reason.
+    """
+
+    #: ``auto`` resolves to CUDA, then MPS, then CPU — see :func:`benchmark.train.resolve_device`.
+    #: Named values are taken literally, so a box that has CUDA can still be asked for CPU.
+    device: str = "auto"
+    #: Dataloader worker processes — a **ceiling**, not a count. What a pass actually starts is
+    #: :func:`benchmark.train.workers_for`, which never starts more than the work can keep busy.
+    #:
+    #: §7 measures head training as 4.1x loader-bound, so this is the knob that decides whether a
+    #: GPU sits idle — but more is not better past a point, and #159 measured where that point
+    #: is. Starting a worker costs ~0.23 s (a fork of the parent's address space), paid per
+    #: DataLoader, and :func:`benchmark.train.batches` builds one per epoch for training and
+    #: another for val. Against ~80 CPU-seconds of A1 fills per epoch that puts the optimum near
+    #: 19, and 64 workers measured *worse* than 16: 15 s of startup to save 4 s of filling.
+    loader_workers: int = 16
+    #: How many of :attr:`Head.batch_size`'s samples cross the GPU at once, 0 for all of them.
+    #: **Not a smaller batch** — the gradient is accumulated over the whole batch and the
+    #: optimizer steps once, so the recipe's effective batch is unchanged and A7 goes on training
+    #: under §4.1's declared 128 (#162).
+    #:
+    #: It is here rather than in :class:`Head` because it is a fact about the card. §4.4's UNet
+    #: runs 48 channels at the full 224 px from its first layer — unlike §4.1's head, which
+    #: reaches full resolution last and narrow — and that costs a **measured 0.24 GiB/sample**,
+    #: so the declared batch of 128 needs ~30.7 GiB and a 32 GB 5090 has 31.36 GiB. Measured on
+    #: the box: 64 peaks at 15.33 GiB, 32 at 7.83 GiB.
+    #:
+    #: The same shape `pretrain.config.Optimizer.accum_iter` already uses, and the same honesty
+    #: applies as for :attr:`device`: splitting is exact in arithmetic but not bit-identical,
+    #: because float summation is not associative. This group never claimed bit-identity — CUDA
+    #: training here is not reproducible to the bit at a fixed seed regardless (#159's tuning
+    #: pass measured a run-to-run spread up to 0.058 m).
+    micro_batch: int = 0
+    #: Where per-epoch head checkpoints land. Not committed and not in git: they are 4.7 MB each
+    #: and the artifact a cell produces is its parquet rows (§7's "heads checkpoint per epoch
+    #: like everything else in this repo and that is the whole of it").
+    checkpoint_dir: str = "data/task1/heads"
+
+    def __post_init__(self) -> None:
+        if self.micro_batch < 0:
+            raise ValueError(f"micro_batch {self.micro_batch} must be >= 0 (0 = the whole batch)")
+        if self.loader_workers < 0:
+            raise ValueError(f"loader_workers {self.loader_workers} must be >= 0")
+        if not self.device:
+            raise ValueError("runtime.device is a torch device string, or 'auto'")
+
+
 # --- The config ---------------------------------------------------------------
 
 _GROUPS: Final = {
@@ -590,6 +763,7 @@ _GROUPS: Final = {
     "finetune": Finetune,
     "unet": Unet,
     "extract": Extract,
+    "runtime": Runtime,
     "paths": Paths,
 }
 
@@ -629,10 +803,14 @@ class BenchmarkConfig(_Frozen):
     tiles: Tiles = field(default_factory=Tiles)
     masks: Masks = field(default_factory=Masks)
     fill: Fill = field(default_factory=Fill)
-    head: Head = field(default_factory=Head)
+    #: §4.1's head recipe. ``default`` rather than ``default_factory`` **on purpose**: every
+    #: config that does not override a head knob holds :data:`TUNED_HEAD` itself, so the frozen
+    #: recipe is one object rather than eleven equal copies. See that constant.
+    head: Head = field(default=TUNED_HEAD)
     finetune: Finetune = field(default_factory=Finetune)
     unet: Unet = field(default_factory=Unet)
     extract: Extract = field(default_factory=Extract)
+    runtime: Runtime = field(default_factory=Runtime, metadata=ENVIRONMENT)
     paths: Paths = field(default_factory=Paths, metadata=ENVIRONMENT)
 
     def __post_init__(self) -> None:
@@ -667,11 +845,18 @@ class BenchmarkConfig(_Frozen):
 
     @property
     def synthetic_eval_instances(self) -> int:
-        """§3.2 — every eval tile appears once per bucket, for the two synthetic families.
+        """§3.2's **ceiling** on synthetic instances: every test tile, once per bucket, twice.
 
-        30,000 at the committed draw. The real family has no bucket axis and is drawn at its
-        natural size distribution (§3.2), so its count is a property of the artifact rather
-        than a number this config can derive.
+        30,000 at the committed draw's tile budget, and an upper bound rather than the row
+        count. :func:`benchmark.masks.scoreable_tiles` drops the part-ocean tiles before the
+        draw — 4,523 of 5,000 survive it, for 27,138 rows — and *which* tiles those are is a
+        property of the corpus's manifest, not of this config, so a config that returned the
+        real number would have to read 500,000 manifest rows to answer.
+
+        A ceiling is the right thing for the one job this has: #163 prices A9's decode against
+        it, and a cost model that rounds up is the safe direction to be wrong in. Nothing
+        checks an artifact against it — the real family has no bucket axis and is drawn at its
+        natural size distribution (§3.2), so the committed count was never derivable here.
         """
         return self.tiles.test * len(self.masks.synthetic_families) * len(self.masks.buckets)
 

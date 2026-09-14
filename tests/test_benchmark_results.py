@@ -18,9 +18,9 @@ from benchmark.config import BenchmarkConfig, Paths, Tiles
 ROSTER = ("rmse", "nmad", "seam_gap")
 
 
-def config(tmp_path, **paths) -> BenchmarkConfig:
+def config(tmp_path, arm="A1", **paths) -> BenchmarkConfig:
     return BenchmarkConfig(
-        arm="A1",
+        arm=arm,
         tiles=Tiles(test=8),
         paths=Paths(
             artifacts_dir=str(tmp_path / "artifacts"),
@@ -210,3 +210,124 @@ def test_an_unknown_parameter_count_prints_as_unknown_rather_than_as_a_number(tm
         tmp_path / "results.parquet", rows=1, total=1, record=record
     )
     assert any("not built yet total / not built yet trainable" in line for line in lines)
+
+
+# --- ADR-0012 §6's measured agreement, in the record (#171) -------------------
+
+#: p157's TerraMind figures, as `Extractor._precision` returns them. A literal rather than a real
+#: measurement because this module is about the *record*: what has to be true here is that the
+#: block lands whole and re-readable, not that any encoder produced any particular cosine.
+#: `tests/test_benchmark_extract.py` owns the measuring.
+AGREEMENT = {
+    "encoder": "terramind",
+    "reference_dtype": "fp32",
+    "compute_dtype": "bf16",
+    "device": "mps",
+    "tiles": 60,
+    "tokens": 11760,
+    "mean_cosine": 0.99888,
+    "min_cosine": 0.94710,
+    "p01_cosine": 0.98530,
+    "relative_rms": 0.00420,
+    "threshold": 0.99,
+    "immaterial": True,
+}
+
+
+def test_the_measured_agreement_is_recorded_beside_the_contract_that_produced_it(tmp_path):
+    """AC 1 and 2 — the other half of "a results table says which contract produced it".
+
+    The spec md5 says *which* contract; this says how far the dtype it actually ran at moved the
+    features. Both have to be readable off one record, and the figure has to arrive with what it
+    was measured over rather than as a bare cosine.
+    """
+    resolution = artifacts.resolve(config(tmp_path, arm="A5"))
+    record = results.run_record(
+        resolution,
+        rows=48,
+        seconds=2.5,
+        parameters={"total": 0, "trainable": 0},
+        metrics=ROSTER,
+        precision=results.precision_block(resolution, AGREEMENT),
+    )
+    assert record["precision"]["agreement"] == AGREEMENT
+    assert record["precision"]["absent_because"] is None
+    # Re-readable rather than a bare cosine: the dtype, the box, and the sample it was taken over.
+    agreement = record["precision"]["agreement"]
+    assert agreement["compute_dtype"] == "bf16" and agreement["reference_dtype"] == "fp32"
+    assert agreement["device"] == "mps"
+    assert (agreement["tiles"], agreement["tokens"]) == (60, 11760)
+    # And the spec md5 is still where it was, in the provenance block.
+    assert "extractor_spec" in record["resolved"]["artifacts"]
+
+
+def test_a_run_at_the_reference_dtype_records_no_figure_rather_than_a_one(tmp_path):
+    """AC 3. fp32 against itself is not a measurement, and a recorded 1.0 would read as one."""
+    base = config(tmp_path, arm="A5")
+    cfg = base.replace(extract=base.extract.replace(compute_dtype="fp32"))
+    resolution = artifacts.resolve(cfg)
+    block = results.precision_block(resolution, None)
+    assert block["agreement"] is None
+    assert "reference dtype" in block["absent_because"]
+
+
+@pytest.mark.parametrize("arm", ["A1", "A7"])
+def test_an_arm_with_no_encoder_records_an_absence_rather_than_nothing(tmp_path, arm):
+    """AC 4. The `Resolved.required` problem again: a null figure has more than one reading, so
+    the block says which one it is. *Unmeasured* is the key being absent altogether."""
+    resolution = artifacts.resolve(config(tmp_path, arm=arm))
+    block = results.precision_block(resolution, None)
+    assert block["agreement"] is None
+    assert "no encoder" in block["absent_because"]
+
+    recorded = results.run_record(
+        resolution,
+        rows=1,
+        seconds=0.1,
+        parameters={"total": 0, "trainable": 0},
+        metrics=ROSTER,
+        precision=block,
+    )
+    unmeasured = results.run_record(
+        resolution,
+        rows=1,
+        seconds=0.1,
+        parameters={"total": 0, "trainable": 0},
+        metrics=ROSTER,
+    )
+    assert recorded["precision"] == block
+    assert "precision" not in unmeasured
+
+
+def test_an_arm_that_consults_no_extractor_contract_says_so(tmp_path):
+    """A2 runs the whole pretrained autoencoder and reads pixels off the decoder (#167), so the
+    committed spec governs nothing it does. That is a third reading of a null figure, and it is
+    not "the run declared fp32"."""
+    resolution = artifacts.resolve(config(tmp_path, arm="A2-R5"))
+    block = results.precision_block(resolution, None)
+    assert block["agreement"] is None
+    assert "extractor contract" in block["absent_because"]
+
+
+def test_the_agreement_is_not_part_of_the_provenance_the_run_id_hashes(tmp_path):
+    """AC 5, and the reason it is a separate block rather than a field of `resolved`.
+
+    ADR-0012 §7 keeps it out of Phase 1's frozen four-field data fingerprint, which four
+    committed artifacts quote. `run_id` is the sharper version of the same claim: the figure is
+    measured on a batch, so a figure inside the id would give an unchanged cell a new identity
+    every time the sample moved.
+    """
+    resolution = artifacts.resolve(config(tmp_path, arm="A5"))
+    before = results.run_id(resolution)
+    record = results.run_record(
+        resolution,
+        rows=1,
+        seconds=0.1,
+        parameters={"total": 0, "trainable": 0},
+        metrics=ROSTER,
+        precision=results.precision_block(resolution, AGREEMENT),
+    )
+    assert record["run_id"] == before
+    assert record["resolved"] == resolution.to_dict()
+    assert "precision" not in record["resolved"]
+    assert not any("cosine" in key for key in record["resolved"])

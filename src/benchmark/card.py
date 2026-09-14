@@ -254,6 +254,9 @@ class DatasetCard:
         evaluated, bank = self.eval_masks, self.bank.committed
         draw, geometry = bank.draw, self.config.masks
         synthetic = evaluated.rows - len(evaluated.real.rows)
+        # Listed minus drawn-on. Named rather than differenced at the print, on the same
+        # convention §3.3's attrition ladder follows: what a stage excluded is a count.
+        unscoreable = evaluated.listed_tiles - evaluated.tiles
         return dedent(f"""\
             ## §3.4's two mask artifacts
 
@@ -264,6 +267,10 @@ class DatasetCard:
               scored eval instance
             - {synthetic:,} synthetic, being {evaluated.tiles:,} test tiles ×
               {len(geometry.synthetic_families)} families × {len(geometry.buckets)} size buckets
+            - the committed test list names {evaluated.listed_tiles:,} tiles; the
+              {unscoreable:,} a synthetic void is **not** drawn on are not clean ground under
+              §5's all-land, water-flag-clear predicate — a count here rather than a silence,
+              because the table above lists the draw and this line lists what §3.2 made of it
             - {len(evaluated.real.rows):,} real — §3.3's void shapes transplanted onto
               stratum-matched clean test tiles, cropped and pasted and never resampled
 

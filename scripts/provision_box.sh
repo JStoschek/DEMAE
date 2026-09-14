@@ -39,6 +39,14 @@ CORPUS_REMOTE="${DEMAE_CORPUS_REMOTE:-}"
 JOBS="${JOBS:-6}"
 EXPECT_VERSION="bcbd6484d8116199c5c1160e21ea0284"  # the shipped 500k tier (#72)
 MIN_RAM_GB=60      # §11 asks for >=64; hosts report a little under what they advertise
+                   # — and this is a *pretraining* floor. §11 wants it because pretraining
+                   # streams all 500k tiles every epoch, so the whole 47 GB corpus has to sit in
+                   # page cache. A Task 1 benchmark run does not: §3.1's draws are 20,000
+                   # head-train + 2,000 val + 5,000 test = 27,000 tiles, and at 98 KiB a tile
+                   # that is a **2.71 GB** working set out of a memmap the kernel pages lazily.
+                   # So `--min-ram-gb` exists, on `--max-corpus-min`'s own rule: the number is a
+                   # property of the *workload*, and a box this benchmark can use is not the same
+                   # box §11 was written about. 0 skips the check.
 
 # The disk budget, as its three parts rather than one number (#107). The sum on a box holding
 # nothing is 70 GB, which is the constant this replaces — the change is not a looser threshold,
@@ -94,6 +102,9 @@ provision_box.sh — bring a rented box to plan §15's pre-flight line.
   --probe-steps N    steps for the loader throughput probe, 0 to skip (default: 200)
   --max-corpus-min N reject the box if preflight measures the corpus taking longer than this
                      many minutes to download, 0 to skip the measurement (default: 20)
+  --min-ram-gb N     reject the box below this much RAM, 0 to skip (default: 60). The default is
+                     §11's pretraining floor, which exists so the 47 GB corpus page-caches; a
+                     Task 1 benchmark run touches 27,000 tiles (2.71 GB) and does not need it
   --rclone-version V rclone to install when this box's is older than the floor (default: 1.69.1)
   -h, --help         this
 
@@ -236,6 +247,7 @@ while [[ $# -gt 0 ]]; do
         --skip-env) SKIP_ENV=1; shift ;;
         --probe-steps) PROBE_STEPS="$2"; shift 2 ;;
         --max-corpus-min) MAX_CORPUS_MIN="$2"; shift 2 ;;
+        --min-ram-gb) MIN_RAM_GB="$2"; shift 2 ;;
         --rclone-version) RCLONE_PIN="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -259,9 +271,15 @@ ok "GPU     ${GPU_COUNT}x ${GPU_NAME} (${GPU_MEM_MB} MiB)"
 [[ "$GPU_COUNT" -eq 1 ]] || echo "   note   plan §11 assumes a single GPU; $GPU_COUNT present"
 
 RAM_GB="$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)"
-[[ "$RAM_GB" -ge "$MIN_RAM_GB" ]] \
-    || die "RAM ${RAM_GB} GB < ${MIN_RAM_GB} GB — the 47 GB corpus will not page-cache (§11)"
-ok "RAM     ${RAM_GB} GB"
+if [[ "$MIN_RAM_GB" -eq 0 ]]; then
+    ok "RAM     ${RAM_GB} GB (floor waived; see --min-ram-gb)"
+else
+    [[ "$RAM_GB" -ge "$MIN_RAM_GB" ]] \
+        || die "RAM ${RAM_GB} GB < ${MIN_RAM_GB} GB — the 47 GB corpus will not page-cache (§11). \
+That floor is pretraining's: a Task 1 benchmark run reads 27,000 tiles (2.71 GB) and can pass \
+--min-ram-gb with a lower number, or 0"
+    ok "RAM     ${RAM_GB} GB"
+fi
 
 CPUS="$(nproc)"
 ok "CPUs    ${CPUS} (the loader wants workers; §7.5 names IO the #1 risk)"

@@ -97,10 +97,21 @@ def box(tmp_path):
 
 @pytest.fixture
 def flags(box):
+    """Every path this cell touches, pinned inside the box.
+
+    ``paths.mask_bank_path`` is here for a reason worth stating: it is the one input whose
+    default is **outside** ``artifacts_dir``, so leaving it unset pointed these tests at
+    ``data/task1/train_mask_bank.parquet`` in the working tree. That passed for as long as nobody
+    had run a real `freeze` — and stopped the day someone did, because two tests below assert
+    what happens when the bank is *absent* and it had quietly become present. §8's rule is that
+    every write goes to ``tmp_path``; a read from a default path outside it is the same hazard
+    wearing the other direction.
+    """
     return [
         "--set", f'paths.corpus_dir="{box / "corpus"}"',
         "--set", f'paths.artifacts_dir="{box / "artifacts"}"',
         "--set", f'paths.results_path="{box / "results.parquet"}"',
+        "--set", f'paths.mask_bank_path="{box / "train_mask_bank.parquet"}"',
         "--set", f'paths.plan_path="{PLAN}"',
         "--set", f"tiles.test={len(TEST_COGS) * TILES_PER_COG}",
     ]
@@ -265,9 +276,18 @@ def test_the_parameter_counts_are_a_pair_and_never_a_single_number():
     assert arms.parameter_counts(arms.get("A1")) == {"total": 0, "trainable": 0}
     # A2 is zero-shot over a counted encoder: total known, trainable exactly zero.
     assert arms.parameter_counts(arms.get("A2-R5")) == {"total": 85_254_144, "trainable": 0}
-    # The head does not exist yet (#159), and a count this registry guessed would print as a
-    # measurement — so it is `None` rather than 1,180,000.
-    assert arms.parameter_counts(arms.get("A4-R5"))["trainable"] is None
+    # #159 built the head and #162 the UNet, so A4's and A7's trainable halves are counted
+    # rather than `None`. A3's decoder is still its own ticket (#166), and a count this registry
+    # guessed would print as a measurement — so it stays `None`.
+    assert arms.parameter_counts(arms.get("A4-R5"))["trainable"] == 1_181_089
+    assert arms.parameter_counts(arms.get("A3-R5"))["trainable"] is None
+    # A7's pair is equal and that is §4.4's point, not a degenerate case: it runs no encoder and
+    # trains every parameter it has, so (17.5M, 17.5M) beside A4's (86.4M, 1.18M) is the whole
+    # sentence §6 item 4 prints the pair for.
+    a7 = arms.parameter_counts(arms.get("A7"))
+    assert a7 == {"total": 17_465_377, "trainable": 17_465_377}
+    assert a7["trainable"] > 14 * arms.parameter_counts(arms.get("A4-R5"))["trainable"]
+    assert a7["total"] < arms.parameter_counts(arms.get("A4-R5"))["total"]
 
 
 def test_a_rerun_of_the_same_cell_replaces_its_rows_and_appends_its_record(box, flags):
@@ -450,6 +470,12 @@ def test_a_ruled_out_arm_is_refused_generically_rather_than_by_a_special_case(na
     assert "ruled out" not in str(exc.value), "a special-cased message is a surface too"
 
 
+#: The conventions that have an implementation rather than a ticket. ``classical_fill`` is
+#: A1's (#158), ``token_drop`` is A2's (#167) and ``a1_fill_plus_mask`` is the §4.1 head's
+#: (#159); the one left names the ticket that builds it.
+BUILT_CONVENTIONS = ("classical_fill", "token_drop", "a1_fill_plus_mask")
+
+
 def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_name_a_ticket():
     """A1 runs first and its numbers gate the rest, so the others say which ticket builds them.
 
@@ -458,14 +484,19 @@ def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_nam
     checkpoint this box has not mounted — so no CLI path reaches the unbuilt conventions today.
     What can go wrong here is the table falling behind the registry, which is a completeness
     claim about a dict.
+
+    The entries are **factories** — ``(cfg, arm) -> filler`` — since #167: a convention that runs
+    an encoder has to load one once per pass rather than once per instance, and ``token_drop`` is
+    shared by two arms whose weights differ. So the refusal is raised by the filler a factory
+    returns, which is exactly where a built convention would do its work.
     """
     assert set(evaluate.FILLERS) == set(arms.INPUT_CONVENTIONS)
 
-    for convention, filler in evaluate.FILLERS.items():
-        if convention == "classical_fill":
+    for convention, factory in evaluate.FILLERS.items():
+        if convention in BUILT_CONVENTIONS:
             continue
         with pytest.raises(NotImplementedError, match=f"{convention}.*not built") as exc:
-            filler(None, None, None)
+            factory(None, None).fill(None, None)
         assert "#" in str(exc.value), f"{convention} does not name the ticket that builds it"
 
 

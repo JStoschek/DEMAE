@@ -13,10 +13,11 @@ iterated 3x3 dilation produces. None of these read through a CLI.
 violate one is asserted to be **retried or refused, never trimmed**, which is the only one of the
 three that a silently-trimming generator would still pass.
 
-**The committed artifact** attaches at seam 1 against the shipped corpus — 30,000 rows is 5,000
-test tiles x 2 families x 3 buckets, and nothing smaller can express it. The stage is also driven
-directly off a hand-written tile list, so the round-trip through the parquet is asserted on a box
-with no corpus at all.
+**The committed artifact** attaches at seam 1 against the shipped corpus — 27,138 rows is the
+4,523 clean test tiles x 2 families x 3 buckets, and nothing smaller can express it. The stage is
+also driven directly off a hand-written tile list over a *built* corpus, so the round-trip through
+the parquet is asserted on a box with no shipped corpus and no shard read: the manifest is there
+because `masks.scoreable_tiles` reads three columns of it to drop the part-ocean tiles.
 
 **§3.3's real family** (#153) is asserted at two altitudes, because building it needs the network
 and this suite is the gate before every push.
@@ -58,6 +59,13 @@ from pretrain.artifact import read_tile_strata, write_tile_strata
 from tests.conftest import SPLIT_COGS
 
 CORPUS_500K = Path("data/corpus_500k")
+
+#: The test tiles §3.2 actually draws on: §3.1's 5,000, less the 477 that are part-ocean or
+#: water-affected (:func:`benchmark.masks.scoreable_tiles`). Spelled out rather than read off the
+#: manifest here, because these tests exist to catch the number *moving* — a filter that silently
+#: started keeping or dropping a different population would otherwise re-derive its own
+#: expectation and agree with itself.
+CLEAN_TEST_TILES = 4_523
 
 TILE_PX = dataset_config.TILE_PX
 
@@ -352,18 +360,38 @@ def test_every_row_files_its_mask_under_the_bucket_its_diameter_falls_in():
 
 
 @pytest.fixture
-def frozen_tiles(tmp_path):
+def mask_corpus(tmp_path, corpus_factory):
+    """A small built corpus, and the four of its tiles the stage will draw on.
+
+    The mask stage reads a manifest now: :func:`benchmark.masks.scoreable_tiles` drops the
+    part-ocean tiles before the draw, so a test list of fabricated ids is a list of tiles the
+    corpus has never heard of and the stage rightly refuses all four. `build_corpus`'s tiles
+    are all-land with the water flag clear, so all four survive the filter and the row counts
+    below stay the arithmetic they were.
+
+    Still no shipped corpus and still no shard read — this is a manifest and three columns of
+    it, which is what keeps these tests the offline half the module docstring describes.
+    """
+    corpus, ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [0.1] * 10)
+    return corpus, ids[:4]
+
+
+@pytest.fixture
+def frozen_tiles(tmp_path, mask_corpus):
     """An artifacts directory holding the one thing the mask stage reads: §3.1's test list."""
+    _, listed = mask_corpus
     write_tile_strata(
-        [(tile, i % 20) for i, tile in enumerate(tile_ids(4))], tmp_path / TEST_TILES_NAME
+        [(tile, i % 20) for i, tile in enumerate(listed)], tmp_path / TEST_TILES_NAME
     )
     return tmp_path
 
 
 @pytest.fixture
-def cfg(frozen_tiles):
-    return BenchmarkConfig().replace(
-        paths=BenchmarkConfig().paths.replace(artifacts_dir=str(frozen_tiles))
+def cfg(frozen_tiles, mask_corpus):
+    corpus, _ = mask_corpus
+    base = BenchmarkConfig()
+    return base.replace(
+        paths=base.paths.replace(artifacts_dir=str(frozen_tiles), corpus_dir=str(corpus))
     )
 
 
@@ -581,13 +609,13 @@ def frozen(tmp_path_factory):
 
 @pytest.mark.skipif(not HAS_CORPUS, reason="the shipped corpus or the committed split (#77)")
 class TestAgainstTheShippedCorpus:
-    """§3.2's 30,000 rows at their real budget — 5,000 test tiles x 2 families x 3 buckets."""
+    """§3.2's rows at their real budget — the clean test tiles x 2 families x 3 buckets."""
 
-    def test_freeze_commits_the_thirty_thousand_synthetic_rows(self, frozen):
+    def test_freeze_commits_a_synthetic_row_for_every_clean_tile_in_every_cell(self, frozen):
         directory, _ = frozen
         table = pq.read_table(directory / EVAL_MASKS_NAME)
         synthetic = [f for f in table["family"].to_pylist() if f != Masks().real_family]
-        assert len(synthetic) == 30_000
+        assert len(synthetic) == CLEAN_TEST_TILES * len(CELLS) == 27_138
         assert set(synthetic) == set(Masks().synthetic_families)
 
     def test_every_committed_row_names_a_tile_from_the_committed_test_list(self, frozen):
@@ -605,8 +633,11 @@ class TestAgainstTheShippedCorpus:
             for t, f in zip(table["tile_id"].to_pylist(), table["family"].to_pylist())
             if f != Masks().real_family
         }
-        assert synthetic == committed
+        assert synthetic <= committed, "no synthetic row may name a tile off the test list"
         assert len(committed) == 5_000
+        # A strict subset, and this is the count: the 477 part-ocean and water-affected tiles
+        # `masks.scoreable_tiles` drops are on the committed list and carry no synthetic void.
+        assert len(synthetic) == CLEAN_TEST_TILES == 4_523
 
     def test_every_eval_tile_appears_once_per_bucket_in_both_synthetic_families(self, frozen):
         # §3.2: "every eval tile appears once per bucket for the two synthetic families", so
@@ -623,9 +654,32 @@ class TestAgainstTheShippedCorpus:
             if family != Masks().real_family:
                 seen.setdefault((family, bucket), set()).add(tile)
         assert len(seen) == len(CELLS)
-        assert {len(tiles) for tiles in seen.values()} == {5_000}
+        assert {len(tiles) for tiles in seen.values()} == {CLEAN_TEST_TILES}
         # The real family is deliberately not in that shape: it carries no bucket axis, and its
         # rows repeat `tile_id` because ~9,000 voids share ~1,100 R4 hosts (§3.3, §5).
+
+    def test_no_committed_synthetic_row_names_a_tile_that_is_not_clean_ground(self, frozen):
+        """The property, read off the committed file rather than off the generator's word.
+
+        Same move `test_the_committed_masks_satisfy_the_constraints_they_were_drawn_under`
+        makes for §3.2's three constraints: the claim a reader cares about is about the artifact
+        every arm scores, so it is asserted against the decoded rows. Manifest-only, so it runs
+        wherever the corpus index does and does not need the 47 GB of shards under it.
+        """
+        directory, _ = frozen
+        table = pq.read_table(directory / EVAL_MASKS_NAME, columns=["tile_id", "family"])
+        named = {
+            t
+            for t, f in zip(table["tile_id"].to_pylist(), table["family"].to_pylist())
+            if f != Masks().real_family
+        }
+        column = voids.read_manifest_columns(
+            CORPUS_500K, ["tile_id", "land_frac", "water_affected"]
+        )
+        keep = voids.eligible(column["land_frac"], column["water_affected"])
+        clean = set(column["tile_id"][keep].astype(str))
+
+        assert named <= clean, "a synthetic void was drawn on a tile that is not all land"
 
     def test_the_committed_masks_satisfy_the_constraints_they_were_drawn_under(self, frozen):
         # The whole artifact, not a sample: this is the file every arm scores against, and the
@@ -647,8 +701,20 @@ class TestAgainstTheShippedCorpus:
         # prints exactly as wide a table as a good one.
         directory, said = frozen
         assert file_md5(directory / EVAL_MASKS_NAME) in said
-        assert "30,000 synthetic" in said
+        assert "27,138 synthetic" in said
         assert masks.GENERATOR in said
+
+    def test_the_freeze_says_how_many_listed_tiles_it_excluded_rather_than_going_quiet(
+        self, frozen
+    ):
+        """The synthetic half's attrition is narrated too, on §3.3's convention.
+
+        A reader who sees 27,138 where §3.1 drew 5,000 test tiles should be told why on the
+        same screen, rather than being left to divide by six and wonder.
+        """
+        _, said = frozen
+        assert "477 of 5,000 listed test tiles excluded" in said
+        assert "part-ocean" in said
 
     def test_the_freeze_prints_what_the_real_family_excluded(self, frozen):
         """The attrition is narrated, not just committed — #153's fourth criterion, on screen.
@@ -737,7 +803,7 @@ class TestTheRealFamilyAgainstTheLiveBucket:
         assert int(metadata[b"real_scored_components"]) == 9_978
         assert int(metadata[b"real_excluded_in_gaps"]) == 705
         assert int(metadata[b"real_excluded_above_top"]) == 182
-        assert table.num_rows == 30_000 + 9_273
+        assert table.num_rows == CLEAN_TEST_TILES * len(CELLS) + 9_273 == 36_411
 
     def test_every_real_mask_is_interior_and_files_under_its_own_sub_row(self, built):
         """The whole real half, decoded — the pass the synthetic half gets against its buckets."""
@@ -778,7 +844,7 @@ class TestTheRealFamilyAgainstTheLiveBucket:
 
     def test_the_freeze_says_what_the_tile_geometry_cut_off(self, built):
         _, said = built
-        assert "9,273 real" in said and "39,273 eval mask rows" in said
+        assert "9,273 real" in said and "36,411 eval mask rows" in said
         assert "9,978 scored components" in said
         assert "705" in said and "182" in said
 
@@ -1226,6 +1292,73 @@ def test_a_test_list_with_no_clean_host_in_a_band_is_refused_rather_than_drawn_t
 
     with pytest.raises(ValueError, match="no clean"):
         masks.HostPool.from_test_list(_write_list(tmp_path, tile_ids), corpus, bands=TEST_BANDS)
+
+
+# --- The tile set a synthetic void may be drawn on ----------------------------
+
+
+def test_a_water_affected_tile_is_not_drawn_on(tmp_path, corpus_factory):
+    """The synthetic half applies §3.3's own host predicate, and for the same reason.
+
+    A void is placed by geometry alone — `draw_from_seed` never opens the tile — so one drawn
+    on a part-ocean tile can sit on painted fill, and nothing downstream of the draw can tell.
+    """
+    corpus, tile_ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [30.0] * 10)
+    _set_column(corpus, "water_affected", [i % 2 == 1 for i in range(len(tile_ids))])
+
+    kept = masks.scoreable_tiles(tile_ids, corpus)
+
+    assert kept == [t for i, t in enumerate(tile_ids) if i % 2 == 0]
+
+
+def test_a_tile_short_of_all_land_is_not_drawn_on(tmp_path, corpus_factory):
+    corpus, tile_ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [30.0] * 10)
+    # Either side of `voids.LAND_FRAC_MIN`, which is the one definition of "land" in play.
+    _set_column(corpus, "land_frac", [1.0 if i % 2 == 0 else 0.9 for i in range(len(tile_ids))])
+
+    kept = masks.scoreable_tiles(tile_ids, corpus)
+
+    assert kept == [t for i, t in enumerate(tile_ids) if i % 2 == 0]
+
+
+def test_the_synthetic_half_and_the_real_half_filter_on_the_same_predicate(
+    tmp_path, corpus_factory
+):
+    """One population, not two — what `freeze` commits both halves of the artifact over.
+
+    Until the filter existed the synthetic half drew over all 5,000 listed test tiles while
+    `HostPool` transplanted onto the 4,523 clean ones, so the module docstring's claim that a
+    real row and a synthetic row "differ in the shape of the void and in nothing else about how
+    they were produced" was not true of the ground either one sat on.
+    """
+    corpus, tile_ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [30.0] * 10)
+    _set_column(corpus, "water_affected", [i % 3 == 0 for i in range(len(tile_ids))])
+
+    drawn = set(masks.scoreable_tiles(tile_ids, corpus))
+    pool = masks.HostPool.from_test_list(
+        _write_list(tmp_path, tile_ids), corpus, bands=TEST_BANDS
+    )
+
+    assert drawn == {t for tiles in pool.by_band.values() for t in tiles}
+
+
+def test_a_test_list_with_no_clean_tile_is_refused_rather_than_drawn_over_ocean(
+    tmp_path, corpus_factory
+):
+    corpus, tile_ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [30.0] * 10)
+    _set_column(corpus, "water_affected", [True] * len(tile_ids))
+
+    with pytest.raises(ValueError, match="none of the .* listed test tiles is clean ground"):
+        masks.scoreable_tiles(tile_ids, corpus)
+
+
+def test_a_tile_the_manifest_has_never_heard_of_is_not_clean_ground(tmp_path, corpus_factory):
+    # The filter answers off the manifest, so an id it cannot find is dropped rather than
+    # assumed clean. `evaluate.instances` makes the converse check — no committed mask may name
+    # a tile the test list does not — and between them a mask list cannot drift off the corpus.
+    corpus, tile_ids = _corpus_with_slopes(corpus_factory, tmp_path / "corpus", [30.0] * 10)
+
+    assert masks.scoreable_tiles([*tile_ids[:2], "not-a-tile"], corpus) == tile_ids[:2]
 
 
 def test_the_generator_reads_the_bucket_boundaries_from_the_config():

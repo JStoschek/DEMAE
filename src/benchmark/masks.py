@@ -62,9 +62,26 @@ a draw, against p121's 2.00 — which is half of why plan §7's on-the-fly line 
 from 19.1 CPU-h to **8.2** (#151), the other half being a presentation count that had gone
 stale for unrelated reasons. And it is what makes the bank **21.1 min** rather than 33.
 
-The eval mask list is 30,000 draws, ~40 s, and one file: 5,000 test tiles x §3.2's two synthetic
-families x three buckets, one void per tile per instance, every eval tile appearing once per
-bucket in both families so bucket scores are computed over identical tile sets.
+The eval mask list is 27,138 draws, ~40 s, and one file: the **4,523 clean** test tiles x §3.2's
+two synthetic families x three buckets, one void per tile per instance, every eval tile appearing
+once per bucket in both families so bucket scores are computed over identical tile sets.
+
+## Why 4,523 and not §3.1's 5,000
+
+A synthetic void is placed by geometry alone — :func:`draw_from_seed` is a function of a seed and
+never opens the tile — so nothing in the draw can notice that a void has landed on painted ocean
+fill rather than on terrain. On the #150 draw it did: **400** of 30,000 instances held some ocean,
+39 were mostly ocean, and **8** were entirely ocean. So the tile set is filtered through
+:func:`benchmark.voids.eligible` (:func:`scoreable_tiles`), and the 477 part-ocean test tiles are
+dropped whole.
+
+The filter is on the **tile** and not on the placement, which is the design and not a shortcut —
+:func:`scoreable_tiles` records the measurement that settled it.
+
+The **bank's** 20,000 head-train tiles are *not* filtered, and #174 settled that rather than
+letting it stand as an oversight: the same contamination is there, but what it costs training is
+0.128% of the elevation-loss mass, where one entirely-fill *eval* instance is a NaN through a
+whole cell of the results table. :func:`freeze_bank` carries the measurement and the trade.
 
 ## §3.3's real family, in the same five columns
 
@@ -313,7 +330,7 @@ def check(mask: np.ndarray, *, bucket: str, geometry: Masks | None = None) -> np
     the array in hand. Called on **every** draw (:func:`draw_from_seed`), and public so that a
     reader of the committed column can make the *other* claim — that the artifact every arm
     scores against satisfies them — against the decoded rows rather than against the generator's
-    word. `tests/test_benchmark_masks.py` makes exactly that pass over all 30,000.
+    word. `tests/test_benchmark_masks.py` makes exactly that pass over all 27,138.
     """
     geometry = Masks() if geometry is None else geometry
     area = _check_placement(mask, bucket=bucket, geometry=geometry)
@@ -1082,7 +1099,7 @@ def _is_the_same_draw(path: Path, rows: Sequence[MaskRow], metadata: Mapping[str
     that guard's default, and the right answer for every artifact whose serialization is a
     function of its content — would here answer "is this the same draw, written by this
     pyarrow?", and a library upgrade would then refuse a freeze that had re-derived the identical
-    30,000 masks. The draw is the five columns plus the generator and the config hash that
+    27,138 masks. The draw is the five columns plus the generator and the config hash that
     produced them, and that is what is compared.
     """
     import pyarrow.parquet as pq
@@ -1133,7 +1150,11 @@ class EvalMaskList:
     rows: int
     md5: str
     artifact_hash: str
+    #: Test tiles a synthetic void was actually drawn on — :func:`scoreable_tiles`' output.
     tiles: int
+    #: Test tiles the committed list named, clean or not. Recorded rather than differenced at
+    #: the print, on §3.3's convention: what a stage excluded is a count, never a silence.
+    listed_tiles: int
     seconds: float
     real: RealFamily
 
@@ -1142,7 +1163,7 @@ def real_family(cfg: BenchmarkConfig, pool: HostPool, bands: Bands) -> RealFamil
     """§3.3's half of the list, off this box's fetched granules.
 
     Refused rather than skipped when the granules are not here. A `freeze` that wrote the
-    synthetic 30,000 and quietly left the real family out would produce a perfectly well-formed
+    synthetic 27,138 and quietly left the real family out would produce a perfectly well-formed
     eval mask list, of a benchmark missing the arm C4 is claimed on — the same failure
     `benchmark.launch` refuses one stage up when it will not let a partial freeze exit 0.
     """
@@ -1164,8 +1185,81 @@ def real_family(cfg: BenchmarkConfig, pool: HostPool, bands: Bands) -> RealFamil
     )
 
 
+def scoreable_tiles(tile_ids: Iterable[str], corpus_dir: Path | str) -> list[str]:
+    """The listed test tiles §3.2 may draw a synthetic void on: the ones that are clean ground.
+
+    :func:`benchmark.voids.eligible` — all-land, water flag clear — which is the predicate §5
+    cuts its band edges over and the one §3.3's :class:`HostPool` already transplants onto. This
+    is the synthetic half applying it too, and until it did the two halves of one artifact were
+    drawn over two different populations: 5,000 tiles for the synthetic rows, the 4,523 clean
+    ones for the real rows. The module docstring's claim that a real row and a synthetic row
+    "differ in the shape of the void and in nothing else about how they were produced" is what
+    that divergence quietly cost, and what this restores.
+
+    ## What it is fixing
+
+    A synthetic void is placed by geometry alone. :func:`draw_from_seed` takes a seed and returns
+    a mask; it never opens the tile, and neither :func:`check` nor anything downstream of it can
+    see that the pixels underneath are Copernicus's painted ocean fill rather than terrain. On
+    the #150 draw, **400** of 30,000 instances held some ocean, **39** were mostly ocean, and
+    **8** were entirely ocean.
+
+    The 8 are the ones that break something. ADR-0001 §3 masks the fill *before* differencing, so
+    a void with no land under it leaves ``slope_rmse``, ``slope_rmse_eroded``, ``seam_gap``,
+    ``aspect_error`` and ``profile_curvature`` undefined — and one NaN is enough to take a whole
+    cell of the results table with it, because the table means these columns. The elevation
+    columns are quieter and not worse: they stay finite and read ~0 m of error for having
+    interpolated ocean fill across ocean fill. Measured with A1 the 8 score 0.025 m against a
+    population mean of 14.4 m, which moves a cell mean by ~0.01 m. That is a rounding error on
+    the number, and the reason to care is not its size — those instances are not measuring
+    anything, and every arm is flattered by them about equally, so what they cost is meaning
+    rather than rank.
+
+    ## Why the tile and not the placement
+
+    A land predicate inside :func:`draw_from_seed`'s retry loop is the other repair, and it was
+    measured before this one was written. Over the affected tiles' 672 cells it refuses **152**
+    (22.6%) after :data:`MAX_ATTEMPTS`, **114** of them in the large bucket, because a 158 px
+    void does not fit the land of a 26%-land tile at any placement at all. That does not fail
+    loudly — it removes the large bucket from precisely the coastal tiles it keeps in the other
+    two, which is a terrain-composition difference between buckets, in the axis C1 and C4 read,
+    introduced by the repair. It also breaks :func:`eval_rows`' one-row-per-tile-per-bucket
+    balance, ends the property that a row is reproducible from its own seed (the mask would
+    become a function of the corpus), and moves the attempt counts :data:`MAX_ATTEMPTS`
+    documents from 1.000 to 2.898.
+
+    Dropping the tile costs 477 of 5,000 and keeps every one of those properties. It removes 389
+    of the 400, **all 8** entirely-ocean and **all 39** mostly-ocean instances; the 11 that
+    remain carry between 0.005% and 0.084% ocean, one to forty-two pixels, and produce no NaN in
+    any column.
+
+    ## Why the train mask bank does not call this
+
+    It has **one caller**, :func:`freeze`, and that is the settled state rather than an omission.
+    The bank carries the same contamination, but what it costs *training* is 0.128% of the
+    elevation-loss mass, where one entirely-fill eval instance is a NaN through a whole cell of
+    the results table. #174 measured both halves and left the bank unfiltered;
+    :func:`freeze_bank` is where that measurement and its trade are recorded.
+    """
+    listed = [str(tile_id) for tile_id in tile_ids]
+    column = voids.read_manifest_columns(
+        corpus_dir, ["tile_id", "land_frac", "water_affected"]
+    )
+    keep = voids.eligible(column["land_frac"], column["water_affected"])
+    clean = set(column["tile_id"][keep].astype(str))
+    scoreable = [tile_id for tile_id in listed if tile_id in clean]
+    if not scoreable:
+        raise ValueError(
+            f"none of the {len(listed):,} listed test tiles is clean ground, and §3.2 draws a "
+            f"synthetic void only where the fill it is scored against is terrain. A list whose "
+            f"every tile is water-affected or part-ocean has nothing to draw on — the same "
+            f"refusal `HostPool.from_test_list` makes about the same population"
+        )
+    return scoreable
+
+
 def freeze(cfg: BenchmarkConfig, *, real: RealFamily | None = None) -> EvalMaskList:
-    """`freeze`'s mask stage: §3.2's 30,000 synthetic rows and §3.3's real family, in one file.
+    """`freeze`'s mask stage: §3.2's 27,138 synthetic rows and §3.3's real family, in one file.
 
     Reads the **committed file** rather than re-drawing the tiles, on the contract family's one
     rule (ADR-0005 §5): the committed file is what later phases re-read. So a `freeze` that failed
@@ -1176,6 +1270,12 @@ def freeze(cfg: BenchmarkConfig, *, real: RealFamily | None = None) -> EvalMaskL
     acceptance criterion), which is what makes C4's ordering claim confound-free by construction:
     a real row and a synthetic row differ in the shape of the void and in nothing else about how
     they were produced.
+
+    Both halves are drawn over the **same** population, which is :func:`scoreable_tiles`'
+    subject: the committed test list filtered through :func:`benchmark.voids.eligible`. That is
+    what makes the confound-free claim above true of the tile as well as of the generator — the
+    real family was already restricted to clean hosts by :meth:`HostPool.from_test_list`, and
+    for a stretch the synthetic half was not.
 
     ``real`` is the seam the artifact-mechanics tests drive: passing a family skips the granule
     read, which is the only part of this stage that needs 24 granules and a COG per cell.
@@ -1188,7 +1288,8 @@ def freeze(cfg: BenchmarkConfig, *, real: RealFamily | None = None) -> EvalMaskL
             f"`python -m benchmark.launch freeze` writes §3.1's lists before it reaches this "
             f"stage, so this is a partly-frozen box rather than a missing step"
         )
-    tile_ids = [tile_id for tile_id, _ in read_tile_strata(test_list, what="test list")]
+    listed = [tile_id for tile_id, _ in read_tile_strata(test_list, what="test list")]
+    tile_ids = scoreable_tiles(listed, cfg.paths.corpus_dir)
 
     started = time.perf_counter()
     rows = eval_rows(tile_ids, cfg.masks)
@@ -1208,6 +1309,7 @@ def freeze(cfg: BenchmarkConfig, *, real: RealFamily | None = None) -> EvalMaskL
         md5=md5,
         artifact_hash=cfg.artifact_hash,
         tiles=len(tile_ids),
+        listed_tiles=len(listed),
         seconds=time.perf_counter() - started,
         real=real,
     )
@@ -1218,7 +1320,9 @@ def format_written(written: EvalMaskList, geometry: Masks) -> list[str]:
 
     The excluded counts are printed, not just committed. §3.3's histogram is only readable
     beside them: what the 224 px tile cut off at the top, and what the sub-row boundaries cut
-    out of the middle to keep real-small size-comparable to synthetic small.
+    out of the middle to keep real-small size-comparable to synthetic small. The synthetic
+    half's own exclusion is on the same line for the same reason — a reader who sees 27,138
+    where §3.1 drew 5,000 test tiles should not have to divide to find out why.
     """
     real = written.real
     synthetic = written.rows - len(real.rows)
@@ -1228,6 +1332,9 @@ def format_written(written: EvalMaskList, geometry: Masks) -> list[str]:
         f"{'':<16} {synthetic:,} synthetic — {written.tiles:,} test tiles x "
         f"{len(geometry.synthetic_families)} families x {len(geometry.buckets)} buckets, drawn "
         f"in {written.seconds - real.seconds:.1f} s",
+        f"{'':<16} {written.listed_tiles - written.tiles:,} of {written.listed_tiles:,} listed "
+        f"test tiles excluded as part-ocean or water-affected — a synthetic void is drawn on "
+        f"the clean ground §3.3's hosts come from, never on painted fill",
         f"{'':<16} {len(real.rows):,} real — transplanted from {real.cells} granules onto "
         f"{real.hosts:,} stratum-matched clean test tiles (at most {real.max_reuse} each), "
         f"cropped and pasted in {real.seconds:.1f} s",
@@ -1249,7 +1356,7 @@ def format_written(written: EvalMaskList, geometry: Masks) -> list[str]:
 # it. The determinism contract survives intact: the mask sequence a run sees is still a committed
 # input, its *hash* rather than its bytes.
 #
-# Everything here is streamed. The eval list materializes its 30,000 rows and compares them to
+# Everything here is streamed. The eval list materializes its 27,138 rows and compares them to
 # what is committed (:func:`_is_the_same_draw`); at 1,000,000 rows of RLE text that would be
 # several GB of Python objects, so the bank is written a row group at a time and identified by a
 # rolling hash over the rows instead.
@@ -1627,6 +1734,70 @@ def freeze_bank(cfg: BenchmarkConfig) -> TrainMaskBank:
     *There is no sidecar, or the bank is gone or is not the one the sidecar describes.* Drawn,
     checked against the committed draw hash if there is one, and the sidecar written with the
     md5 the bank came out as here.
+
+    ## Why this reads the head-train list whole, where the eval half filters
+
+    :func:`freeze` puts its test list through :func:`scoreable_tiles` and this does not. The
+    asymmetry is deliberate, and #174 measured it rather than leaving it to be inherited. This
+    docstring is where those measurements live; the other places that mention the decision cite
+    it rather than restating the figures.
+
+    **The contamination is real and is here.** Of the committed 1,000,000 banked draws,
+    **11,852 (1.19%)** hold some painted fill, **754 (0.075%)** are mostly fill, and **117
+    (0.012%)** are entirely fill, those 117 spread over 72 tiles. #150 measured 400 (1.33%), 39
+    (0.130%) and 8 (0.027%) of 30,000 on the unfiltered eval half, so the bank is lower on all
+    three — about half on the latter two. Some of that is the head-train split being the cleaner
+    of the two (**588** of 20,000 tiles carry any fill, against 165 of 5,000), but an 11% gap in
+    tile rate does not explain a 2x gap in instance rate, and #174 did not chase the remainder:
+    the decision below does not turn on it.
+
+    Three tile counts appear here and they are three different predicates, so they do not
+    reconcile by arithmetic: **588** carry *any* painted fill (``land_frac < 1.0``); **492** fall
+    under :data:`benchmark.voids.LAND_FRAC_MIN` (``land_frac < 0.999``), which is the threshold
+    that actually rejects; and **1,157** is what :func:`benchmark.voids.eligible` rejects in
+    total, being the wider test — under the threshold *or* water-flagged — which adds 942
+    water-flagged tiles overlapping the 492. Filtering as :func:`freeze` does would drop all
+    1,157, the 96 that carry fill without failing the threshold included.
+
+    **Nor are those pixels inert**, which is the thing that looks true and is not. A void
+    straddling a coastline has **land** in the boundary ring :mod:`benchmark.fill` interpolates
+    from, so the A1 fill laid over the ocean part is terrain while the truth there is a painted
+    0 m. Measured per-pixel, painted fill carries a **13.74 m** learning target against the
+    bank's own 15.85 m — so a part-ocean draw does ask the head to reproduce a constant, at very
+    nearly full strength. Only a void that is *entirely* fill is inert, its target 0.0036 m, and
+    there are 117 of those.
+
+    **What settled it is the magnitude, not the kind.** Painted fill is **0.148%** of the bank's
+    void pixels and **0.128%** of the elevation-loss mass those void pixels carry. (The elevation
+    half:
+    §4.1's loss is masked L1 in metres *plus* ``slope_weight`` x a Sobel term, and #174 measured
+    the L1 term. The slope term is weighted 0.1 and the argument has three decimal orders of
+    headroom, so nothing here turns on the part not measured.)
+
+    Against that, filtering the tile costs **1,157 of 20,000** head-train tiles — and, measured
+    in the same unit as the 0.128%, **5.76%** of the bank's elevation-loss mass. That is **45x
+    more signal discarded than contamination removed**, and the ratio is the whole argument.
+
+    It is not a case of discarding poor tiles, either, which is the reply this invites: the 1,157
+    carry **15.78 m** per void pixel against the kept tiles' **15.89 m**, so what filtering throws
+    away is ordinary training signal and not marginal coastal flatland. It would also take §3.1's
+    label-efficiency rungs off 1k/5k/20k to 942/4,711/18,843 — the lists are set-nested and the
+    filter bites each at ~5.8%, so the rungs stay nested but stop being round. Filtering the
+    *draw* instead keeps the tiles and the rungs, but makes the bank a function of the corpus,
+    which :func:`draw_from_seed` is written not to be.
+
+    And neither repair changes a scored number. Every eval tile is already clean ground, so what
+    these draws teach is a behaviour the results table never exercises: they are noise and spent
+    capacity at roughly one part in 800, not a bias on anything reported. Set beside that, any
+    change here re-hashes the draw and so invalidates the **training** of every arm that has run
+    — A3 (#166), A4 (#160), A5 (#161), A6 (#159), A7 (#162) and the label sweep (#165) — rather
+    than merely their scoring, because `launch run` trains before it scores and there is no
+    score-from-checkpoint path.
+
+    So the bank draws over §3.1's list whole.
+    ``test_the_bank_banks_the_tiles_the_eval_half_would_drop`` pins the *shape* of that — every
+    listed tile banked at K rows even when ineligible — which is as much as a test can hold; the
+    figures above are measurements against the committed artifact, not assertions.
     """
     directory = Path(cfg.paths.artifacts_dir)
     head_train = directory / TILE_LIST_NAMES["20k"]

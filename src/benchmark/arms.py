@@ -115,6 +115,16 @@ class Encoder:
     pos_encoding: str
     #: The :class:`benchmark.config.Paths` field naming this encoder's checkpoint.
     checkpoint_field: str
+    #: The :class:`benchmark.config.Paths` field naming this encoder's **pretraining**
+    #: checkpoint — encoder *and* decoder — or ``None`` for a family that has none.
+    #:
+    #: A second field rather than a second value of :attr:`checkpoint_field`, because on a given
+    #: box they are two different states of two different files. §14 exports encoder-only weights
+    #: and discards the decoder, so the release `encoder.pt` every other arm initializes from
+    #: cannot drive A2: zero-shot inpainting *is* the pretrained decoder (§4.3). Declared here so
+    #: the resolution line names the file before a run spends anything, rather than a `load` deep
+    #: inside the pass discovering that 74 tensors are absent.
+    mae_checkpoint_field: str | None = None
     #: One of :data:`POS_EMB_DERIVATIONS` — how the tensor the model *runs with* is derived from
     #: the one above. ADR-0011 Decision 2 is a value of this field and not a line in extraction
     #: code, because it is a fact about this encoder that a reader has to be able to find from
@@ -200,6 +210,21 @@ class Encoder:
 DEMAE_R5_MD5: Final = "3ec5ebc72fa28c43fe88f67692d9b41a"
 DEMAE_R4_MD5: Final = "59e8346c4b08e1ab4fedd44f0802e12b"
 
+#: `mae_vit-base-p16_8xb512-fp16-coslr-1600e_in1k_20220825-f7569ca2.pth` — the published
+#: mmselfsup ImageNet-1k MAE that A6 reads and that R4 warm-started from.
+#:
+#: The value of `pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E.md5`, **quoted rather than imported**,
+#: and pinned against it by a test — :attr:`Encoder.timm_model`'s rule, applied for
+#: :attr:`Encoder.timm_model`'s reason. Importing it would put ``pretrain.init`` on this
+#: module's import path, and that module imports torch at its top; this registry is read by
+#: `freeze` and by A1's scoring path, which §3.4 keeps torch-free so they run on a box with no
+#: CUDA stack. A test is the cheap half of that trade and the copy is the dear half.
+#:
+#: The spec it is quoted from is where the rest of this file's identity lives — the URL, the
+#: 484,833,387 bytes, the Apache-2.0 licence and that licence's source — because P101 spent a
+#: ticket establishing that the licence is why this checkpoint was chosen.
+IMAGENET_MAE_MD5: Final = "91ecc0345a6d6ecefe9c59041841f180"
+
 #: `TerraMind_Tokenizer_DEM.pt` — the whole 1,145,511,376-byte tokenizer, of which A5 and A9 read
 #: the 90.2 M-parameter `encoder.` half (p118 §8). Published rather than observed, on
 #: :attr:`Encoder.checkpoint_md5`'s rule: the file is public, Apache-2.0 and ungated, at
@@ -218,6 +243,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d",
         checkpoint_field="demae_r5_checkpoint",
+        mae_checkpoint_field="demae_r5_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R5_MD5,
     ),
@@ -229,6 +255,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # *transpose* of MAE's (P102 §4). Every name and every shape matches under either.
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="demae_r4_checkpoint",
+        mae_checkpoint_field="demae_r4_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R4_MD5,
     ),
@@ -280,10 +307,36 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # key map turn it into the single-channel timm encoder A6 reads; `pretrain.init` owns
         # both, and `benchmark.extract` reuses them rather than writing a second map.
         checkpoint_format="mmselfsup_rgb",
-        # Unpinned here rather than quoted from `pretrain.init.KNOWN_CHECKPOINTS`: that md5 is
-        # the 485 MB *full* MAE file, and what A6 reads is the encoder half of it. The value
-        # goes in the moment a box mounts one and `freeze` records what it froze against.
-        checkpoint_md5=None,
+        # **Measured 2026-09-01 (#159)**, on the encoder `benchmark.extract` actually builds, and
+        # it is the published count minus §8's collapse rather than a number this registry
+        # guessed: mmselfsup publishes 85,798,656 for the RGB backbone
+        # (`pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E.encoder_parameters`), and folding the
+        # 3-channel patch embed down to one drops 768x(3-1)x16x16 = 393,216 of them. A test pins
+        # that arithmetic, so this stays a derivation and not a transcription.
+        #
+        # It was `None` until A6's first real cells ran, and §6 item 4 prints parameter counts
+        # **total and trainable** — so A6's row was printing an em-dash where A4's prints 86.4M,
+        # which is the misreading that item exists to prevent.
+        params=85_405_440,
+        # **Pinned 2026-09-01 (#159).** This entry read "unpinned ... that md5 is the 485 MB
+        # *full* MAE file, and what A6 reads is the encoder half of it", and the second clause
+        # confuses what A6 *uses* with what a box *mounts*. `checkpoint_format` here is
+        # `mmselfsup_rgb`, and `benchmark.extract._build_timm` reads the whole published file
+        # and picks `backbone.` out of it (`_timm_state_from_mmselfsup`) — so the file at
+        # `paths.imagenet_mae_checkpoint` **is** the 485 MB one, and this is its md5.
+        #
+        # The same sentence also said the value "goes in the moment a box mounts one and
+        # `freeze` records what it froze against", which `benchmark.extract.build_spec` does not
+        # do: it copies this field into the spec and computes an observed md5 only to *check* a
+        # pin, so an unpinned encoder produces a spec whose `checkpoint_md5` is null — and
+        # `Extractor._checked_path` then refuses to load it at all. A6 was unrunnable until this
+        # line moved, which is what found it.
+        #
+        # Quoted from `pretrain.init.MMSELFSUP_MAE_VIT_B16_1600E` — the same published artifact,
+        # already carrying its URL, its 484,833,387 bytes, its Apache-2.0 licence and that
+        # licence's source, because P101 spent a ticket establishing that the licence is why this
+        # checkpoint was chosen. Verified against a downloaded copy rather than transcribed.
+        checkpoint_md5=IMAGENET_MAE_MD5,
     ),
     # A9's entry. Same file, same 90.2 M-parameter encoder, same diet — what differs is what the
     # arm does *after* the features (§1: encode, FSQ, diffusion decode), which is not something
@@ -359,6 +412,47 @@ class Arm:
         is still refused for want of a bank.
         """
         return self.trains == "nothing"
+
+    @property
+    def trains_head(self) -> bool:
+        """Does this arm train §4.1's shared head? A4, A5, A6 and the ViT-S appendix cell do.
+
+        :attr:`is_inference_only`'s sibling and its argument applied a second time (#159): five
+        separate questions are asked of it — what a row's parameter pair is, whether the
+        resolution line prints §4.1's frozen recipe, whether `run` checks that recipe against the
+        frozen one, whether `run` trains before it scores, and what the eval pass is handed. A6
+        answering four of the five is an arm that trains a head nothing checks the recipe of, and
+        the string comparison spelled at each site is one typo away from exactly that.
+        """
+        return self.trains == "head"
+
+    @property
+    def trains_everything(self) -> bool:
+        """Does this arm train §4.4's from-scratch UNet? A7, and only A7 (#162).
+
+        :attr:`trains_head`'s sibling and its argument a third time: three questions are asked
+        of it — what A7's parameter pair is, whether `run` trains before it scores, and what the
+        resolution line prints about the recipe it trains under — and the string comparison
+        spelled at each site is one typo away from an arm that scores an untrained UNet.
+        """
+        return self.trains == "everything"
+
+    @property
+    def runs_pretrained_decoder(self) -> bool:
+        """Does this arm run the pretraining **decoder**, as pretrained? A2, and only A2.
+
+        Read off two declared fields rather than off the name, on :func:`benchmark.artifacts.
+        _required_for`'s rule: ``token_drop`` is the convention whose output *is* the decoder's,
+        and :attr:`is_inference_only` is what says nothing was retrained on the way. A3 shares
+        the convention and trains ``encoder+decoder``, so it initializes a decoder rather than
+        running one, and answers ``False`` here — which is right: what a fine-tune needs from a
+        checkpoint is its own ticket's question (#162), not this one's.
+
+        The consequence is a second file. §14 exports encoder-only weights, so an arm for which
+        this is true cannot be driven by the release `encoder.pt` every other arm reads
+        (:attr:`Encoder.mae_checkpoint_field`).
+        """
+        return self.input_convention == "token_drop" and self.is_inference_only
 
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:
@@ -503,28 +597,52 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     misreading.
 
     ``None`` is *not counted here yet*, and it is deliberate on :attr:`Encoder.params`' own rule:
-    a count this registry guessed would print as a measurement. Three cases are genuinely known
+    a count this registry guessed would print as a measurement. Four cases are genuinely known
     and are returned as numbers:
 
     * **an arm with no encoder that trains nothing** — A1's classical interpolation, which has no
       parameters at all, so both counts are a true 0 rather than an unknown;
     * **an arm that trains nothing over a counted encoder** — A2 zero-shot, whose total is the
       encoder's and whose trainable half is exactly 0;
-    * **the trainable half of any inference-only arm**, which is 0 whatever its encoder costs.
+    * **the trainable half of any inference-only arm**, which is 0 whatever its encoder costs;
+    * **an arm that trains §4.1's head over a counted encoder** — A4, A5 and A6, whose trainable
+      half is :func:`benchmark.head.parameter_count` at that encoder's width and whose total is
+      that plus the frozen encoder. #159 built the head, so these stopped being ``None``.
+    * **the from-scratch arm** — A7, whose total and trainable are both
+      :func:`benchmark.unet.parameter_count`, because it runs no encoder and trains every
+      parameter it has. #162 built the UNet, so this stopped being ``None``.
 
-    Everything else waits on the module that builds the trainable part — the shared head (#159),
-    A3's decoder, A7's UNet (#162) — and reports ``None`` until then rather than a plausible
-    number nothing measured. `run` records whatever is known, so A1's row carries its pair today
-    and A4's fills in when the head exists.
+    **A7's two numbers are equal, and that is the point rather than a degenerate case.** The pair
+    §6 item 4 prints is what makes the table legible *across* arms: A7 at (17.5M, 17.5M) beside
+    A4 at (86.4M, 1.18M) is the sentence §4.4 rewrote its capacity anchor into — an order of
+    magnitude more trained, at a fifth of the total. A column of totals alone reverses it.
+
+    What still waits on its own module is A3's fine-tuned decoder (#166), which reports ``None``
+    rather than a plausible number nothing measured.
     """
+    # Deferred so that importing this registry stays free: it is a declarative module with no
+    # dependencies at all, and `benchmark.head` pulls in numpy and `dataset.config`. Everything
+    # that asks for a parameter count is already paying for both.
+    from . import head, unet
+
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
     trainable = 0 if arm.is_inference_only else None
+    if arm.trains_everything:
+        # Torch-free arithmetic over §4.4's shape — see `unet.parameter_count`.
+        trainable = unet.parameter_count()
+    if arm.trains_head and encoder is not None:
+        # Torch-free arithmetic over §4.1's four stage dimensions — see `head.parameter_count`.
+        # The width is the *only* thing that differs between A4, A5 and A6 here, which is the
+        # same sentence C1 rests on, arriving as a number.
+        trainable = head.parameter_count(encoder.width)
     if encoder is None:
-        # A1 and A7. A1 trains nothing and runs no encoder, so it genuinely has none; A7 trains
-        # a UNet this registry does not count.
-        total = 0 if arm.is_inference_only else None
+        # A1 and A7. A1 trains nothing and runs no encoder, so both its counts are a true 0;
+        # A7 runs no encoder either, so its total *is* the UNet it trains.
+        total = 0 if arm.is_inference_only else trainable
     elif arm.is_inference_only:
         total = encoder.params
+    elif arm.trains_head and encoder.params is not None:
+        total = encoder.params + trainable
     else:
         total = None
     return {"total": total, "trainable": trainable}

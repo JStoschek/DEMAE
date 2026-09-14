@@ -24,6 +24,7 @@ from pretrain.config import Architecture, RunConfig
 from pretrain.model import (
     MaskedAutoencoder,
     is_decoder_parameter,
+    keep_masking,
     random_masking,
     sincos2d_pos_embed,
 )
@@ -436,3 +437,111 @@ def test_gradients_reach_the_encoder_and_the_decoder(vit_s, batch):
         assert vit_s.mask_token.grad is not None  # the decoder's stand-in for a hidden patch
     finally:
         vit_s.zero_grad(set_to_none=True)
+
+
+# --- Masking from a given keep-set (#167) -------------------------------------
+#
+# A2 drops the patches a void touches, so the mask is *read off the void* rather than drawn.
+# The properties that matter are the ones `random_masking` gets for free from its argsort and
+# this path has to earn: the kept tokens are the ones the keep-set names, the mask is its
+# complement in MAE's polarity, and `ids_restore` puts the sequence back in patch order.
+
+
+def _keep(rows: list[list[int]]) -> torch.Tensor:
+    return torch.tensor(rows, dtype=torch.bool)
+
+
+def test_keep_masking_keeps_exactly_the_tokens_the_keep_set_names():
+    x = torch.arange(2 * 5 * 3, dtype=torch.float32).reshape(2, 5, 3)
+    keep = _keep([[1, 0, 1, 0, 1], [0, 1, 1, 0, 1]])
+    kept, mask, _ = keep_masking(x, keep)
+
+    assert kept.shape == (2, 3, 3)
+    for n in range(2):
+        wanted = x[n][keep[n]]
+        assert torch.equal(kept[n], wanted)
+    # MAE's polarity: 1 where the patch was hidden from the encoder.
+    assert torch.equal(mask, (~keep).to(mask.dtype))
+
+
+def test_keep_masking_restores_the_original_patch_order():
+    x = torch.randn(2, 6, 4, generator=_generator(3))
+    keep = _keep([[1, 0, 0, 1, 1, 0], [0, 0, 1, 1, 0, 1]])
+    kept, _, ids_restore = keep_masking(x, keep)
+
+    # The decoder's own move: concatenate a stand-in for every hidden token, then unshuffle.
+    filler = torch.full((2, 3, 4), float("nan"))
+    restored = torch.gather(
+        torch.cat([kept, filler], dim=1), 1, ids_restore.unsqueeze(-1).expand(-1, -1, 4)
+    )
+    for n in range(2):
+        assert torch.equal(restored[n][keep[n]], x[n][keep[n]])
+        assert restored[n][~keep[n]].isnan().all()
+
+
+def test_keep_masking_is_deterministic_and_draws_nothing():
+    x = torch.randn(1, 8, 2, generator=_generator(11))
+    keep = _keep([[1, 1, 0, 0, 1, 0, 1, 0]])
+    first = keep_masking(x, keep)
+    torch.rand(1000)  # move the ambient stream; a path that drew would notice
+    second = keep_masking(x, keep)
+    for a, b in zip(first, second):
+        assert torch.equal(a, b)
+
+
+def test_keep_masking_refuses_rows_that_keep_different_counts():
+    """One gather over a batch needs one width, and a ragged keep-set is a silent truncation."""
+    x = torch.randn(2, 4, 2, generator=_generator(5))
+    with pytest.raises(ValueError, match="keeps 3 tokens and row 1 keeps 2"):
+        keep_masking(x, _keep([[1, 1, 1, 0], [1, 0, 1, 0]]))
+
+
+def test_keep_masking_refuses_an_empty_keep_set():
+    x = torch.randn(1, 4, 2, generator=_generator(5))
+    with pytest.raises(ValueError, match="no visible token"):
+        keep_masking(x, _keep([[0, 0, 0, 0]]))
+
+
+def test_encode_visible_runs_the_encoder_over_the_kept_tokens_only(vit_s):
+    tiles = torch.randn(1, 1, 224, 224, generator=_generator(13))
+    keep = torch.zeros(1, vit_s.n_patches, dtype=torch.bool)
+    keep[0, :40] = True
+
+    latent, mask, ids_restore = vit_s.encode_visible(tiles, keep)
+
+    assert latent.shape == (1, 1 + 40, vit_s.arch.encoder_dim)  # CLS + the kept tokens
+    assert mask.sum().item() == vit_s.n_patches - 40
+    assert torch.equal(torch.sort(ids_restore, dim=1).values, torch.arange(vit_s.n_patches)[None])
+
+
+def test_encode_visible_reconstructs_what_the_masked_encoder_does_at_the_same_keep_set(vit_s):
+    """Handed the mask a draw produced, this path predicts the same tile.
+
+    Not the same `ids_restore`, and that is the point: the two shuffles are different
+    permutations of one keep-set, so each undoes its own. What has to agree is what a caller
+    reads — the mask, and the patches that come out of the decoder in patch order. The encoder
+    is permutation-equivariant over its token set because the position is added in
+    :meth:`embed_tokens`, *before* the mask, so the ordering inside the shuffle cannot matter
+    and this test is what says so.
+    """
+    tiles = torch.randn(1, 1, 224, 224, generator=_generator(17))
+    drawn, mask, ids_restore = vit_s.forward_encoder(tiles, generator=_generator(23))
+    given, mask_b, restore_b = vit_s.encode_visible(tiles, mask == 0)
+
+    assert torch.equal(mask_b, mask)
+    assert not torch.equal(restore_b, ids_restore), "two shuffles of one keep-set"
+    assert torch.allclose(
+        vit_s.forward_decoder(drawn, ids_restore),
+        vit_s.forward_decoder(given, restore_b),
+        atol=1e-5,
+    )
+
+
+def test_encode_visible_feeds_the_decoder_a_full_grid(vit_s):
+    tiles = torch.randn(1, 1, 224, 224, generator=_generator(29))
+    keep = torch.zeros(1, vit_s.n_patches, dtype=torch.bool)
+    keep[0, 10:150] = True
+
+    latent, _, ids_restore = vit_s.encode_visible(tiles, keep)
+    pred = vit_s.forward_decoder(latent, ids_restore)
+    assert pred.shape == (1, vit_s.n_patches, vit_s.patch_dim)
