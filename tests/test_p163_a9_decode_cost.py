@@ -27,6 +27,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from typing import Final
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,9 @@ EVAL_INSTANCES = 39_978
 #: TerraMind's own `num_eval_timesteps`, which is what makes A9 the tokenizer *as published*.
 TIMESTEPS = 50
 
+#: §7's rented-card rate, the multiplier on every dollar in its table.
+USD_PER_HOUR = 0.4016
+
 
 def driver():
     """The probe driver, loaded by path — `scripts/` is not a package and should not become one."""
@@ -58,6 +62,58 @@ def driver():
 
 def record() -> dict:
     return json.loads(RECORD_PATH.read_text())
+
+
+#: §7's budget table header, which is what locates the table rather than a line number.
+_BUDGET_HEADER = "| Item | Count | 5090-min | Notes |"
+
+#: The rows that make up the GPU total, by the prefix each item cell starts with. Pinned rather
+#: than inferred so that a row appearing, vanishing or changing units fails loudly here instead of
+#: quietly re-defining what the total is a total *of* — #175's lesson, applied to the test.
+_GPU_ITEMS: Final = (
+    "A7 UNet",
+    "Head tuning",
+    "Head training",
+    "Label-efficiency sweep",
+    "Inference over the eval instances",
+    "A3 fine-tune",
+    "A9 ",
+)
+
+
+def budget_minutes(plan: str) -> dict[str, float]:
+    """§7's GPU rows as ``{item: 5090-minutes}``, excluding the total row and the CPU rows.
+
+    Reads the table §7 prints rather than restating its arithmetic, so a re-derived line (#175
+    moved A7 by 160 minutes) updates the expectation instead of failing it.
+
+    A row is a GPU row when its cost cell is a **bare** number: the CPU rows are excluded because
+    they carry a unit their neighbours do not — ``1.9-5.1 h`` for eval, ``21.1 min`` for the mask
+    bank. That is a real property of the column (5090-min is the header, so a unit is redundant
+    and only the non-GPU rows spell one), but it is a weak one: a mask-bank row rewritten as a
+    bare ``21.1`` would be summed into the GPU total silently. :data:`_GPU_ITEMS` pins the row
+    set so that failure is loud instead.
+    """
+    lines = plan.splitlines()
+    start = lines.index(_BUDGET_HEADER)
+    rows: dict[str, float] = {}
+    for line in lines[start + 2 :]:  # +2 skips the header's own separator row
+        if not line.startswith("|"):
+            break
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        item, minutes = cells[0].strip("*"), cells[2].strip().strip("*")
+        if item.startswith("GPU total"):
+            continue
+        try:
+            rows[item] = float(minutes)
+        except ValueError:
+            continue  # a CPU row, priced with an explicit unit
+    matched = {prefix for prefix in _GPU_ITEMS for item in rows if item.startswith(prefix)}
+    assert matched == set(_GPU_ITEMS) and len(rows) == len(_GPU_ITEMS), (
+        f"§7's GPU rows parsed as {sorted(rows)}; expected the {len(_GPU_ITEMS)} named in "
+        "_GPU_ITEMS. A row was added, removed, or changed units — update _GPU_ITEMS deliberately."
+    )
+    return rows
 
 
 # --- 1. the projection, checked as arithmetic on numbers this file chooses
@@ -336,8 +392,22 @@ def test_section_7s_a9_row_is_no_longer_unpriced():
     # cannot still be standing.
     assert "The one number that could still move the total is A9's." not in plan
     # And the GPU total now contains it, which it could not while the line was unpriced.
+    #
+    # Summed from the table's own GPU rows rather than compared against a hard-coded pre-A9
+    # total. This read `2.42 + ...` until #175 re-measured A7 and moved that total by 160
+    # minutes, which had made the assertion a second, stale copy of the very number §7 states —
+    # the same "one primitive, two places" failure #175 is about. Summing keeps it honest across
+    # the next re-derivation instead of breaking on it.
     total = next(line for line in plan.splitlines() if line.startswith("| **GPU total**"))
-    assert f"{2.42 + r['projection']['host_gpu_hours']:.2f} h" in total
+    rows = budget_minutes(plan)
+    gpu_minutes = sum(rows.values())
+    assert f"{gpu_minutes:.1f} min = {gpu_minutes / 60:.2f} h" in total
+    assert f"${gpu_minutes / 60 * USD_PER_HOUR:.2f}" in total
+    # The cell also splits itself into "lines above" plus A9, which is the split that made A9's
+    # arrival visible in the first place. Checked too, so a typo in either half cannot pass by
+    # agreeing with nothing.
+    above = gpu_minutes - next(v for k, v in rows.items() if k.startswith("A9"))
+    assert f"{above:.1f} min / ${above / 60 * USD_PER_HOUR:.2f}" in total
 
 
 def test_the_memo_quotes_the_records_numbers_rather_than_its_own():

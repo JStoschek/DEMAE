@@ -6,6 +6,29 @@
 quoted below, plus the projection derived from them.
 **Amends:** [`task1-void-fill-plan.md`](task1-void-fill-plan.md) §4.1 and §7.
 
+> **Partly superseded, 2026-09-14 — [#175](https://github.com/JStoschek/DEMAE/issues/175).**
+> **Primitive 3 (the UNet epoch) measured 4.5x higher than this memo projected** — 68.9 s, not
+> 15.4 s — and everything below that multiplies it is low by that factor on the A7 line. The
+> live GPU total is the plan's **5.40 h / $2.17**; this memo's 2.56 h / $1.03 differs by #175
+> (+160 min on A7) *and* by two later scope changes it predates (#147's counts, #163 pricing A9),
+> so do not read the gap as all one correction.
+>
+> Specifically wrong below, beyond the A7 line itself:
+> - **§1's "scoring is the biggest single line"** (118 CPU-min "against the largest GPU line's
+>   46"): both halves fail — the largest GPU line is **206.6 min** and exceeds scoring.
+> - **§1's "overstates by 8–13x"**: against a 5.40 h total, §7's old 20–33 GPU-h was high by
+>   **3.7–6.1x**. This multiple *shrinks*; it does not scale up.
+> - **§6's "the UNet by ~6x"**: §7 guessed 4–6 h and it measures **3.44 h** — high by ~1.2–1.7x,
+>   not 6x.
+> - **§4's closing "two and a half hours … longest single job is 46 minutes"**: the 46 min was
+>   A7's whole 3-seed line, not a job. The longest job is **58 min** (one seed).
+> - **§3's "both conservative … biases every derived cost up"**: this is the claim that failed,
+>   and it failed in the direction §3 itself flagged one paragraph earlier.
+>
+> The verdict ("§7 overstates the GPU cost", "$25 is not binding") survives, as §3's own
+> sensitivity table said it would at up to 5x. This memo is kept as the record of what was
+> projected and why; the live numbers are the plan's §7.
+
 ---
 
 ## 1. Verdict
@@ -51,14 +74,27 @@ how far that is to be trusted.
 | 1 | Frozen-encoder forward, one tile, ViT-B | per tile | **0.179 ms** (5,603 tiles/s) |
 | 1 | Frozen-encoder forward, one tile, ViT-S | per tile | **0.060 ms** (16,630 tiles/s) |
 | 2 | §4.1 head, one epoch over 20k cached features | per epoch | **1.00 s** (768-d) / 0.96 s (384-d) |
-| 3 | §4.4 UNet from scratch, one epoch over 20k tiles | per epoch | **15.4 s** |
+| 3 | §4.4 UNet from scratch, one epoch over 20k tiles | per epoch | ~~15.4 s~~ → **68.9 s** |
 | 4 | A3 fine-tune, one epoch at ViT-B | per epoch | **6.66 s** |
 | 5 | Full CPU eval pass, all 32,000 eval instances | per arm-seed | **148 s** (4.6 ms/instance) |
 
+**Primitive 3 was superseded by measurement on 2026-09-14 —
+[#175](https://github.com/JStoschek/DEMAE/issues/175).** A7 was trained for real on the rented
+5090 and a UNet epoch over 20k tiles measures **68.9 s at base 48**, not 15.4 s. The struck
+figure is left visible because it is what this memo actually projected and because the *reason*
+is this memo's own: not the architecture (§2's table below built the UNet at 17,465,377
+parameters, exactly what shipped) but §3's cross-device transfer, which carried the local
+batch-32 rate across at **~97x** where the true ratio for this architecture is **21.7x**. §3
+predicted this line would be the weakest and predicted the direction; it was low by 4.5x. **Do
+not cost a new convnet arm off this table without reading §3 first** — the transformer
+primitives (1, 4) are anchored on the 5090 and stand.
+
 The shape of the answer is in the ratios, not the absolutes. **A head epoch costs one
-second.** A UNet epoch costs fifteen times a head epoch and two and a half times an A3
-fine-tune epoch — which is why the one arm with no pretraining in it is the most expensive
-thing in a benchmark about pretraining.
+second.** At the measured UNet primitive a UNet epoch costs *sixty-nine* times a head epoch and
+ten times an A3 fine-tune epoch — it read as fifteen and two and a half here — which only
+sharpens why the one arm with no pretraining in it is the most expensive thing in a benchmark
+about pretraining. (The head's own second is itself a transferred number and shares primitive 3's
+exposure; see §7 of the plan.)
 
 #120's arithmetic was right about A3 specifically: 20 epochs × 20k tiles at 3,001.2
 samples/s is **2 min 13 s**, against §7's 4–8 hours.
