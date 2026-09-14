@@ -318,6 +318,62 @@ def run_id(resolution: Resolution) -> str:
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=8).hexdigest()
 
 
+def precision_block(resolution: Resolution, agreement: Mapping[str, Any] | None) -> dict:
+    """ADR-0012 §6's measured fp32-versus-compute-dtype agreement, as the record files it.
+
+    Two fields rather than one, and for :meth:`benchmark.artifacts.Resolved.to_dict`'s reason: a
+    null figure has several readings a reader cannot tell apart, and most of them are ordinary.
+    ``absent_because`` says which one it was — this arm runs no encoder, this arm consults no
+    extractor contract, the run declared the reference dtype and there was no second number to
+    compare, or a figure that should exist did not reach the record. One further reading is not a
+    value at all: *nobody measured*, which is the ``precision`` key being absent from the record
+    altogether, and is what every record written before this block existed looks like.
+
+    **A sub-threshold figure is recorded and refuses nothing**, and that is a decision rather than
+    an omission. ``immaterial`` travels on the figure (:meth:`benchmark.extract.Extractor.
+    _precision` sets it against #134's bar), so a reader has the verdict without re-deriving it —
+    but nothing here consults it. The argument for refusing is real: a run whose own compute dtype
+    moved features below the bar is a run whose table is about different features than fp32's. It
+    is not taken, because a refusal is a registered rule and ADR-0013's register is the place a
+    rule lives; adding a thirteenth there for a gate that fires on no encoder measured so far —
+    DEMAE at mean 0.999968, TerraMind at 0.99888 — would register a bar ahead of a case for it.
+    The asymmetry worth knowing when that case arrives is in p157: TerraMind's 1st-percentile
+    token sits at **0.9853**, below the bar its own mean clears, so *which statistic* a future
+    refusal reads is the whole decision and not a detail of it.
+
+    Deliberately **not** a field of :meth:`benchmark.artifacts.Resolution.to_dict`. ADR-0012 §7
+    keeps it out of Phase 1's frozen four-field data fingerprint, which four committed artifacts
+    quote; and `run_id` hashes that payload, so a figure measured on whichever batch arrived first
+    would hand an otherwise unchanged cell a new identity every time the sample moved.
+    """
+    if resolution.encoder is None:
+        return {"agreement": None, "absent_because": "this arm runs no encoder"}
+    if not resolution.reads("extractor_spec"):
+        # A2, whose mechanism *is* the pretrained decoder (#167): the committed spec governs
+        # nothing it does, so there is no contract for a dtype to have moved the features of.
+        # Read off the same predicate that decides whether the spec is an input at all, so the
+        # two answers cannot drift apart.
+        return {
+            "agreement": None,
+            "absent_because": "this arm consults no extractor contract",
+        }
+    extract_cfg = resolution.config.extract
+    if extract_cfg.compute_dtype == extract_cfg.reference_dtype:
+        return {
+            "agreement": None,
+            "absent_because": (
+                f"the run declares the reference dtype ({extract_cfg.reference_dtype})"
+            ),
+        }
+    if agreement is None:
+        # Not "the encoder ran at one dtype" — the three cases above have already claimed every
+        # reason there was nothing to measure, so reaching here means a measurement exists in
+        # principle and did not arrive. Today that is an arm whose extractor is not reachable
+        # from a trained stack; see :func:`benchmark.launch._measured_agreement`.
+        return {"agreement": None, "absent_because": "no measurement reached the record"}
+    return {"agreement": dict(agreement), "absent_because": None}
+
+
 def run_record(
     resolution: Resolution,
     *,
@@ -328,6 +384,7 @@ def run_record(
     gates: Mapping[str, Any] | None = None,
     training: Mapping[str, Any] | None = None,
     register: Mapping[str, Any] | None = None,
+    precision: Mapping[str, Any] | None = None,
 ) -> dict:
     """The provenance payload a results table is answerable to.
 
@@ -374,6 +431,10 @@ def run_record(
         # R12's disposition, for the arm that has one (#167). Omitted rather than empty, which
         # is that ticket's own choice and is left alone.
         **({"register": dict(register)} if register else {}),
+        # ADR-0012 §6's agreement (#171), built by :func:`precision_block` — which is where the
+        # three ordinary readings of a null figure are told apart, and why a fourth one is this
+        # key's absence. Beside `resolved` rather than inside it: see that function.
+        **({"precision": dict(precision)} if precision else {}),
     }
 
 
@@ -428,6 +489,7 @@ def write(
     gates: Mapping[str, Any] | None = None,
     training: Mapping[str, Any] | None = None,
     register: Mapping[str, Any] | None = None,
+    precision: Mapping[str, Any] | None = None,
 ) -> tuple[Path, int, dict]:
     """Land one cell: the rows into the parquet, the record beside it. Returns both plus totals.
 
@@ -446,6 +508,7 @@ def write(
         gates=gates,
         training=training,
         register=register,
+        precision=precision,
     )
     append_run_record(record, run_record_path(path))
     return path, total, record

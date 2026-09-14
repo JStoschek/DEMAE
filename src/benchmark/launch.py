@@ -333,12 +333,44 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         gates=scored.gates,
         training=None if trained is None else trained.to_dict(),
         register=register,
+        precision=results.precision_block(resolution, _measured_agreement(resolution, trained)),
     )
     for line in results.format_written(path, rows=len(rows), total=total, record=record):
         print(line)
     if register is not None:
         print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
+
+
+def _measured_agreement(resolution: Resolution, trained) -> dict | None:
+    """This run's own fp32-versus-compute-dtype agreement, off the encoder that actually ran.
+
+    Read from the *trained* stack rather than from a second :class:`benchmark.extract.Extractor`
+    built here, on `_head_fill`'s rule: a figure measured on a fresh load of the same file would
+    describe a forward pass this cell never made. It is the same object the val curve was measured
+    on, which is the only one the rows are answerable to.
+
+    ``None`` from every arm with no extractor in the loop — A1, A7's scratch UNet, and the
+    inference-only arms that hand `run_pass` no trained stack. Which of those it was is
+    :func:`benchmark.results.precision_block`'s question, not this one's; all this reports is
+    whether there is a number.
+
+    **The trained stack is the only seam this reaches through, and A9 will not fit it.** A9 trains
+    nothing, so `launch` holds no :class:`benchmark.train.Trained` for it, while its eval pass does
+    run an extractor — inside the filler, which :class:`benchmark.evaluate.Pass` does not carry
+    back. So A9 would record *no measurement reached the record* for a figure that was in fact
+    taken. Left rather than plumbed because A9's input convention is unbuilt
+    (`a1_fill_through_tokenizer`, #163) and a seam added now would be a seam added against a
+    guess at what that pass looks like; the arm that builds it should carry the filler's
+    extractor out of `run_pass` and hand it here. ADR-0012 §6 requires A9's figure to be A9's own,
+    which the encoder-name key already guarantees — `terramind-tokenizer` is a separate registry
+    entry from A5's `terramind` — so what is deferred is *recording* it, never inheriting it.
+    """
+    extractor = getattr(trained, "stack", None)
+    extractor = None if extractor is None else getattr(extractor, "extractor", None)
+    if extractor is None:
+        return None
+    return extractor.precision_agreement(resolution.arm.name)
 
 
 def _tune(resolution: Resolution) -> int:
