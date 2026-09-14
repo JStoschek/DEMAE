@@ -263,11 +263,19 @@ def test_set_beats_the_cell_flag_it_duplicates(flags, capsys):
 
 
 def test_a_config_file_names_only_the_knobs_its_run_moves(box, flags, capsys):
+    """A partial dict, and the rest filled from the plan — what an arm's config file looks like.
+
+    The knob moved is §4.2's, not §4.1's. This test used `head.epochs` until #159, which froze
+    §4.1's recipe for every arm and made a moved head hyperparameter a refusal rather than a
+    config; the property being asserted here is the *plumbing*, so it moved to a group that has
+    no such guard rather than to an arm that dodges one.
+    """
     path = box / "arm.json"
-    path.write_text(json.dumps({"arm": "A6", "head": {"epochs": 5}}))
+    path.write_text(json.dumps({"arm": "A3-R5", "finetune": {"epochs": 5}}))
     launch.main(["run", "--dry-run", "--config", str(path), *flags])
     out = capsys.readouterr().out
-    assert BenchmarkConfig(arm="A6", head=BenchmarkConfig().head.replace(epochs=5)).config_hash in out
+    moved = BenchmarkConfig().finetune.replace(epochs=5)
+    assert BenchmarkConfig(arm="A3-R5", finetune=moved).config_hash in out
 
 
 # --- The far side of the seam -------------------------------------------------
