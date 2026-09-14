@@ -959,7 +959,9 @@ One head spec, frozen across arms; only the input channel width differs
   spans two orders of magnitude: a rectangle is a fraction of it and a large blob dominates
   it, because the blob family dilates a random walk to a target area. §7's table implies
   **31.2M training tile presentations**; drawn on the fly that is **8.2 CPU-hours**, against
-  the program's 2.42 GPU-hours and the 1.9–5.1 h eval line §7 already calls its largest.
+  the program's 5.09 GPU-hours and the 1.9–5.1 h eval line, which §7 called its largest until
+  [#175](https://github.com/JStoschek/DEMAE/issues/175) measured A7 at 3.44 h and put a GPU line
+  inside that range.
   (Every figure in this bullet was re-derived by
   [#151](https://github.com/JStoschek/DEMAE/issues/151): the count was counted against §7's
   table *before* §2.3's rewrite and [#147](https://github.com/JStoschek/DEMAE/issues/147), and
@@ -1589,23 +1591,39 @@ A1 from truth cannot separate the arms either.
 estimate that was high by 8 to 13x and was denominated in the wrong card at the wrong
 price: this project rents an **RTX 5090** at a real **$0.4016/hr**, not a 4090 at $0.34
 (see [`phase1-pretraining-plan.md`](../phase1-pretraining-plan.md)'s hardware line and
-§12). Every line is a measured primitive times a count, and the primitives are published so
+§12). Every line is a primitive times a count, and the primitives are published so
 any new arm can be costed without a fresh run.
+
+**Read the Notes column for which kind of primitive a line carries**
+([#175](https://github.com/JStoschek/DEMAE/issues/175), 2026-09-14). There are three kinds here,
+not two, and the middle one is why the damage is bounded:
+
+1. **Measured on the rented card.** Only **A7**, timed on the real arm.
+2. **Transferred, but anchored on the same architecture.** **A3** (read off Phase 1's own 5090
+   rates for a step p120 §3 shows is structurally identical, agreeing to 1.2%) and the
+   **inference line** (a ViT-B forward, carried at the ratio measured on a ViT-B). Same-family
+   anchor, and the one that held.
+3. **Transferred across architectures.** The **head primitive** and **A9's decode** — convnets
+   priced by a ratio anchored on a transformer. This is the kind that broke.
+
+A7 was kind 3 and turned out **4.5x low** — the single largest correction this section has taken.
+The failure mode is not arithmetic, it is a transferred number reading as a measured one, so each
+line now says which kind it is.
 
 Costed for the design §4.1 now specifies — **frozen encoder inline, no feature cache,
 training masks read from the committed bank** ([#121](https://github.com/JStoschek/DEMAE/issues/121)):
 
 | Item | Count | 5090-min | Notes |
 |---|---|---|---|
-| **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **46.1** | priciest single arm; UNet epoch is 15.4 s against the head's 1.0 |
+| **A7 UNet, 3 seeds + label sweep** | 3 x 50 ep x 20k, + 2 x 50 ep x 6k | **206.6** | priciest single arm, and now by much more than this table used to say. **Measured 2026-09-03 on the rented 5090 ([#175](https://github.com/JStoschek/DEMAE/issues/175))** — the only line here timed on a real arm instead of transferred from the laptop. A UNet epoch over 20k tiles is **68.9 s at base 48** (3 seeds: 68.1 / 69.6 / 69.0; the 118 per-epoch lines the committed logs hold span 66.4-71.0 s, so the epoch time is flat, not warming up), against the head's 1.0 and against **the 15.4 s this row carried until now — 4.5x**. Activations cost a measured **0.24 GiB/sample**, a fact about §4.4's architecture rather than about the box, and the reason the declared batch of 128 needs ~30.7 GiB and does not fit a 32 GB card: `runtime.micro_batch` splits it with the effective batch unchanged ([#162](https://github.com/JStoschek/DEMAE/issues/162)) |
 | Head tuning on A6 | 12 configs x 50 ep x 20k | 45.7 | |
 | Head training A4/A5/A6 | 4 cells x 3 seeds + 1 appendix cell x 1 seed, x 50 ep x 20k | 39.1 | 13 cell-seeds at the 3.01 min/cell-seed this line already prices *(was 14 at 42.1 until [#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S)* |
 | Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
 | Inference over the eval instances | 37 passes x **40k** | 4.4 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it. 37 is the 38 scored passes below minus A1, which runs no encoder |
 | A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
-| **GPU total** | | **163.7 min = 2.73 h** | **$1.09** at $0.4016/hr — **145.1 min / $0.97 for the lines above, plus A9's 18.6 min / $0.12 below**, which was outside this total for as long as it was unpriced *(was 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147), still excluding A9)* |
+| **GPU total** | | **324.2 min = 5.40 h** | **$2.17** at $0.4016/hr — **305.6 min / $2.05 for the lines above, plus A9's 18.6 min / $0.12 below**, which was outside this total for as long as it was unpriced *(was 163.7 min / $1.09 until [#175](https://github.com/JStoschek/DEMAE/issues/175) measured A7, and 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147), still excluding A9)* |
 | **A9 (TerraMind full tokenizer)** | **40k** instances | **18.6** | **Measured 2026-08-13 — [p163](p163-a9-decode-cost.md) ([#163](https://github.com/JStoschek/DEMAE/issues/163)).** Diffusion decode is **2.72 s/instance** on this laptop at TerraMind's own 50 timesteps, **0.31 GPU-h = $0.12** transferred at p120's ratio. Prices the *decode only* — the encoder forward is already in the inference line above, and A9 is one of its 38 passes. **The row read `unpriced`, at a guessed 1 s/instance = 11.1 GPU-h**; that guess overstates the line by 36x and is the wrong side of the device, since 1 s/instance would make the 5090 2.7x slower than the laptop this was measured on |
-| Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it; **the largest single line in the benchmark** |
+| Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it. **No longer unambiguously the largest single line**: A7 measures **3.44 h** ([#175](https://github.com/JStoschek/DEMAE/issues/175)), which sits inside this line's range, so this is the largest only at the end-to-end rate and A7 is the largest at the scoring-only one. It stays the largest *CPU* line, which is the claim that carried the argument |
 | Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **21.1 min** | **Measured by `freeze` itself**, 2026-08-13: 1,000,000 rows, **104 MB**, 21.1 min of one core, and two independent freezes produced the same md5, draw hash and byte count. The draw is **0.947 ms** on the shipped generator against the 2.00 ms p121 measured on the prototype, [#150](https://github.com/JStoschek/DEMAE/issues/150)'s one-pass dilation having roughly halved it. **Drawn on the fly instead this line would be 8.2 CPU-h** at that primitive (17.3 at p121's), since this table's own counts total **31.2M** training tile presentations — both re-derived below ([#151](https://github.com/JStoschek/DEMAE/issues/151)) |
 
 The 38 scored passes are 22 at 20k — A1; A2 and A3 at R5 and R4; A9; the four primary frozen
@@ -1620,18 +1638,80 @@ passes, *even though R4 was added*. ViT-S gave back more than R4 took. #117's st
 that attention and wall-clock are the real budget is what this line measures; the dollar column
 is not.
 
-**The budget is not a constraint and should stop being treated as one.** At $1.09 of GPU
+**Why the A7 line was wrong, measured rather than guessed**
+([#175](https://github.com/JStoschek/DEMAE/issues/175), 2026-09-14). Not the base width, which
+is the first thing to suspect and is wrong: [p120](p120-primitive-costs.md) built the UNet at
+**17,465,377 parameters** — byte-for-byte the count [#162](https://github.com/JStoschek/DEMAE/issues/162)
+later shipped at base 48 — so the measured architecture and the priced architecture were the
+same one. The error is entirely in the **cross-device transfer**. p120 timed the UNet on this
+laptop's MPS at batch 32 (13.375 samples/s, so **1,495 s** for an epoch over 20k) and carried it
+to the 5090 at the **~97x** device ratio anchored on the MAE pretraining step. The real ratio for
+this architecture is **21.7x**. The transfer was overstated by 4.5x, and that factor *is* the
+whole of the A7 error.
+
+**p120 named this exact risk and named it in the right direction**, which is why the correction
+costs a re-derivation rather than a re-measurement: its §3 says that for the head and the UNet
+"there is no same-architecture anchor", that the UNet's transfer is "the weaker of the two", and
+that convnets do not gain from `torch.compile` what transformers do. A transformer-anchored ratio
+therefore overstates the 5090's advantage on a convnet — the direction this measurement confirms.
+p120's own sensitivity table priced a 2x overstatement at 4.99 h / $2.01; the measured outcome,
+with only the UNet moving, is 5.40 h / $2.17.
+
+**The other lines, checked rather than assumed.** The rest of the GPU table was derived the same
+way, and the lines do not share the exposure equally (A9 is the third case and is taken below,
+with the paragraph that prices it):
+
+- **A3 fine-tune (6.66 s/epoch) is safe, and for a stated reason.** It needs no transfer at all:
+  p120 §3's internal check establishes that an A3 epoch *is* a pretraining epoch, so the line is
+  read straight off R0's measured **3,001.2 samples/s on the 5090 itself**. Transferred and direct
+  agreed to **1.2%** — a same-architecture, same-device anchor, which is precisely what the UNet
+  lacked.
+- **The head primitive (1.00 s/epoch) carries the same defect class and remains unmeasured — but
+  it is the smaller half of its own lines.** The head is a convnet with no same-architecture
+  anchor, so nothing in this measurement clears it. What *does* bound it is that a head line is
+  not the head primitive times a count: §4.1 runs the frozen encoder **inline**, so each 4.6 s
+  step is **1.0 s of head on top of 3.58 s of ViT-B forward** — and that forward is kind 2, the
+  anchor that held. Only **22%** of head tuning and **27%** of head training and the label sweep
+  is the exposed primitive. Scaling *that* share by the UNet's 4.5x and leaving the encoder
+  alone: head tuning 45.7 -> **80.6**, head training 39.1 -> **76.3**, label sweep 5.4 ->
+  **10.5**, and the GPU total reaches **6.69 h / $2.69**. That is the honest worst case and it
+  clears the $25 target by 9x. *(Scaling the whole line instead gives 10.6 h / $4.27 — wrong,
+  because it applies a convnet-specific error to the transformer forward that is three quarters
+  of the line, which is exactly the conflation this section is about.)* **The first head cell
+  should print its per-epoch seconds and this line should be re-derived from it**, the way this
+  one just was.
+
+The general lesson is p120's own, now with a measurement behind it: a *transferred* primitive is
+not a measured one, and §7 should say which of the two each line is. A7 is measured; A3 and the
+inference line are anchored on the same architecture; the head primitive and A9's decode are
+transferred across architectures and still owe a measurement.
+
+**The budget is not a constraint and should stop being treated as one.** At $2.17 of GPU
 against a $25 target — the CPU hours are the project's own laptop, not rent — no line here justifies a spot-instance strategy or a resume design;
 #117's standing note that *attention and wall-clock are the real budget* is now measured
 rather than asserted.
 
-**Every line is now measured** ([#163](https://github.com/JStoschek/DEMAE/issues/163),
-2026-08-13). A9 was the last open one, and this section used to end by saying so. It closes at
-**$0.12** — 11% of the GPU program rather than the 4.5x its placeholder implied — and it closes
-with room that is not worth re-checking: p120's local-to-5090 transfer would have to overstate
-that card by **201x** before A9 alone reached $25. See [p163](p163-a9-decode-cost.md) §8 for the
-sensitivity table and for what the transfer is worth, which is the same caveat p120 §3 states and
-inherits its weaker case, A9's decoder being a UNet.
+**Every line is now costed, and exactly one of them is measured on the rented card**
+([#163](https://github.com/JStoschek/DEMAE/issues/163), 2026-08-13;
+[#175](https://github.com/JStoschek/DEMAE/issues/175), 2026-09-14). *This paragraph read "every
+line is now measured" until #175, which is the distinction that failed: A7 was costed, not
+measured, and it was 4.5x out.* A9 was the last **unpriced** line. It closes at **$0.12** —
+**5.7%** of the GPU program, where its 1 s/instance placeholder would have been **2.2x** the whole
+table *(that multiple read 4.5x against the 2.42 h total of the day, and is restated here because
+its denominator moved, not its numerator)*. And it closes with room that is not worth
+re-checking: p120's local-to-5090 transfer would have to overstate that card by **201x**
+before A9 alone reached $25. See [p163](p163-a9-decode-cost.md) §8 for the sensitivity table and
+for what the transfer is worth, which is the same caveat p120 §3 states and inherits its weaker
+case, A9's decoder being a UNet.
+
+**That last clause is now load-bearing, and it points the same way #175 does.** A9's decode is
+transferred across the ratio whose UNet case #175 measured as **4.5x overstated**, and A9's
+decoder is the one other convnet in the table. Overstating the ratio understates the cost, so
+A9's row is more likely low than high: at the UNet's measured factor it would be **83 min /
+$0.56** rather than 18.6 min / $0.12, taking the GPU total to 6.5 h / $2.60. That is an exposure
+with its arithmetic shown, not a re-derivation — the row keeps p163's measured projection until
+someone times a decode on the 5090 — and it is the third place in this section where the same
+transfer is the thing that owes a measurement.
 
 Two things [p163](p163-a9-decode-cost.md) found that are **not** budget items and belong to
 whoever runs the pass: `decode_quant` sizes its output raster from the decoder's 256 px training
@@ -1642,10 +1722,12 @@ which for a single-pass, no-seed arm means unreproducible rather than merely noi
 **Why no feature cache** (the §4.1 amendment, priced): precomputing frozen features is
 *cheaper in GPU seconds* — 1.31 h against 2.56 h — but the whole difference is **$0.50**,
 *(both counted before [#147](https://github.com/JStoschek/DEMAE/issues/147); the no-cache
-total is now 2.42 h and the cached figure beside it was not re-derived, so this pair is
+total is now 5.09 h and the cached figure beside it was not re-derived, so this pair is
 flagged rather than half-corrected —
 [#151](https://github.com/JStoschek/DEMAE/issues/151). The $0.50 the bullet turns on moves by
-cents either way.)*
+cents either way, and [#175](https://github.com/JStoschek/DEMAE/issues/175)'s A7 correction does
+not touch it at all: A7 runs no encoder, so its 206.6 min sits on **both** sides of this
+comparison and cancels out of the difference.)*
 and against that it costs 30.3 GiB, 7.9 TB of re-reads, and a design constraint §4.1 did
 not name: a cached feature fixes the A1-filled input, hence the mask, so head training
 would see **one void per tile for all 50 epochs**, contradicting §3.2's per-epoch masks.
@@ -1655,7 +1737,9 @@ Run the encoder inline.
 deleting the feature cache made mask generation a per-epoch cost, and it had never been
 priced. On the shipped generator it is **0.947 ms/draw**, so the 31.2M presentations this
 table's own counts imply come to **8.2 CPU-h** — still larger than the low end of the eval
-line above and 3.4× the whole GPU program at that total's present 2.42 h. Per epoch over 20k tiles that is 19 s of one core
+line above and 1.6× the whole GPU program at that total's present 5.09 h *(it read 3.4× against
+the 2.42 h this total stood at before [#175](https://github.com/JStoschek/DEMAE/issues/175)
+measured A7)*. Per epoch over 20k tiles that is 19 s of one core
 against a 4.6 s GPU step, so on-the-fly masks make head training **loader-bound** by 4.1×,
 which is the exact property the deleted cache was supposed to buy. Banking K = 50 draws per
 tile cuts 31.2M draws to 1M — **21.1 min once, 104 MB** — with per-epoch variation preserved
@@ -1680,9 +1764,11 @@ so the next rewrite of §2.3 can re-derive it rather than re-measure it:
 | A3 fine-tune (R5 ViT-B + R4 ViT-B, 20 ep x 20k) | 800,000 | unchanged |
 | **total** | **31,200,000** | **34,400,000** |
 
-At p121's 2.00 ms/draw that is **17.3 CPU-h** against its 19.1, and **7.2×** the 2.42 h GPU
-program rather than 7.5×. Both ratios name the total they divide by, because that total has
-moved twice already and a bare multiple is how this section went stale the first time.
+At p121's 2.00 ms/draw that is **17.3 CPU-h** against its 19.1, and **3.4×** the 5.09 h GPU
+program rather than 7.5× *(it read 7.2× against the 2.42 h that total stood at before
+[#175](https://github.com/JStoschek/DEMAE/issues/175))*. Both ratios name the total they divide
+by, because that total has now moved three times and a bare multiple is how this section went
+stale the first time.
 
 **The count was not the only stale half — the primitive moved too, and further.** §7 costs
 every line as a measured primitive times a count, and this ticket was chartered against the
@@ -1702,7 +1788,7 @@ primitive. Its measured cost moved downwards on both axes: **21.1 min** against 
 33, and **104 MB** against 740 — the latter never having been the artifact's size at all, but
 the uncompressed RLE payload before zstd.
 
-**The conclusion is unchanged and was never in doubt**, at 7.2× or at 3.4×: a loader running
+**The conclusion is unchanged and was never in doubt**, at 3.4× or at 1.6×: a loader running
 four times the GPU it feeds is loader-bound, and 21 minutes once against 8.2 CPU-h every time
 is the same trade the feature cache was deleted over, read the other way round. What this
 re-derivation buys is that the *numbers* on the page are now the ones the command prints.
@@ -1774,7 +1860,10 @@ every table, so the corrected figures are the ones to print.
   ([#142](https://github.com/JStoschek/DEMAE/issues/142)).
 - **Spot-instance reclaim: not a risk this benchmark has.** Heads checkpoint
   every epoch to the synced directory like every other run in this repo, but
-  §7's measured total is 2.42 GPU-hours with a 46-minute longest job, so there
+  §7's total is 5.09 GPU-hours with a **58-minute** longest job — one A7 seed, measured
+  ([#175](https://github.com/JStoschek/DEMAE/issues/175)); the 46 minutes this bullet used to
+  quote was never a job, it was A7's whole 3-seed line at the old primitive, and that line is now
+  206.6 min. The longest *job* barely moved, which is the number this argument turns on, so there
   is nothing long-running to lose. *(2.56 until
   [#147](https://github.com/JStoschek/DEMAE/issues/147) dropped A6-S; corrected
   here by [#151](https://github.com/JStoschek/DEMAE/issues/151), which found the
