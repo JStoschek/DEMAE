@@ -293,10 +293,34 @@ class Resolution:
         """Which encoder, which checkpoint, what trains, on what diet, under what contract."""
         encoder = self.encoder
         if encoder is None:
-            return [
+            lines = [
                 f"{'encoder':<16} none — this arm runs no encoder",
                 f"{'trains':<16} {self.arm.trains}, input {self.arm.input_convention}",
             ]
+            if self.arm.trains_everything:
+                # A7's trunk and the half of §4.1's recipe it shares, printed for
+                # `trains_head`'s reason one arm over: a UNet trained at a moved learning rate
+                # converges normally and prints a row exactly as wide as a good one.
+                #
+                # `SHARED_WITH_HEAD` rather than `tune.format_frozen`, which prints the whole
+                # recipe including `proj_dim` and `stage_dims`. Those two are the *head's shape*
+                # and A7 has no head; printing them here would put a 256-d projection on the
+                # resolution line of an arm that has none. What is printed is exactly what A7
+                # trains under, which is the claim §4.4 makes and the one #162 asserts.
+                from . import unet
+                from .config import SHARED_WITH_HEAD
+
+                shared = ", ".join(
+                    f"{name}={getattr(self.config.head, name)!r}"
+                    for name in SHARED_WITH_HEAD
+                )
+                lines.append(f"{'unet':<16} {unet.format_parameters(self.config.unet)}")
+                lines.append(f"{'§4.1 recipe':<16} {shared}")
+                lines.append(
+                    f"{'':<16} A7 trains under the frozen arms' loss, schedule and seeds "
+                    f"(§4.4) — read from `head`, not configured here (#162)"
+                )
+            return lines
         params = "" if encoder.params is None else f", {encoder.params:,} params"
         lines = [
             f"{'encoder':<16} {encoder.name} — {encoder.family} family, {encoder.width}d, "

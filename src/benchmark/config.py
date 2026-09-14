@@ -60,7 +60,7 @@ import argparse
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Final
@@ -498,13 +498,42 @@ class Finetune(_Frozen):
 # --- §4.4 The from-scratch baseline -------------------------------------------
 
 
+#: §4.1's recipe knobs, which §4.4 says A7 **shares** rather than owns: *same loss, same
+#: schedule length, same seeds*. Named here so :func:`assert_shares_head_recipe` can refuse a
+#: :class:`Unet` that grows one, which is #162's second acceptance criterion in its structural
+#: form — "asserted rather than configured by hand" is a claim that A7 *cannot* drift, not a
+#: claim that two numbers happen to be equal in today's defaults.
+#:
+#: Read off :class:`Head`'s own fields minus its two shape knobs, rather than typed out: a knob
+#: added to §4.1's recipe later is one A7 must go on sharing, and a hand-written list would
+#: silently stop covering it.
+SHARED_WITH_HEAD: Final[tuple[str, ...]] = tuple(
+    name for name in Head.__dataclass_fields__ if name not in ("proj_dim", "stage_dims")
+)
+
+
+def assert_shares_head_recipe(names: Iterable[str]) -> None:
+    """Refuse a §4.4 recipe that declares one of §4.1's knobs. See :data:`SHARED_WITH_HEAD`."""
+    owned = sorted(set(names) & set(SHARED_WITH_HEAD))
+    if owned:
+        raise ValueError(
+            f"§4.4 trains A7 under §4.1's loss, schedule length and seeds, so the UNet recipe "
+            f"cannot declare {owned}. A7 reads `cfg.head` for those; what belongs here is the "
+            f"trunk's shape"
+        )
+
+
 @dataclass(frozen=True)
 class Unet(_Frozen):
     """A7 — the PANGAEA bar, and a hard one (plan §4.4).
 
-    ~17M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
+    ~17.5M trainable parameters against every frozen arm's 1.18M, which is why §6 item 4 prints
     total *and* trainable counts: a totals-only column reads A7 as handicapped when it is the
     opposite.
+
+    **Shape only.** The loss, the optimizer, the schedule and the seed counts are §4.1's and are
+    read from :class:`Head` — see :data:`SHARED_WITH_HEAD`, which refuses this class if it ever
+    grows one of them.
     """
 
     #: §4.4 — a standard 4-down / 4-up UNet.
@@ -513,10 +542,18 @@ class Unet(_Frozen):
     in_channels: int = 2
     #: §4.4/§2.4 — residual over the A1 fill, like every learned arm.
     residual: bool = True
+    #: The stage-1 width the rest double from. 48 is what lands §4.4's "~17M" — 17,465,377 by
+    #: :func:`benchmark.unet.parameter_count`, against 64's 31.0M and 32's 7.8M. Named as a knob
+    #: rather than hard-coded because it is the one number that sets this arm's capacity, and
+    #: §4.4's whole argument is about capacity.
+    base_width: int = 48
 
     def __post_init__(self) -> None:
+        assert_shares_head_recipe(self.__dataclass_fields__)
         if self.depth < 1:
             raise ValueError(f"depth {self.depth} must be >= 1")
+        if self.base_width < 1:
+            raise ValueError(f"base_width {self.base_width} must be >= 1")
         if self.in_channels != 2:
             raise ValueError(
                 f"in_channels {self.in_channels}: §4.4's input is the A1-filled tile plus the "
@@ -685,12 +722,31 @@ class Runtime(_Frozen):
     #: another for val. Against ~80 CPU-seconds of A1 fills per epoch that puts the optimum near
     #: 19, and 64 workers measured *worse* than 16: 15 s of startup to save 4 s of filling.
     loader_workers: int = 16
+    #: How many of :attr:`Head.batch_size`'s samples cross the GPU at once, 0 for all of them.
+    #: **Not a smaller batch** — the gradient is accumulated over the whole batch and the
+    #: optimizer steps once, so the recipe's effective batch is unchanged and A7 goes on training
+    #: under §4.1's declared 128 (#162).
+    #:
+    #: It is here rather than in :class:`Head` because it is a fact about the card. §4.4's UNet
+    #: runs 48 channels at the full 224 px from its first layer — unlike §4.1's head, which
+    #: reaches full resolution last and narrow — and that costs a **measured 0.24 GiB/sample**,
+    #: so the declared batch of 128 needs ~30.7 GiB and a 32 GB 5090 has 31.36 GiB. Measured on
+    #: the box: 64 peaks at 15.33 GiB, 32 at 7.83 GiB.
+    #:
+    #: The same shape `pretrain.config.Optimizer.accum_iter` already uses, and the same honesty
+    #: applies as for :attr:`device`: splitting is exact in arithmetic but not bit-identical,
+    #: because float summation is not associative. This group never claimed bit-identity — CUDA
+    #: training here is not reproducible to the bit at a fixed seed regardless (#159's tuning
+    #: pass measured a run-to-run spread up to 0.058 m).
+    micro_batch: int = 0
     #: Where per-epoch head checkpoints land. Not committed and not in git: they are 4.7 MB each
     #: and the artifact a cell produces is its parquet rows (§7's "heads checkpoint per epoch
     #: like everything else in this repo and that is the whole of it").
     checkpoint_dir: str = "data/task1/heads"
 
     def __post_init__(self) -> None:
+        if self.micro_batch < 0:
+            raise ValueError(f"micro_batch {self.micro_batch} must be >= 0 (0 = the whole batch)")
         if self.loader_workers < 0:
             raise ValueError(f"loader_workers {self.loader_workers} must be >= 0")
         if not self.device:

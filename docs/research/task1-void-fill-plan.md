@@ -1082,6 +1082,36 @@ Standard 4-down/4-up UNet (~17M params), 2-channel input (A1-filled tile, void
 mask), residual output, same loss, same schedule length, same seeds. Trained
 from scratch at each label-efficiency size.
 
+*(Amended 2026-09-01 — [#162](https://github.com/JStoschek/DEMAE/issues/162).
+Two things this bullet left implicit, resolved by the build rather than
+invented by it.*
+
+***The width.** "~17M" does not name a base width, and the count is quadratic
+in it: the 4-down/4-up shape lands **7.8M at base 32, 17.5M at 48 and 31.0M at
+64**. The build ships **base 48 — 17,465,377 parameters**, which is the only
+one of the three that reads as "~17M", and the number is derived arithmetically
+and asserted against the built module so the printed count is a measurement.
+GroupNorm at 16 groups rather than §4.1's 32, because 32 does not divide 48;
+GroupNorm rather than the textbook UNet's BatchNorm, because running statistics
+would make an eval fill depend on the batch it was scored in and would put a
+non-trainable number in the state dict, directly across the one column §6 item
+4 exists to print.*
+
+***The input scaling.** This bullet names the two input channels and says
+nothing about their units, and §2.1's `normalization` field cannot answer it:
+that field is the **frozen encoder's declared diet**, and A7's registry row
+declares `none` because it has no encoder to feed. A from-scratch trunk handed
+raw metres — the corpus spans roughly -400 to 8,800 — trains badly for reasons
+that have nothing to do with representation quality, and a baseline crippled by
+its input scaling is not the hard bar this section asks for. So A7 standardizes
+the A1 fill per tile over the valid pixels (`land ∧ ¬void`, ADR-0012 §1) and
+multiplies its residual back by the same per-tile std, which keeps §4.1's loss
+and §2.4's residual convention in the metres they are written in and keeps the
+zero-initialized output exactly equal to A1 at step 0. The arithmetic is
+`benchmark.extract.normalize`'s `per_tile` and is deliberately not a call to
+it — same formula, different question — but the std floor is the same 1e-6 this
+repo standardizes by everywhere.)*
+
 This bullet used to justify the UNet's size as "comparable order to
 ViT-S+head", an anchor that goes with ViT-S's demotion in §2.3. The honest
 statement under a ViT-B primary is the stronger one: **A7 trains ~17M

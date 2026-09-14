@@ -390,8 +390,15 @@ def test_parameter_counts_print_total_and_trainable(printed, built):
     assert set(built.parameters["A1"]) == {"total", "trainable"}
     assert built.parameters["A1"] == {"total": 0, "trainable": 0}
     assert "total" in printed and "trainable" in printed
-    # An arm whose trainable half nothing has counted says so rather than printing a plausible 0.
-    assert built.parameters["A7"]["total"] is None
+    # #162 built the UNet, so A7's pair is counted rather than `None` — and the pair is what the
+    # docstring above is about: 17.5M trained against A4's 1.18M, at a fifth of A4's total. Equal
+    # halves are the point here, not a degenerate case; A7 runs no encoder and trains everything.
+    assert built.parameters["A7"] == {"total": 17_465_377, "trainable": 17_465_377}
+    assert built.parameters["A7"]["trainable"] > 14 * built.parameters["A4-R5"]["trainable"]
+    assert built.parameters["A7"]["total"] < built.parameters["A4-R5"]["total"]
+    # An arm whose trainable half nothing has counted still says so rather than printing a
+    # plausible 0. That is A3's decoder now (#166) — the assertion moved arms, not meaning.
+    assert built.parameters["A3-R5"]["total"] is None
     assert "not built yet" in printed
 
 

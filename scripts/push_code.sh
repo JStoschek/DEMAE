@@ -37,6 +37,17 @@ PROVISION_ARGS=()
 # absent on purpose — the box trains, it does not get read on.
 PAYLOAD=(src tests artifacts scripts pyproject.toml uv.lock README.md)
 
+# The one document the box does not merely get read on — it *reads*. `benchmark.prereg.read_bar`
+# re-checks the committed bar against plan §6's text every time it is opened, so a Task 1 scoring
+# run without the plan on disk fails at `run_pass`, after training (#162 hit this at the end of a
+# 56-minute seed). "The box trains, it does not get read on" was written about Phase 1, which
+# never opens the plan; Task 1 does, which makes this file an input rather than documentation.
+#
+# Shipped with `--relative` so it lands at docs/research/ rather than the destination root, which
+# is where `paths.plan_path` looks for it. Its own rsync, so PAYLOAD's `--delete` keeps meaning
+# what the comment below says.
+PLAN_PAYLOAD=(docs/research/task1-void-fill-plan.md)
+
 usage() {
     cat <<'EOF'
 push_code.sh — send this checkout, and the code version with it, to a rented box.
@@ -105,11 +116,16 @@ fi
 # at the destination root are untouched. That is what makes this safe to re-run against a box
 # mid-corpus — and it is the property to re-check before ever adding a source to PAYLOAD.
 RSYNC=(rsync -az --delete "${PAYLOAD[@]}" .git_sha "$HOST:$ROOT/")
+# No --delete: this one carries a single file into a directory the box may hold other things in,
+# and scoping deletion to `docs/` would be a rule about documents this script has no business
+# enforcing.
+RSYNC_PLAN=(rsync -azR "${PLAN_PAYLOAD[@]}" "$HOST:$ROOT/")
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
     echo
     echo "   would write .git_sha  ($SHA)"
     printf '   would run  %s\n' "${RSYNC[*]}"
+    printf '   would run  %s\n' "${RSYNC_PLAN[*]}"
     if [[ "$PROVISION" -eq 1 ]]; then
         printf '   would run  ssh %s bash -s -- --root %s %s < scripts/provision_box.sh\n' \
             "$HOST" "$ROOT" "${PROVISION_ARGS[*]:-}"
@@ -119,7 +135,9 @@ fi
 
 printf '%s\n' "$SHA" > .git_sha
 "${RSYNC[@]}" || die "rsync failed — nothing on that box has changed, so just re-run"
+"${RSYNC_PLAN[@]}" || die "the plan did not ship — Task 1 scoring reads it; just re-run"
 ok "code and .git_sha are on $HOST:$ROOT/"
+ok "${PLAN_PAYLOAD[*]} — §6's bar is re-checked against it at scoring time"
 
 if [[ "$PROVISION" -eq 1 ]]; then
     step "provision_box.sh, streamed over the same connection"
