@@ -391,6 +391,17 @@ class Resolution:
             "artifact_hash": self.config.artifact_hash,
             "arm": self.arm.name,
             "encoder": None if self.encoder is None else self.encoder.name,
+            # The axis order by name, beside the encoder that chose it (#160). The encoder's name
+            # already separates `demae-r4` from `demae-r5`, so this adds no distinction a reader
+            # could not have reached — but it reaches it through `arms.ENCODERS` at whatever
+            # commit `git_sha` names, and the failure this record exists to catch is precisely a
+            # `pos_embed` loaded in the wrong axis order, which trains fine and is invisible
+            # (ADR-0011, P102 §4). A record that names the mistake's own axis states the fact
+            # where the mistake would show, rather than one lookup away from it.
+            "pos_encoding": None if self.encoder is None else self.encoder.pos_encoding,
+            "pos_emb_derivation": (
+                None if self.encoder is None else self.encoder.pos_emb_derivation
+            ),
             "checkpoint": None if self.checkpoint is None else self.checkpoint.to_dict(),
             "mae_checkpoint": (
                 None if self.mae_checkpoint is None else self.mae_checkpoint.to_dict()
