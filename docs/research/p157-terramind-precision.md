@@ -91,11 +91,16 @@ afternoon.
   contract keeps handing back fp32.
 - **A9 is still unmeasured, deliberately.** It reads the same weights through a separate registry
   entry and gets its own figure on its own first run, for the reason this document exists.
-- **What a *run* does with its own figure is open, and is not this ticket's.** `Extractor`
-  exposes it (`precision_agreement(arm)`); `benchmark.artifacts`' run record — which already
-  carries the spec's md5 beside the table it produced — is the `run` verb's surface, so whether a
-  results table quotes the number is that verb's call. Named here rather than left as a method
-  whose only caller is the script above.
+- **What a *run* does with its own figure was open, and was settled by
+  [#171](https://github.com/JStoschek/DEMAE/issues/171).** `Extractor` exposes it
+  (`precision_agreement(arm)`); the run record — which already carries the spec's md5 beside the
+  table it produced — now carries the agreement too, in its own `precision` block
+  (`benchmark.results.precision_block`). **It records and refuses nothing.** The `immaterial`
+  verdict travels on the figure, but no gate consults it: a refusal would be a registered rule,
+  and registering a thirteenth in ADR-0013 for a bar no measured encoder has crossed would be
+  registering a gate ahead of a case for it. The number in §3 above is why *which statistic* such
+  a gate would read is the whole decision — this run's mean clears the bar and its 1st percentile
+  does not.
 
 ## 5. Sources
 

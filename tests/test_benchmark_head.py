@@ -85,6 +85,25 @@ class _StubEncoder(torch.nn.Module):
         self.scale = torch.nn.Parameter(torch.ones(WIDTH), requires_grad=False)
 
 
+#: What :meth:`StubExtractor.precision_agreement` answers. Shaped like
+#: :meth:`benchmark.extract.Extractor._precision`'s return, with values that are recognizably not
+#: a real encoder's, so a record carrying it can only have got it through `launch`'s own wiring.
+STUB_AGREEMENT = {
+    "encoder": "stub",
+    "reference_dtype": "fp32",
+    "compute_dtype": "bf16",
+    "device": "cpu",
+    "tiles": 1,
+    "tokens": 196,
+    "mean_cosine": 0.5,
+    "min_cosine": 0.5,
+    "p01_cosine": 0.5,
+    "relative_rms": 0.5,
+    "threshold": 0.99,
+    "immaterial": False,
+}
+
+
 class StubExtractor:
     """ADR-0012's surface, and nothing behind it. See the module docstring.
 
@@ -104,6 +123,19 @@ class StubExtractor:
     def encoder(self, arm: str):
         self._model.eval()
         return self._model
+
+    def precision_agreement(self, arm: str) -> dict | None:
+        """Part of ADR-0012 §6's surface since #171 — and it answers with a figure rather than
+        ``None``, which is the whole point of stubbing it.
+
+        A stub that returned ``None`` would make the seam-1 assertion vacuous: `launch` records
+        *no measurement reached the record* both when the wiring works and when it is broken, so
+        a renamed `Stack.extractor` — or a `_measured_agreement` that never finds one — would
+        keep every test green while every encoder arm's record quietly claimed an absence. The
+        figure below is not a measurement and does not pretend to be one; it is a value that can
+        only arrive in the record by travelling the real path.
+        """
+        return dict(STUB_AGREEMENT)
 
     def extract(self, raw_i16, valid_mask, *, arm: str):
         from benchmark import extract as extract_module
@@ -589,6 +621,16 @@ def test_the_run_record_carries_the_head_it_scored_with(a6):
     assert training["precision_declared"] == "bf16"
     assert training["precision_used"] == "fp32"
     assert training["device"] == "cpu"
+    # ADR-0012 §6's block is written through the real `run` path (#171), not just assembled in a
+    # unit test. The stub's figure is the evidence: it can only reach the record by way of
+    # `launch._measured_agreement` finding the *trained* stack's extractor and asking it, so a
+    # record carrying it is a record the wiring produced. `absent_because` here would mean the
+    # seam is broken, which is precisely what a `None`-returning stub could not have told apart.
+    assert record["precision"]["agreement"] == STUB_AGREEMENT
+    assert record["precision"]["absent_because"] is None
+    # And it is recorded rather than refused, though it sits far below #134's bar — the decision
+    # this ticket took. A run that refused here would never have reached a written record at all.
+    assert record["precision"]["agreement"]["immaterial"] is False
 
 
 def test_the_head_checkpoints_every_epoch(box, flags, stub, frozen):
