@@ -151,7 +151,12 @@ GitHub issue #1.
   carries is `train_mask_bank.json`, a sidecar holding the bank's md5, a parquet-independent
   hash of the draw and that config hash, and `run` **refuses a bank whose md5 has moved** rather
   than reading it. Nothing about that failure is loud otherwise: a head trained against a
-  re-drawn bank converges normally and prints a table exactly as wide as a good one.
+  re-drawn bank converges normally and prints a table exactly as wide as a good one. It draws
+  over §3.1's head-train list **whole**, where the eval mask list filters its test list through
+  `voids.eligible` first — an asymmetry [#174](https://github.com/JStoschek/DEMAE/issues/174)
+  settled and `benchmark.masks.freeze_bank` records: the painted fill a banked void can land on
+  is 0.128% of the elevation-loss mass, where one entirely-fill *eval* instance is a NaN through
+  a whole cell of the results table.
 - **Headroom** (`N_h / n_h`) — kept windows a stratum holds per window it must yield. The
   one quantity the *budget* moves: Neyman shares are budget-invariant, so ten times the
   budget is a ten times shallower pool. Across all 20 strata it runs 43.9–79.0× at the

@@ -250,8 +250,10 @@ def test_both_mask_artifacts_carry_one_contract_rather_than_two(
 
     # A built corpus rather than fabricated ids: the eval half reads a manifest now, because
     # `masks.scoreable_tiles` drops the part-ocean test tiles before the draw. The bank half
-    # still does not — it draws over §3.1's head-train list, which is why this test writes two
-    # lists. That asymmetry is the subject of #150's follow-up, not of this test.
+    # deliberately does not — it draws over §3.1's head-train list whole — which is why this
+    # test writes two lists. #174 settled that asymmetry and
+    # `test_the_bank_banks_the_tiles_the_eval_half_would_drop` is where it is pinned; this
+    # test is about the contract both artifacts carry, which is unaffected either way.
     corpus = build_corpus(tmp_path / "eval-corpus", SPLIT_COGS, tiles_per_cog=2)
     listed = pq.read_table(corpus / "manifest.parquet", columns=["tile_id"])["tile_id"].to_pylist()
     write_tile_strata(
@@ -269,6 +271,51 @@ def test_both_mask_artifacts_carry_one_contract_rather_than_two(
     assert evaluated[b"generator"] == banked[b"generator"] == masks.GENERATOR.encode()
     assert evaluated[b"artifact_hash"] == banked[b"artifact_hash"] == cfg.artifact_hash.encode()
     assert json.loads(sidecar_of(cfg).read_text())["artifact_hash"] == cfg.artifact_hash
+
+
+def test_the_bank_banks_the_tiles_the_eval_half_would_drop(cfg, frozen_tiles, tmp_path):
+    """#174's decision, pinned: the bank draws over §3.1's head-train list **whole**.
+
+    `masks.freeze` puts its test list through `masks.scoreable_tiles` and this stage does not,
+    which is settled rather than an oversight — :func:`benchmark.masks.freeze_bank` carries the
+    measurement and what filtering would have cost, and is the one place those figures live.
+
+    What this test pins is only the *shape* of the decision, which is all a test can pin: every
+    listed tile is banked at K rows even when `voids.eligible` would reject it. The two
+    assertions after it are what keep that from passing vacuously — the tiles really are
+    ineligible, so a `voids.eligible` that stopped dropping them would fail here rather than
+    quietly leave this test asserting nothing about the bank at all.
+    """
+    from tests.conftest import SPLIT_COGS, build_corpus
+
+    def half_zero_fill(rng, base):
+        """A window whose right half is exact-zero fill — `land_frac` 0.5, and stored as such.
+
+        Not `half_ocean`: `dataset.screen.is_zero_fill` declines that synonym on ADR-0001 §3
+        Amendment 2's grounds, since an exact zero is sea level and not evidence of sea.
+
+        0.5 sits under `is_zero_fill`'s 75% threshold, so `prepare_tile` keeps the tile rather
+        than rejecting it, and far under `voids.LAND_FRAC_MIN`'s 0.999, so it is unambiguously
+        ineligible and no rounding decides this test.
+        """
+        window = rng.normal(base, 40.0, size=(224, 224))
+        window[:, 112:] = 0.0
+        return window
+
+    corpus = build_corpus(tmp_path / "fill-corpus", SPLIT_COGS, tile_fn=half_zero_fill)
+    listed = pq.read_table(corpus / "manifest.parquet", columns=["tile_id"])["tile_id"].to_pylist()
+    write_tile_strata(
+        [(tile, i % 20) for i, tile in enumerate(listed)], frozen_tiles / TILE_LIST_NAMES["20k"]
+    )
+    cfg = cfg.replace(paths=cfg.paths.replace(corpus_dir=str(corpus)))
+
+    banked = masks.freeze_bank(cfg)
+    tiles = set(pq.read_table(cfg.paths.mask_bank_path, columns=["tile_id"])["tile_id"].to_pylist())
+
+    assert tiles == set(listed)
+    assert banked.committed.draw.rows == len(listed) * cfg.masks.bank_draws_per_tile
+    with pytest.raises(ValueError, match="none of the"):
+        masks.scoreable_tiles(listed, corpus)
 
 
 # --- §3.4's guard -------------------------------------------------------------

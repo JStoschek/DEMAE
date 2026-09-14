@@ -78,6 +78,11 @@ dropped whole.
 The filter is on the **tile** and not on the placement, which is the design and not a shortcut —
 :func:`scoreable_tiles` records the measurement that settled it.
 
+The **bank's** 20,000 head-train tiles are *not* filtered, and #174 settled that rather than
+letting it stand as an oversight: the same contamination is there, but what it costs training is
+0.128% of the elevation-loss mass, where one entirely-fill *eval* instance is a NaN through a
+whole cell of the results table. :func:`freeze_bank` carries the measurement and the trade.
+
 ## §3.3's real family, in the same five columns
 
 #153 appends **9,273** more rows: every void SRTM actually failed to see in #127's 24 granules,
@@ -1227,6 +1232,14 @@ def scoreable_tiles(tile_ids: Iterable[str], corpus_dir: Path | str) -> list[str
     of the 400, **all 8** entirely-ocean and **all 39** mostly-ocean instances; the 11 that
     remain carry between 0.005% and 0.084% ocean, one to forty-two pixels, and produce no NaN in
     any column.
+
+    ## Why the train mask bank does not call this
+
+    It has **one caller**, :func:`freeze`, and that is the settled state rather than an omission.
+    The bank carries the same contamination, but what it costs *training* is 0.128% of the
+    elevation-loss mass, where one entirely-fill eval instance is a NaN through a whole cell of
+    the results table. #174 measured both halves and left the bank unfiltered;
+    :func:`freeze_bank` is where that measurement and its trade are recorded.
     """
     listed = [str(tile_id) for tile_id in tile_ids]
     column = voids.read_manifest_columns(
@@ -1721,6 +1734,70 @@ def freeze_bank(cfg: BenchmarkConfig) -> TrainMaskBank:
     *There is no sidecar, or the bank is gone or is not the one the sidecar describes.* Drawn,
     checked against the committed draw hash if there is one, and the sidecar written with the
     md5 the bank came out as here.
+
+    ## Why this reads the head-train list whole, where the eval half filters
+
+    :func:`freeze` puts its test list through :func:`scoreable_tiles` and this does not. The
+    asymmetry is deliberate, and #174 measured it rather than leaving it to be inherited. This
+    docstring is where those measurements live; the other places that mention the decision cite
+    it rather than restating the figures.
+
+    **The contamination is real and is here.** Of the committed 1,000,000 banked draws,
+    **11,852 (1.19%)** hold some painted fill, **754 (0.075%)** are mostly fill, and **117
+    (0.012%)** are entirely fill, those 117 spread over 72 tiles. #150 measured 400 (1.33%), 39
+    (0.130%) and 8 (0.027%) of 30,000 on the unfiltered eval half, so the bank is lower on all
+    three — about half on the latter two. Some of that is the head-train split being the cleaner
+    of the two (**588** of 20,000 tiles carry any fill, against 165 of 5,000), but an 11% gap in
+    tile rate does not explain a 2x gap in instance rate, and #174 did not chase the remainder:
+    the decision below does not turn on it.
+
+    Three tile counts appear here and they are three different predicates, so they do not
+    reconcile by arithmetic: **588** carry *any* painted fill (``land_frac < 1.0``); **492** fall
+    under :data:`benchmark.voids.LAND_FRAC_MIN` (``land_frac < 0.999``), which is the threshold
+    that actually rejects; and **1,157** is what :func:`benchmark.voids.eligible` rejects in
+    total, being the wider test — under the threshold *or* water-flagged — which adds 942
+    water-flagged tiles overlapping the 492. Filtering as :func:`freeze` does would drop all
+    1,157, the 96 that carry fill without failing the threshold included.
+
+    **Nor are those pixels inert**, which is the thing that looks true and is not. A void
+    straddling a coastline has **land** in the boundary ring :mod:`benchmark.fill` interpolates
+    from, so the A1 fill laid over the ocean part is terrain while the truth there is a painted
+    0 m. Measured per-pixel, painted fill carries a **13.74 m** learning target against the
+    bank's own 15.85 m — so a part-ocean draw does ask the head to reproduce a constant, at very
+    nearly full strength. Only a void that is *entirely* fill is inert, its target 0.0036 m, and
+    there are 117 of those.
+
+    **What settled it is the magnitude, not the kind.** Painted fill is **0.148%** of the bank's
+    void pixels and **0.128%** of the elevation-loss mass those void pixels carry. (The elevation
+    half:
+    §4.1's loss is masked L1 in metres *plus* ``slope_weight`` x a Sobel term, and #174 measured
+    the L1 term. The slope term is weighted 0.1 and the argument has three decimal orders of
+    headroom, so nothing here turns on the part not measured.)
+
+    Against that, filtering the tile costs **1,157 of 20,000** head-train tiles — and, measured
+    in the same unit as the 0.128%, **5.76%** of the bank's elevation-loss mass. That is **45x
+    more signal discarded than contamination removed**, and the ratio is the whole argument.
+
+    It is not a case of discarding poor tiles, either, which is the reply this invites: the 1,157
+    carry **15.78 m** per void pixel against the kept tiles' **15.89 m**, so what filtering throws
+    away is ordinary training signal and not marginal coastal flatland. It would also take §3.1's
+    label-efficiency rungs off 1k/5k/20k to 942/4,711/18,843 — the lists are set-nested and the
+    filter bites each at ~5.8%, so the rungs stay nested but stop being round. Filtering the
+    *draw* instead keeps the tiles and the rungs, but makes the bank a function of the corpus,
+    which :func:`draw_from_seed` is written not to be.
+
+    And neither repair changes a scored number. Every eval tile is already clean ground, so what
+    these draws teach is a behaviour the results table never exercises: they are noise and spent
+    capacity at roughly one part in 800, not a bias on anything reported. Set beside that, any
+    change here re-hashes the draw and so invalidates the **training** of every arm that has run
+    — A3 (#166), A4 (#160), A5 (#161), A6 (#159), A7 (#162) and the label sweep (#165) — rather
+    than merely their scoring, because `launch run` trains before it scores and there is no
+    score-from-checkpoint path.
+
+    So the bank draws over §3.1's list whole.
+    ``test_the_bank_banks_the_tiles_the_eval_half_would_drop`` pins the *shape* of that — every
+    listed tile banked at K rows even when ineligible — which is as much as a test can hold; the
+    figures above are measurements against the committed artifact, not assertions.
     """
     directory = Path(cfg.paths.artifacts_dir)
     head_train = directory / TILE_LIST_NAMES["20k"]
