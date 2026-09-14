@@ -357,6 +357,19 @@ _ANCHORS: Final[dict[str, Callable[[Any], tuple[str, ...]]]] = {
 # --- §6, as the anchor sees it ------------------------------------------------
 
 
+def rule(name: str) -> Rule:
+    """One register row, by name — :data:`REGISTER`'s :func:`benchmark.arms.get`.
+
+    Distinct from :meth:`Bar.rule`, which reads the register a *committed bar file* carries. This
+    reads the one in code, which is what a caller wants when it needs a rule's statement or its
+    home rather than a value a run must clear — a discursive rule has no value either way.
+    """
+    for entry in REGISTER:
+        if entry.rule == name:
+            return entry
+    raise KeyError(f"{name} is not in the register — it holds {[e.rule for e in REGISTER]}")
+
+
 def section_text(plan: Path | str = PLAN_PATH) -> str:
     """§6 of the plan, from its heading to the next one, in the form an anchor matches.
 
@@ -579,6 +592,35 @@ class Bar:
     def bootstrap_pairs(self) -> tuple[tuple[str, str], ...]:
         """R6's four marked pairs, in the order they were named."""
         return tuple(tuple(m["pair"]) for m in self.value("R6")["marked_pairs"])
+
+    @property
+    def bootstrap_claims(self) -> tuple[str, ...]:
+        """Which C-claim each marked pair is for, in :attr:`bootstrap_pairs`' order."""
+        return tuple(m["claim"] for m in self.value("R6")["marked_pairs"])
+
+    @property
+    def computed_pairs(self) -> int:
+        """R6's 55: C(11, 2), computed into the parquet and unmarked in print."""
+        return self.value("R6")["computed"]
+
+    # --- R5's printed shape, which `benchmark.report` checks its own render against
+
+    @property
+    def headline_family(self) -> str:
+        """R5's headline family. The other synthetic one is scored and never printed."""
+        return self.value("R5")["headline_family"]
+
+    @property
+    def printed_shape(self) -> tuple[int, int, int]:
+        """R5's ``(cells, columns, numbers)`` — 66, 6 and 396.
+
+        Returned together because they are one registered fact and their product is the check:
+        a render matching two of the three has not matched R5. Reading them one at a time is how
+        [#146](https://github.com/JStoschek/DEMAE/issues/146) happened — a count in one place and
+        a set in another.
+        """
+        r5 = self.value("R5")
+        return (r5["printed_cells"], r5["printed_columns"], r5["printed_numbers"])
 
 
 def bar_document() -> dict[str, Any]:

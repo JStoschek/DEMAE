@@ -659,6 +659,13 @@ class Paths(_Frozen):
     demae_r5_checkpoint: str | None = ".release-work/release-R5-v2/encoder.pt"
     demae_r4_checkpoint: str | None = ".release-work/release-R4-v2/encoder.pt"
     demae_vits_checkpoint: str | None = None
+    #: The **pretraining** checkpoints those encoders were exported from — the only files in
+    #: this benchmark that carry an MAE decoder. ``None`` until a box mounts one, and that is
+    #: the honest default: §14's release is encoder-only, so the decoder A2 runs is not in the
+    #: released artifact and is not in this repository. Each release manifest names the file it
+    #: came from in its ``source_checkpoint`` field, which is where to look.
+    demae_r5_mae_checkpoint: str | None = None
+    demae_r4_mae_checkpoint: str | None = None
     #: TerraMind's DEM tokenizer and the ImageNet MAE. ``None`` until a box mounts them —
     #: an unmounted checkpoint is *named* at resolution time rather than silently absent, which
     #: is the whole reason these are fields rather than lookups inside a loader.
@@ -705,10 +712,16 @@ class Runtime(_Frozen):
     #: ``auto`` resolves to CUDA, then MPS, then CPU — see :func:`benchmark.train.resolve_device`.
     #: Named values are taken literally, so a box that has CUDA can still be asked for CPU.
     device: str = "auto"
-    #: Dataloader worker processes. §7 measures head training as **4.1x loader-bound** — the A1
-    #: fill of each banked void is the cost, not the frozen forward — so this is the knob that
-    #: decides whether a GPU sits idle, and it is the reason this group exists at all.
-    loader_workers: int = 4
+    #: Dataloader worker processes — a **ceiling**, not a count. What a pass actually starts is
+    #: :func:`benchmark.train.workers_for`, which never starts more than the work can keep busy.
+    #:
+    #: §7 measures head training as 4.1x loader-bound, so this is the knob that decides whether a
+    #: GPU sits idle — but more is not better past a point, and #159 measured where that point
+    #: is. Starting a worker costs ~0.23 s (a fork of the parent's address space), paid per
+    #: DataLoader, and :func:`benchmark.train.batches` builds one per epoch for training and
+    #: another for val. Against ~80 CPU-seconds of A1 fills per epoch that puts the optimum near
+    #: 19, and 64 workers measured *worse* than 16: 15 s of startup to save 4 s of filling.
+    loader_workers: int = 16
     #: How many of :attr:`Head.batch_size`'s samples cross the GPU at once, 0 for all of them.
     #: **Not a smaller batch** — the gradient is accumulated over the whole batch and the
     #: optimizer steps once, so the recipe's effective batch is unchanged and A7 goes on training

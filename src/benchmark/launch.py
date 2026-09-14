@@ -38,14 +38,18 @@ which writes ``head_tuning.json`` and deliberately scores nothing (:mod:`benchma
 later cell's head recipe is refused if it has drifted from the line that search froze, which is
 what "no thumb lands on the scale" is, as a mechanism.
 
-The two verbs that are still short of their stage raise past the work they have, and name what
-has not been built — deliberately, because a verb that quietly returned 0 having done part of
-its job is precisely the shape of failure this module exists to prevent, and it is the shape
+#169 made ``report`` real: the 396-number printed table, the 66-cell C4 rank block and §9's
+three figures, rendered from the results parquet and printing nothing R5 does not permit it to
+print. It re-runs no arm, which is what makes it free to re-render.
+
+``freeze`` is the one verb still short of its stage. It raises past the work it has and names
+what has not been built — deliberately, because a verb that quietly returned 0 having done part
+of its job is precisely the shape of failure this module exists to prevent, and it is the shape
 that survived four tickets in Phase 1. It matters more once a verb writes real files than it did
 when none did: a ``freeze`` that lands three of five artifacts and exits 0 is read as a frozen
-box. ``run`` returns 0 now because it finishes what it starts *for the arm it was asked for*;
-an arm whose input convention has no implementation yet names its own ticket rather than
-returning quietly (:data:`benchmark.evaluate.FILLERS`).
+box. ``run`` and ``report`` return 0 because they finish what they start — ``run`` *for the arm
+it was asked for*, and an arm whose input convention has no implementation yet names its own
+ticket rather than returning quietly (:data:`benchmark.evaluate.FILLERS`).
 
 ## Why the resolution line is printed before anything is spent
 
@@ -63,7 +67,20 @@ import argparse
 from pathlib import Path
 from typing import Final, NoReturn
 
-from . import arms, artifacts, evaluate, extract, masks, prereg, results, tiles, train, tune
+from . import (
+    arms,
+    artifacts,
+    evaluate,
+    extract,
+    masks,
+    prereg,
+    report,
+    results,
+    tiles,
+    train,
+    tune,
+    zeroshot,
+)
 from .artifacts import Resolution
 from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
 
@@ -128,8 +145,8 @@ def _unbuilt(verb: str, state: str, produces: str) -> NoReturn:
 
 
 #: The three verbs take one resolution and the parsed arguments, and return an exit code. ``run``
-#: is the first one that does (#158) — `freeze` still stops short of §3.4's dataset card and
-#: `report` renders nothing yet, so those two are annotated ``NoReturn`` and say which stage is
+#: was the first one that did (#158) and `report` is the last (#169); `freeze` still stops short
+#: of §3.4's dataset card, so it is the one annotated ``NoReturn`` and names the stage that is
 #: missing. The uniform parameters are what keep :data:`VERBS` a table rather than a cascade;
 #: ``args`` joined them at #159, which gave `run` a mode (``--tune``) rather than a knob.
 
@@ -254,10 +271,19 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     if resolution.reads("mask_bank"):
         masks.assert_bank_matches(resolution.config)
     checkpoint = resolution.checkpoint
-    if checkpoint is not None and not checkpoint.present:
+    if checkpoint is not None and checkpoint.required and not checkpoint.present:
         raise FileNotFoundError(
             f"arm {resolution.arm.name} reads the {resolution.arm.encoder} encoder and "
             f"{checkpoint.absent_note}"
+        )
+    # A2's second file, on the same rule and for a sharper reason: §14's release is encoder-only,
+    # so an arm whose whole mechanism *is* the pretrained decoder cannot be driven by the file
+    # every other arm initializes from (#167). Refused here rather than inside the pass so the
+    # message names the path and the field instead of a missing tensor.
+    mae = resolution.mae_checkpoint
+    if mae is not None and not mae.present:
+        raise FileNotFoundError(
+            f"arm {resolution.arm.name} runs the pretrained MAE decoder and {mae.absent_note}"
         )
 
     cfg = resolution.config
@@ -282,19 +308,10 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         for line in train.format_trained(trained):
             print(line)
 
-    # The trained head carries the encoder it was trained over, so the pass scores against the
-    # object the val curve was measured on rather than a second load of the same file.
-    learned = (
-        None
-        if trained is None
-        else evaluate.Learned(
-            arm=resolution.arm.name,
-            predict=trained.predict,
-            batch_size=cfg.head.batch_size,
-            detail=trained.to_dict(),
-        )
-    )
-    scored = evaluate.run_pass(cfg, resolution.arm, learned=learned)
+    # The trained head goes to the pass, which hands it to the convention's factory (#159 over
+    # #167's shape). It carries the encoder it was trained over, so the cell is scored against
+    # the object the val curve was measured on rather than a second load of the same file.
+    scored = evaluate.run_pass(cfg, resolution.arm, trained=trained)
     print(f"\n{'gates':<16} {evaluate.format_gates(scored.gates)}")
 
     rows = results.rows_from(
@@ -306,6 +323,7 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         run=results.run_id(resolution),
         config_hash=cfg.config_hash,
     )
+    register = _register_disposition(resolution, scored)
     path, total, record = results.write(
         rows,
         resolution,
@@ -314,9 +332,12 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         parameters=arms.parameter_counts(resolution.arm),
         gates=scored.gates,
         training=None if trained is None else trained.to_dict(),
+        register=register,
     )
     for line in results.format_written(path, rows=len(rows), total=total, record=record):
         print(line)
+    if register is not None:
+        print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
 
 
@@ -343,14 +364,65 @@ def _tune(resolution: Resolution) -> int:
     return 0
 
 
-def _report(resolution: Resolution, args: argparse.Namespace) -> NoReturn:
-    """`report` — render the table from the results parquet, re-running no arm."""
-    _unbuilt(
-        "report",
-        "renders nothing yet",
-        "the 396-number printed table, the 66-cell C4 rank block and the three figures, read "
-        "from the results parquet and printing nothing R5 does not permit it to print (#136)",
+def _register_disposition(resolution: Resolution, scored: evaluate.Pass) -> dict | None:
+    """How this cell's row is to be read, for the one registered rule whose trigger is a result.
+
+    R12 governs A2 and nothing else, so this is ``None`` for every other arm and the run record
+    carries no ``register`` block at all (:func:`benchmark.results.run_record`).
+
+    The comparison is against **A1's rows in the same cell** — same size, same seed — read back
+    out of the results parquet rather than recomputed, because §4.5 already runs A1 first and its
+    numbers gate every learned arm. A2's own rows come from the pass in memory, before
+    :func:`benchmark.results.write` lands them: the disposition is part of the record that
+    describes those rows, so it cannot be computed from a file they are not in yet.
+
+    Nothing here decides anything. R12 is discursive (ADR-0013) — the enforcement is the
+    writeup's and the reviewer's — so a run that trips the contingency still writes its rows and
+    still exits 0. What changes is that the record says so, which is the whole of what a
+    discursive rule can be held to.
+    """
+    arm = resolution.arm
+    if not zeroshot.governs(arm):
+        return None
+    cfg = resolution.config
+    return zeroshot.disposition(
+        arm,
+        a1_rows=results.rows_for_cell(
+            cfg.paths.results_path,
+            arm="A1",
+            size=cfg.size,
+            seed=cfg.seed,
+            columns=zeroshot.COMPARISON_COLUMNS,
+        ),
+        a2_rows=[
+            {
+                "band": item.band,
+                "family": item.family,
+                "bucket": item.bucket,
+                "tile_id": item.tile_id,
+                "instance": item.instance,
+                zeroshot.COMPARISON_METRIC: item.metrics[zeroshot.COMPARISON_METRIC],
+            }
+            for item in scored.scored
+        ],
     )
+
+
+def _report(resolution: Resolution, args: argparse.Namespace) -> int:
+    """`report` — render the table from the results parquet, re-running no arm (#169).
+
+    The one verb that reads no committed input except the registered bar and writes nothing into
+    ``artifacts_dir``. It is a **pure function of the results parquet** and the run records
+    beside it (#136's "computed and printed are different questions"), which is what makes
+    re-rendering free: a reviewer asking a question the table's shape did not anticipate is
+    asking it of a file that already holds the answer, not of a rented box.
+
+    Unlike `run` it takes no cell. The table is every printed arm at the headline size, so
+    ``--arm``/``--size``/``--seed`` would name a cell the render does not have — what it renders
+    is whatever the parquet holds, and a row nobody has scored says so in its own cells.
+    """
+    report.render(resolution.config)
+    return 0
 
 
 #: The whole command surface. A fourth verb is an argparse refusal, and a second entry point

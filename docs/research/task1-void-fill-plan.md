@@ -855,8 +855,16 @@ shippable under all three sets of terms.
 **The two mask artifacts.**
 
 - **Eval mask list** (parquet: `tile_id, family, bucket, mask_rle, seed`) — one
-  row per eval instance, 30,000 synthetic rows plus the real-void family's
-  **9,273**, so ~39.3k rows. *(Amended 2026-08-13 —
+  row per eval instance, 27,138 synthetic rows plus the real-void family's
+  **9,273**, so ~36.4k rows. *(Amended 2026-09-02 — the synthetic count read
+  "30,000" until §3.2 was filtered to the **4,523** test tiles that are clean
+  ground. A synthetic void is placed by geometry alone and the generator never
+  opened the tile, so 400 of the 30,000 held painted ocean fill and 8 were
+  entirely ocean — which leaves every derivative metric undefined, and one NaN
+  takes a whole cell of the table with it. The 477 part-ocean tiles are dropped
+  whole; §3.1's test draw is unchanged at 5,000. §3.3's hosts were always the
+  clean tiles, so this also makes both halves of the artifact one population.)*
+  *(Amended 2026-08-13 —
   [#153](https://github.com/JStoschek/DEMAE/issues/153). This line read "9,978"
   until the build wrote the file. **9,978 is §3.3's scored-component count**, and
   it includes the 705 components that placed cleanly and fell in the gaps between
@@ -1359,8 +1367,9 @@ A1 from truth cannot separate the arms either.
   asserted in [ADR-0013](../adr/0013-task1-pre-registration-register.md))*.
   This binds hardest on the
   real-void family, which takes whatever distribution SRTM gives it. **The
-  synthetic rows clear it with room** — 5,000 test tiles × 2 families × 3 buckets
-  is **30,000** instances, 1,250 per (row, band). **The real rows have now been
+  synthetic rows clear it with room** — the 4,523 clean test tiles × 2 families
+  × 3 buckets is **27,138** instances, 1,111–1,158 per (row, band) once the
+  part-ocean tiles are dropped (see §3.4's amendment), against a floor of 100. **The real rows have now been
   measured against it, and the rule fires on three bands of four**
   ([#135](https://github.com/JStoschek/DEMAE/issues/135),
   [`p135-void-ruggedness.md`](p135-void-ruggedness.md)): the realised histogram

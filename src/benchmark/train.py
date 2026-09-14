@@ -16,7 +16,7 @@ be a seam nobody is on both sides of, which is the failure Phase 1 shipped four 
 :func:`compose` builds the model's input — A1 fill, valid mask, void — and :func:`residual_of`
 runs the encoder and the head over it. **Both are called from the eval path too**
 (:func:`predict`, which `benchmark.evaluate` reaches through
-:class:`benchmark.evaluate.Learned`). That is not code tidiness. A head trained against one
+:func:`benchmark.evaluate._head_fill`). That is not code tidiness. A head trained against one
 composition and scored against a slightly different one — a valid mask that included the void, a
 fill computed at a different variant, a normalization applied twice — converges normally and
 prints a table exactly as wide as a good one. There is one composition because there is one way
@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Final, Iterable, Sequence
 
@@ -114,6 +114,30 @@ def resolve_device(cfg: BenchmarkConfig) -> str:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _clock(device: str):
+    """A wall clock that waits for the accelerator before reading itself.
+
+    Without the synchronize, every phase timer measures how fast Python *queued* work rather than
+    how long the device took to do it — which on a GPU attributes almost everything to whichever
+    call happens to block first, and is how a profile lies.
+    """
+    import torch
+
+    if device == "cuda":
+        def mark() -> float:
+            torch.cuda.synchronize()
+            return time.perf_counter()
+
+        return mark
+    if device == "mps":
+        def mark() -> float:
+            torch.mps.synchronize()
+            return time.perf_counter()
+
+        return mark
+    return time.perf_counter
 
 
 def precision_on(device: str, precision: str) -> str:
@@ -463,10 +487,22 @@ class Examples:
     crosses that boundary intact.
     """
 
-    def __init__(self, cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles) -> None:
+    def __init__(
+        self,
+        cfg,
+        items: Sequence[tuple[str, str]],
+        tiles: TrainingTiles,
+        index: dict | None = None,
+    ) -> None:
         self.cfg = cfg
         self.items = list(items)
         self.tiles = tiles
+        #: :meth:`benchmark.evaluate.TileStore.index_for` for the tiles this pass can reach,
+        #: built **once by the caller** and inherited by every worker. A worker that built its
+        #: own read the whole 499,934-row manifest to do it — 1.24 s each, per epoch — which at
+        #: 64 workers over 50 epochs is 66 minutes of a cell spent re-deriving one table, and is
+        #: why a 192-core box ran slower than a 16-core one (#159).
+        self.index = index
         self._store = None
 
     def __len__(self) -> int:
@@ -476,7 +512,7 @@ class Examples:
         if self._store is None:
             from .evaluate import TileStore
 
-            self._store = TileStore(self.cfg.paths.corpus_dir)
+            self._store = TileStore(self.cfg.paths.corpus_dir, index=self.index)
         return self._store
 
     def __getitem__(self, index: int) -> dict[str, np.ndarray]:
@@ -488,15 +524,47 @@ class Examples:
         )
 
 
-def batches(cfg, items: Sequence[tuple[str, str]], tiles: TrainingTiles, *, batch_size: int):
+#: Batches a worker should have to itself before another worker is worth starting. Two, so a
+#: worker that finishes one has a second queued and the pipeline never stalls waiting for a
+#: process that has nothing left to do.
+BATCHES_PER_WORKER: Final = 2
+
+
+def workers_for(items: int, batch_size: int, ceiling: int) -> int:
+    """How many loader processes this many instances can actually keep busy.
+
+    Starting a worker is not free — it forks a process holding the parent's address space, and
+    the cost is paid **per :class:`~torch.utils.data.DataLoader`**, which :func:`batches` builds
+    once per epoch for training and once more for val. Measured on a 192-core box: 64 workers
+    cost ~15 s to start, and the val pass paid it in full to serve *sixteen batches* — 2,000
+    tiles costing 15-18 s against the 20,000-tile training pass's 51 (#159).
+
+    So the ceiling is what the box allows and this is what the work needs: enough workers for
+    :data:`BATCHES_PER_WORKER` each, and never more. A val pass stops paying a training pass's
+    startup, and a ``--size 1k`` rung stops paying a 20k one's.
+    """
+    if ceiling <= 0:
+        return 0
+    needed = max(1, items // max(1, batch_size * BATCHES_PER_WORKER))
+    return max(1, min(ceiling, needed))
+
+
+def batches(
+    cfg,
+    items: Sequence[tuple[str, str]],
+    tiles: TrainingTiles,
+    *,
+    batch_size: int,
+    index: dict | None = None,
+):
     """Yield :class:`Composed` batches over ``items``, in order, on ``runtime.loader_workers``.
 
     Zero workers is a plain loop rather than a one-worker :class:`~torch.utils.data.DataLoader`,
     because the suite runs sharded under ``pytest-xdist`` and a fixture-sized pass that forked a
     worker per shard would spend more time on process setup than on the four tiles it composes.
     """
-    dataset = Examples(cfg, items, tiles)
-    workers = cfg.runtime.loader_workers
+    dataset = Examples(cfg, items, tiles, index)
+    workers = workers_for(len(items), batch_size, cfg.runtime.loader_workers)
     if workers <= 0:
         for start in range(0, len(dataset), batch_size):
             yield collate(
@@ -639,7 +707,7 @@ def predict(
     """§2.4's fill for a trained arm: the A1 fill plus the head's residual, inside the void.
 
     The eval path's entry into this module, reached through
-    :class:`benchmark.evaluate.Learned`. Returns one float32 tile per input, in metres, ready for
+    :func:`benchmark.evaluate._head_fill`. Returns one float32 tile per input, in metres, ready for
     :func:`benchmark.metrics.score` — and, when the head's output convolution is still zero,
     returns arrays **equal** to A1's (:func:`benchmark.head.apply_residual`).
     """
@@ -723,12 +791,25 @@ class Epoch:
     lr: float
     val_rmse: float
     seconds: float
+    #: Wall seconds per phase — ``load`` (waiting on the dataloader), ``forward`` (the frozen
+    #: encoder plus the head), ``backward`` (loss, gradients, optimizer step) and ``val``.
+    #:
+    #: Here because an epoch time on its own cannot say *what* is slow, and this benchmark spent
+    #: three wrong diagnoses finding that out (#159): the tile index, then `normalize`, then the
+    #: unused intermediates, each argued from the code and each refuted by a measurement. A run
+    #: that reports where its own seconds went is cheaper than a fourth argument.
+    phases: dict = field(default_factory=dict)
 
     def line(self) -> str:
         return (
             f"epoch {self.epoch:>3}  loss {self.loss:9.4f}  l1 {self.elevation:8.4f} m  "
             f"slope {self.slope:7.4f}  lr {self.lr:.2e}  val_rmse {self.val_rmse:8.4f} m  "
             f"{self.seconds:6.1f}s"
+            + (
+                "  [" + " ".join(f"{k} {v:.1f}s" for k, v in self.phases.items()) + "]"
+                if self.phases
+                else ""
+            )
         )
 
 
@@ -782,11 +863,22 @@ class Trained:
     #: trained in the same words §1's table does.
     kind: str = "head"
 
+    @property
+    def arm(self) -> str:
+        """Which registered arm these weights are for.
+
+        Read off :attr:`stack` rather than stored beside it, so there is one answer:
+        :func:`benchmark.evaluate._head_fill` refuses a head trained for another arm, and a copy
+        of the name that could disagree with the encoder the stack actually holds would make that
+        refusal check the wrong thing.
+        """
+        return "" if self.stack is None else self.stack.arm
+
     def predict(
         self, raw_i16: Sequence[np.ndarray], voids: Sequence[np.ndarray], cfg
     ) -> list[np.ndarray]:
-        """:func:`predict`, bound to this trained head — what :class:`benchmark.evaluate.Learned`
-        carries across the seam."""
+        """:func:`predict`, bound to this trained head — what the ``a1_fill_plus_mask`` factory
+        closes over when `run` hands it this object (:func:`benchmark.evaluate._head_fill`)."""
         return predict(raw_i16, voids, cfg, self.stack)
 
     def to_dict(self) -> dict:
@@ -820,6 +912,7 @@ def val_rmse(
     stack: Stack | ScratchStack,
     *,
     tiles: TrainingTiles,
+    index: dict | None = None,
 ) -> float:
     """Pooled RMSE in metres over every val void — the number §4.1 early-stops on.
 
@@ -832,7 +925,7 @@ def val_rmse(
     squares = 0.0
     count = 0
     items = [(item.tile_id, item.mask_rle) for item in instances]
-    for batch in batches(cfg, items, tiles, batch_size=cfg.head.batch_size):
+    for batch in batches(cfg, items, tiles, batch_size=cfg.head.batch_size, index=index):
         filled = predict_composed(batch, stack, precision=cfg.head.precision)
         for i, out in enumerate(filled):
             void = batch.void[i]
@@ -918,6 +1011,7 @@ def _fit(
     tiles: TrainingTiles,
     device: str,
     on_epoch: Callable[[Epoch], None] | None,
+    tag: str | None = None,
 ) -> Fitted:
     """§4.1's schedule, run over whatever trainable part the caller built.
 
@@ -945,8 +1039,21 @@ def _fit(
     steps_per_epoch = max(1, math.ceil(len(train_ids) / recipe.batch_size))
     schedule = Cosine.of(recipe, steps_per_epoch=steps_per_epoch, epochs=epochs)
 
-    directory = Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
+    # `tag` separates one tuning grid point's checkpoints from the next (#159); a run passes
+    # none and gets the cell's own directory.
+    cell = f"{cfg.arm}-{cfg.size}-seed{cfg.seed}"
+    directory = Path(cfg.runtime.checkpoint_dir) / (cell if tag is None else f"{cell}-{tag}")
     directory.mkdir(parents=True, exist_ok=True)
+
+    # Built once here and inherited by every worker of every epoch (#159). See `Examples.index`:
+    # a worker that builds its own reads the whole manifest, and that cost is paid per worker per
+    # epoch rather than once per run. A7 inherits it because this is the one pass — a measurement
+    # made against §4.1's head is a measurement made against §4.4's UNet.
+    from .evaluate import TileStore
+
+    index = TileStore.index_for(
+        cfg.paths.corpus_dir, [*train_ids, *(item.tile_id for item in val)]
+    )
 
     order = np.random.default_rng(cfg.seed)
     history: list[Epoch] = []
@@ -967,8 +1074,18 @@ def _fit(
             for i in order.permutation(len(train_ids))
         ]
         totals = {"loss": 0.0, "l1_m": 0.0, "slope_l1": 0.0}
+        phases = {"load": 0.0, "forward": 0.0, "backward": 0.0, "val": 0.0}
         lr = recipe.lr
-        for batch in batches(cfg, shuffled, tiles, batch_size=recipe.batch_size):
+        # CUDA is asynchronous, so `time.perf_counter` around a forward measures how long Python
+        # queued the kernels rather than how long they ran. `mark` is the only honest way to
+        # attribute seconds to a phase on an accelerator (#159).
+        mark = _clock(device)
+        tick = mark()
+        for batch in batches(
+            cfg, shuffled, tiles, batch_size=recipe.batch_size, index=index
+        ):
+            phases["load"] += mark() - tick
+            tick = mark()
             lr = schedule.apply(optimizer, step)
             optimizer.zero_grad(set_to_none=True)
             # §4.1's loss is a mean over the batch's **void pixels**, so a split whose pieces
@@ -989,15 +1106,22 @@ def _fit(
                 # in numpy: the prediction is the fill plus the residual *inside the void*.
                 prediction = a1 + residual * void
                 terms = head.loss(prediction, truth, void, slope_weight=recipe.slope_weight)
+                phases["forward"] += mark() - tick
+                tick = mark()
                 share = float(piece.void.sum()) / pixels if pixels else 1.0 / len(pieces)
                 (terms.total * share).backward()
                 for key, value in terms.detached().items():
                     totals[key] += value * share
+                phases["backward"] += mark() - tick
+                tick = mark()
             optimizer.step()
             step += 1
+            tick = mark()
 
         module.eval()
-        scored = val_rmse(val, cfg, stack, tiles=tiles)
+        tick = mark()
+        scored = val_rmse(val, cfg, stack, tiles=tiles, index=index)
+        phases["val"] = mark() - tick
         line = Epoch(
             epoch=epoch,
             loss=totals["loss"] / steps_per_epoch,
@@ -1006,6 +1130,7 @@ def _fit(
             lr=lr,
             val_rmse=scored,
             seconds=time.perf_counter() - epoch_started,
+            phases={k: round(v, 1) for k, v in phases.items()},
         )
         history.append(line)
         save_checkpoint(module, line, directory / EPOCH_CHECKPOINT.format(epoch=epoch))
@@ -1030,6 +1155,7 @@ def train_head(
     extractor=None,
     epochs: int | None = None,
     recipe=None,
+    tag: str | None = None,
     on_epoch: Callable[[Epoch], None] | None = None,
 ) -> Trained:
     """Train §4.1's head for one cell. The encoder is frozen and asserted so on the way out.
@@ -1038,6 +1164,13 @@ def train_head(
     (:func:`benchmark.tune.tune`); a `run` passes none and gets the frozen one, which
     :func:`benchmark.tune.assert_frozen` has already checked. ``epochs`` is the tuning pass's
     other short-cut, for the same reason and with the same restriction.
+
+    ``tag`` distinguishes this pass's checkpoint directory from a sibling's. A cell does not need
+    one — ``(arm, size, seed)`` is its identity — but a **tuning pass** trains several heads at
+    the same identity, and without a tag each grid point overwrote the last one's epoch files and
+    left a ``best.pt`` holding the *last* point's weights rather than the winner's. Nothing reads
+    those files, so no number was ever wrong; what was wrong is that a directory named for a cell
+    held something else, which is the same shape of problem as a printed count nothing checked.
 
     The order below is the argument:
 
@@ -1095,6 +1228,7 @@ def train_head(
         tiles=tiles,
         device=device,
         on_epoch=on_epoch,
+        tag=tag,
     )
     assert_encoder_frozen(model, name=encoder.name, before=before)
 
