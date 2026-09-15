@@ -72,8 +72,9 @@ A synthetic void is placed by geometry alone — :func:`draw_from_seed` is a fun
 never opens the tile — so nothing in the draw can notice that a void has landed on painted ocean
 fill rather than on terrain. On the #150 draw it did: **400** of 30,000 instances held some ocean,
 39 were mostly ocean, and **8** were entirely ocean. So the tile set is filtered through
-:func:`benchmark.voids.eligible` (:func:`scoreable_tiles`), and the 477 part-ocean test tiles are
-dropped whole.
+:func:`benchmark.voids.eligible` (:func:`scoreable_tiles`), and the 477 test tiles it rejects are
+dropped whole — **135** part-ocean and **415** water-flagged, overlapping in 73. "Part-ocean" is
+the half this section is about and not the whole of what the predicate drops (#174).
 
 The filter is on the **tile** and not on the placement, which is the design and not a shortcut —
 :func:`scoreable_tiles` records the measurement that settled it.
