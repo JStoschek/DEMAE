@@ -1192,12 +1192,17 @@ def _terramind_extractor(tmp_path, checkpoint, monkeypatch):
     test below, so a TerraMind test that wanted to reach the second guard would otherwise only
     ever be re-testing the first.
 
-    **Both** entries, because A5 and A9 read the same file — `terramind` and
-    `terramind-tokenizer` share a `checkpoint_field`, so republishing one leaves `freeze`
-    comparing the other against the real 1.15 GB tokenizer's md5.
+    **Every** entry reading that file, because more than one does — A5's `terramind`, A9's
+    `terramind-tokenizer` and ADR-0011 D4's `terramind-bicubic` (#161) all share a
+    `checkpoint_field`, so republishing one leaves `freeze` comparing the others against the
+    real 1.15 GB tokenizer's md5 and raising where no test is looking.
+    Read off the registry rather than listed here, so a fourth entry cannot reintroduce that:
+    the list was two names when the third arrived, and the failure it produced was a raw
+    `ValueError` from a *helper*, several assertions away from anything under test.
     """
-    for name in ("terramind", "terramind-tokenizer"):
-        _publish(monkeypatch, checkpoint, name)
+    for name, encoder in arms.ENCODERS.items():
+        if encoder.checkpoint_field == "terramind_checkpoint":
+            _publish(monkeypatch, checkpoint, name)
     cfg = _terramind_config(tmp_path, checkpoint)
     return Extractor(build_spec(cfg), cfg)
 

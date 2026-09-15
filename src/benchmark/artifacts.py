@@ -25,6 +25,8 @@ artifact, and what counts as the same one — and this module keeps the refusal.
 
 from __future__ import annotations
 
+import textwrap
+
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -326,6 +328,31 @@ class Resolution:
             f"{'encoder':<16} {encoder.name} — {encoder.family} family, {encoder.width}d, "
             f"pos_emb {encoder.pos_encoding}{params}",
         ]
+        # ADR-0011's derivation, printed rather than left to the committed spec (#161). The
+        # encoder's *name* already separates `terramind` from `terramind-bicubic`, so this adds
+        # no distinction a reader could not reach — but it reaches it through `arms.ENCODERS` at
+        # whatever commit `git_sha` names, and the two cells this ticket runs are identical in
+        # every other respect. `pos_encoding` above says what the shipped tensor **is**; this
+        # says what the model actually **runs with**, and #134 measured those two derivations
+        # 0.9708 apart. The same argument #160 made for the axis order, one field along.
+        if encoder.pos_emb_derivation != "as_published":
+            lines.append(
+                f"{'pos_emb':<16} {encoder.pos_emb_derivation} from a "
+                f"{encoder.pos_emb_native_grid_px}x{encoder.pos_emb_native_grid_px} grid "
+                f"(ADR-0011)"
+            )
+            # The sentence itself, not just the derivation's name. ADR-0011's Consequences ask
+            # for it in as many words — "one sentence, with 1.1429-vs-1.0 attached" — and a
+            # resolution block that named `rederived_14x14_crop` and stopped would leave the
+            # reader to rediscover, from an ADR, why this benchmark's TerraMind does not match
+            # terratorch's. That rediscovery is the thing the ADR exists to prevent.
+            for part in textwrap.wrap(arms.pos_emb_citation(encoder) or "", 96):
+                lines.append(f"{'':<16} {part}")
+        # ADR-0013 R4, carried where the arm is described rather than remembered (#161). The
+        # rule is that the per-modality figure travels with the encoder wherever it is stated,
+        # and a resolution block that names the checkpoint is exactly such a place.
+        if encoder.pretraining_epochs_citation is not None:
+            lines.append(f"{'pretraining':<16} {encoder.pretraining_epochs_citation}")
         if self.checkpoint is not None:
             lines.append(self.checkpoint.line())
         if self.mae_checkpoint is not None:
@@ -426,6 +453,27 @@ class Resolution:
             "pos_emb_derivation": (
                 None if self.encoder is None else self.encoder.pos_emb_derivation
             ),
+            # ADR-0011's divergence sentence, beside the derivation it is about (#161). The
+            # derivation alone is a token a reader has to take somewhere else to cash; this is
+            # the half the ADR's Consequences say the writeup owes, carried so the writeup is
+            # quoting a record rather than reconstructing an argument from one.
+            "pos_emb_citation": (
+                None if self.encoder is None else arms.pos_emb_citation(self.encoder)
+            ),
+            # ADR-0013 R4's per-modality citation, beside the encoder it is about (#161).
+            #
+            # **One block rather than two sibling keys**, on `benchmark.extract.pos_emb_block`'s
+            # rule: R4's two halves are one claim, and `Encoder.__post_init__` refuses to hold
+            # either without the other — so emitting them flat would let a record drift into a
+            # state the registry cannot be in. The nesting is what keeps the invariant visible
+            # at the boundary it has to survive.
+            #
+            # `None` for every encoder this plan publishes no figure for, which is not the same
+            # fact as "not recorded": the key is always present, and its *absence* is a record
+            # written before R4 was carried at all.
+            "pretraining": (
+                None if self.encoder is None else _pretraining_block(self.encoder)
+            ),
             "checkpoint": None if self.checkpoint is None else self.checkpoint.to_dict(),
             "mae_checkpoint": (
                 None if self.mae_checkpoint is None else self.mae_checkpoint.to_dict()
@@ -433,6 +481,28 @@ class Resolution:
             "artifacts": {item.key: item.to_dict() for item in self.inputs},
             "git_sha": git_sha(),
         }
+
+
+def _pretraining_block(encoder: arms.Encoder) -> dict | None:
+    """ADR-0013 R4's figure and the sentence it must be stated in, or ``None`` for an encoder
+    this plan publishes neither for.
+
+    A function rather than a dict literal inside :meth:`Resolution.to_dict` so the two halves are
+    assembled in one place, which is the same argument :func:`benchmark.extract.pos_emb_block`
+    makes: R4 is a claim about a *sentence*, and a record that carried the number without the
+    words would restate the ambiguity the rule exists to remove.
+
+    ``None`` rather than a block of nulls, because "this plan publishes no epoch count for this
+    encoder" is one fact and not two — DEMAE's own encoders have a run record instead, and the
+    ImageNet MAE's 1600 is in its filename and governed by no registered rule.
+    """
+    if encoder.pretraining_epochs is None:
+        return None
+    return {
+        "epochs": encoder.pretraining_epochs,
+        "citation": encoder.pretraining_epochs_citation,
+        "rule": "R4",
+    }
 
 
 #: The committed inputs only a **training** arm reads: §3.1's head-train draw, the val draw its

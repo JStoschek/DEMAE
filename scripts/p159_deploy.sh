@@ -56,6 +56,16 @@ $SSH "${HOST}" "mkdir -p ${REMOTE}/artifacts/task1 ${REMOTE}/data/task1 ${REMOTE
 rsync -az --delete \
   --exclude '.venv' --exclude 'data' --exclude 'artifacts' --exclude '.git' \
   --exclude '__pycache__' --exclude '.pytest_cache' \
+  `# Not caches: both of these exist on the laptop and are meaningless-to-harmful on the box.` \
+  `# .release-work holds the Phase-1 release bundles the *encoders* were exported from — ~1.4 GB` \
+  `# of checkpoints the box already mounts from /root/ckpt under the paths the config names.` \
+  --exclude '.DS_Store' --exclude '.release-work' \
+  `# .claude holds this machine's agent worktrees — full sibling checkouts, each with its` \
+  `# own data/ and artifacts/, 1.8 GB of them when #161 found this. Shipping it is slow, it` \
+  `# fills the box's 63 GB disk with nothing that runs, and it puts other tickets' in-flight` \
+  `# state on a rented host somebody else owns the hardware of. The list above was written` \
+  `# when the directory did not exist.` \
+  --exclude '.claude' \
   -e "${SSH}" ./ "${HOST}:${REMOTE}/"
 # Written here, from the tree just shipped, and never anywhere else.
 echo "${SHA}" | $SSH "${HOST}" "cat > ${REMOTE}/.git_sha"
