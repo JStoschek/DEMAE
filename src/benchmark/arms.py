@@ -175,6 +175,23 @@ class Encoder:
     #: DEMAE norms after block twelve and TerraMind does not (ADR-0012 §3), which is the whole
     #: reason `output` and `intermediates[11]` are separately named.
     output_is_normed: bool = True
+    #: How many epochs the *published* checkpoint was pretrained for, where the publisher states
+    #: a figure this plan is obliged to quote. ADR-0013 **R4** is the whole reason this is a
+    #: field: TerraMind's paper headlines 100 epochs, which is its S-2/S-1 figure, and the DEM
+    #: modality this benchmark reads got **20** (#138). The wrong one is the one a reader reaches
+    #: for, it is off by 5x, and it flatters the baseline — so it rides with the encoder and is
+    #: printed wherever the arm is described, rather than being remembered by whoever writes the
+    #: sentence.
+    #:
+    #: ``None`` is *this plan states none*, which is the honest answer for DEMAE's own encoders
+    #: (their epoch count is a run record's, not a published artifact's) and for the ImageNet MAE
+    #: (whose 1600 is in its filename and in `pretrain.init`, and which no registered rule
+    #: governs). Never defaulted to a number — R4 is a citation, and an inherited one is not.
+    pretraining_epochs: int | None = None
+    #: The per-modality citation itself, in the words R4 requires it be stated in. Beside the
+    #: integer rather than derived from it, because what R4 governs is the *sentence*: a bare
+    #: `20` in a record is a number a reader has no way to tell from the paper's headline.
+    pretraining_epochs_citation: str | None = None
 
     def __post_init__(self) -> None:
         if self.pos_encoding not in POS_ENCODINGS:
@@ -190,6 +207,13 @@ class Encoder:
         # The two fields are one claim in two halves, and the halves have to agree: a derivation
         # that is the identity has no *other* grid to name, and one that is not has nothing to
         # derive from without it.
+        if (self.pretraining_epochs is None) != (self.pretraining_epochs_citation is None):
+            raise ValueError(
+                f"encoder {self.name}: an epoch count and its citation are one claim in two "
+                f"halves (ADR-0013 R4) — a bare {self.pretraining_epochs!r} is a number a "
+                f"reader cannot tell from the paper's headline, and a citation with no figure "
+                f"states nothing"
+            )
         published = self.pos_emb_derivation == "as_published"
         if published != (self.pos_emb_native_grid_px is None):
             raise ValueError(
@@ -233,6 +257,17 @@ IMAGENET_MAE_MD5: Final = "91ecc0345a6d6ecefe9c59041841f180"
 #: is why that matters here more than elsewhere: **three** DEM constant pairs ship across IBM's
 #: artifacts, and the v0.1 tokenizer is a different file with the same shape and a different diet.
 TERRAMIND_TOKENIZER_DEM_MD5: Final = "66b7fbcb81e04684df31873623d7a3de"
+
+#: ADR-0013 **R4**, as the number and the sentence it must be stated in (#138). TerraMind's paper
+#: headlines 100 tokenizer epochs; that is the S-2/S-1 figure. The DEM modality — the only one
+#: this benchmark reads — got 20, per the tokenizer's own recorded training args. Registered as a
+#: rule because the wrong figure is the one a reader reaches for, it is 5x too large, and it errs
+#: in the direction that flatters the baseline C1 is argued against.
+TERRAMIND_DEM_EPOCHS: Final = 20
+TERRAMIND_DEM_EPOCHS_CITATION: Final = (
+    "20 epochs over the DEM modality (TerraMind 1.0 DEM tokenizer's recorded training args); "
+    "the paper's 100 is its S-2/S-1 figure — ADR-0013 R4, #138"
+)
 
 #: The encoders §1 and §2.3 name. TerraMind's 4.92M excess over DEMAE's ViT-B is reported and
 #: not attributed (§2.3): terratorch was not installed in any live worktree when it was written.
@@ -296,6 +331,42 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # means something different here than it does for DEMAE, which is ADR-0012 §3's subject.
         output_is_normed=False,
         has_cls=False,
+        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
+        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
+        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
+        pretraining_epochs=TERRAMIND_DEM_EPOCHS,
+        pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
+    ),
+    # ADR-0011 Decision 4's pre-registered ablation, as an encoder rather than as a flag
+    # (ADR-0013 R11). Byte-identical weights to `terramind` — same field, same md5, same diet —
+    # under terratorch's own default `F.interpolate(pos_emb, size=(14, 14), mode="bicubic")`
+    # instead of Decision 2's crop. #134 measured the two at 0.9708 mean per-token cosine against
+    # a 0.99 bar, so the row stays and this entry is what lets it be run.
+    #
+    # A second registry entry rather than a knob on `A5`, and `terramind-tokenizer` below is the
+    # precedent: the committed contract keys its encoders by name, `benchmark.extract.Extractor`
+    # caches built models by name, and `benchmark.results.append_rows` replaces rows by
+    # `(arm, size, seed)`. An override that left both cells calling themselves `A5` would have
+    # the ablation *delete* the row it was registered to sit beside — silently, since a replace
+    # leaves nothing behind in the parquet to say it happened.
+    "terramind-bicubic": Encoder(
+        name="terramind-bicubic",
+        family="terramind",
+        width=768,
+        pos_encoding="sincos2d_terramind",
+        pos_emb_derivation="bicubic_resize",
+        pos_emb_native_grid_px=16,
+        checkpoint_field="terramind_checkpoint",
+        params=90_172_416,
+        checkpoint_format="terratorch",
+        checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        output_is_normed=False,
+        has_cls=False,
+        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
+        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
+        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
+        pretraining_epochs=TERRAMIND_DEM_EPOCHS,
+        pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
     "imagenet-mae": Encoder(
         name="imagenet-mae",
@@ -355,6 +426,11 @@ ENCODERS: Final[dict[str, Encoder]] = {
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
         has_cls=False,
+        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
+        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
+        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
+        pretraining_epochs=TERRAMIND_DEM_EPOCHS,
+        pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
 }
 
@@ -552,6 +628,16 @@ ARMS: Final[dict[str, Arm]] = dict(
             normalization="terramind_v1",
             what="TerraMind tokenizer pass-through — encode, FSQ, diffusion decode. §7's one "
             "unpriced line: measure per-instance cost before committing the full pass",
+        ),
+        _arm(
+            "A5-BICUBIC",
+            encoder="terramind-bicubic",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="terramind_v1",
+            what="A5 under terratorch's own bicubic `pos_emb` resize — ADR-0011 D4's "
+            "pre-registered ablation row, kept by #134's 0.9708 against R11's 0.99 bar",
+            printed=False,
         ),
         _arm(
             "A4-S",

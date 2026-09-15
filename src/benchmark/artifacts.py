@@ -326,6 +326,24 @@ class Resolution:
             f"{'encoder':<16} {encoder.name} — {encoder.family} family, {encoder.width}d, "
             f"pos_emb {encoder.pos_encoding}{params}",
         ]
+        # ADR-0011's derivation, printed rather than left to the committed spec (#161). The
+        # encoder's *name* already separates `terramind` from `terramind-bicubic`, so this adds
+        # no distinction a reader could not reach — but it reaches it through `arms.ENCODERS` at
+        # whatever commit `git_sha` names, and the two cells this ticket runs are identical in
+        # every other respect. `pos_encoding` above says what the shipped tensor **is**; this
+        # says what the model actually **runs with**, and #134 measured those two derivations
+        # 0.9708 apart. The same argument #160 made for the axis order, one field along.
+        if encoder.pos_emb_derivation != "as_published":
+            lines.append(
+                f"{'pos_emb':<16} {encoder.pos_emb_derivation} from a "
+                f"{encoder.pos_emb_native_grid_px}x{encoder.pos_emb_native_grid_px} grid "
+                f"(ADR-0011)"
+            )
+        # ADR-0013 R4, carried where the arm is described rather than remembered (#161). The
+        # rule is that the per-modality figure travels with the encoder wherever it is stated,
+        # and a resolution block that names the checkpoint is exactly such a place.
+        if encoder.pretraining_epochs_citation is not None:
+            lines.append(f"{'pretraining':<16} {encoder.pretraining_epochs_citation}")
         if self.checkpoint is not None:
             lines.append(self.checkpoint.line())
         if self.mae_checkpoint is not None:
@@ -425,6 +443,20 @@ class Resolution:
             "pos_encoding": None if self.encoder is None else self.encoder.pos_encoding,
             "pos_emb_derivation": (
                 None if self.encoder is None else self.encoder.pos_emb_derivation
+            ),
+            # ADR-0013 R4's per-modality citation, beside the encoder it is about (#161). Both
+            # halves, because the rule governs the *sentence*: a bare 20 in a JSON record is a
+            # number a reader has no way to tell from TerraMind's 100-epoch headline, and that
+            # headline is the one they will supply for themselves if this does not.
+            #
+            # `None` for every encoder this plan publishes no figure for, which is not the same
+            # fact as "not recorded" — the key is always present, and its absence would be a
+            # record written before R4 was carried at all.
+            "pretraining_epochs": (
+                None if self.encoder is None else self.encoder.pretraining_epochs
+            ),
+            "pretraining_epochs_citation": (
+                None if self.encoder is None else self.encoder.pretraining_epochs_citation
             ),
             "checkpoint": None if self.checkpoint is None else self.checkpoint.to_dict(),
             "mae_checkpoint": (

@@ -10,6 +10,7 @@
     "A4-R5": "demae-r5",
     "A4-S": "demae-vits",
     "A5": "terramind",
+    "A5-BICUBIC": "terramind-bicubic",
     "A6": "imagenet-mae",
     "A7": null,
     "A9": "terramind-tokenizer"
@@ -108,6 +109,26 @@
           1
         ],
         "derivation": "rederived_14x14_crop",
+        "grid_px": 14,
+        "native_grid_px": 16
+      },
+      "pos_encoding": "sincos2d_terramind",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
+    "terramind-bicubic": {
+      "checkpoint_format": "terratorch",
+      "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",
+      "depth": 12,
+      "family": "terramind",
+      "has_cls": false,
+      "name": "terramind-bicubic",
+      "normalization": "terramind_v1",
+      "note": "`output` is bit-identical to `intermediates[11]` (p118 \u00a75.3) \u2014 and not because nothing happens after block 12. terratorch's `ViTEncoder` applies a residual `post_mlp` and **overwrites the last intermediate with the result**, so both fields carry it and neither is the raw block output. What this field claims is the *relation*, which is the thing a consumer can be wrong about. The two fields are still separate, because on the DEMAE side they are two different tensors.",
+      "output_is_normed": false,
+      "pos_emb": {
+        "adr": "ADR-0011",
+        "derivation": "bicubic_resize",
         "grid_px": 14,
         "native_grid_px": 16
       },

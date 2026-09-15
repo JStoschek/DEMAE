@@ -458,7 +458,9 @@ def test_the_registry_holds_a1_to_a7_and_a9_and_neither_ruled_out_arm():
     """
     assert set(arms.ARMS) == {
         "A1", "A2-R5", "A2-R4", "A3-R5", "A3-R4", "A4-R5", "A4-R4",
-        "A5", "A6", "A7", "A9", "A4-S",
+        # `A5-BICUBIC` is ADR-0011 D4's pre-registered ablation and `A4-S` §2.3's ViT-S cell:
+        # both are registered, both carry `printed=False`, and neither widens R5's table (#161).
+        "A5", "A5-BICUBIC", "A6", "A7", "A9", "A4-S",
     }
     assert not any(name.startswith(("A8", "A10")) for name in arms.ARMS)
 
