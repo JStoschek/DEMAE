@@ -115,7 +115,7 @@ def test_R4s_twenty_tokenizer_epochs_ride_with_every_terramind_encoder():
     """R4: the per-modality figure, never the paper's 100 — carried, not remembered."""
     from benchmark import prereg
 
-    registered = {rule.rule: rule for rule in prereg.REGISTER}["R4"]
+    registered = prereg.rule("R4")
     for name in ("terramind", ABLATION_ENCODER, "terramind-tokenizer"):
         encoder = arms.ENCODERS[name]
         assert encoder.pretraining_epochs == registered.value == 20
@@ -167,8 +167,16 @@ def test_the_two_cells_do_not_share_a_run_id():
 def test_R4s_citation_reaches_the_run_record_and_the_printed_block():
     """"Carried ... anywhere the arm is described" — the two surfaces that describe it."""
     record = _resolution("A5").to_dict()
-    assert record["pretraining_epochs"] == 20
-    assert "S-2/S-1" in record["pretraining_epochs_citation"]
+    # One block rather than two flat keys, so the halves cannot drift apart in a record where
+    # `Encoder.__post_init__` forbids them to drift apart in the registry.
+    assert record["pretraining"] == {
+        "epochs": 20,
+        "citation": arms.ENCODERS["terramind"].pretraining_epochs_citation,
+        "rule": "R4",
+    }
+    assert "S-2/S-1" in record["pretraining"]["citation"]
+    # `None` rather than a block of nulls for an encoder this plan publishes no figure for.
+    assert _resolution("A6").to_dict()["pretraining"] is None
 
     printed = "\n".join(_resolution("A5").lines(verb="run"))
     assert "20 epochs over the DEM modality" in printed
@@ -214,3 +222,54 @@ def test_the_frozen_encoder_assertion_covers_the_ablation_arm():
     model.weight.requires_grad_(True)
     with pytest.raises(train.TrainError, match="requires_grad"):
         train.assert_encoder_frozen(model, name=ABLATION_ENCODER, before=before)
+
+
+def test_R4s_epoch_count_is_read_from_the_register_and_not_retyped():
+    """`benchmark.prereg`: "past this module no threshold in the benchmark is typed as a literal".
+
+    R4's 20 is one of its seven numbered rules, so this registry reads it rather than quoting it
+    — the quote-and-pin-by-test pattern `IMAGENET_MAE_MD5` uses is for values whose home module
+    imports torch, and `prereg` does not.
+    """
+    from benchmark import prereg
+
+    assert arms.TERRAMIND_DEM_EPOCHS is prereg.rule("R4").value
+    assert str(arms.TERRAMIND_DEM_EPOCHS) in arms.TERRAMIND_DEM_EPOCHS_CITATION
+
+
+def test_ADR_0011s_divergence_sentence_is_carried_where_the_arm_is_described():
+    """The ticket's other owed fact: "we diverge from terratorch's default inference path".
+
+    ADR-0011's Consequences ask for it in as many words — "one sentence, with 1.1429-vs-1.0
+    attached" — and the two arms must say *opposite* things, or a reader who finds the ablation's
+    numbers has no way to tell they are not the benchmark's own.
+    """
+    crop = arms.pos_emb_citation(arms.ENCODERS["terramind"])
+    bicubic = arms.pos_emb_citation(arms.ENCODERS[ABLATION_ENCODER])
+
+    for sentence in (crop, bicubic):
+        assert sentence and "1.1429" in sentence and "1.0" in sentence
+
+    assert "diverges from terratorch's default" in crop
+    # The ablation's line says it *is* the default, and that it is not a way to score an arm.
+    assert "terratorch's own default" in bicubic
+    assert "ablation" in bicubic
+
+    # `as_published` has no library path to diverge from, so it says nothing rather than null-ish
+    # boilerplate — the same choice `pos_emb_block` makes for the identity derivation.
+    assert arms.pos_emb_citation(arms.ENCODERS["imagenet-mae"]) is None
+
+    record = _resolution("A5").to_dict()
+    assert record["pos_emb_citation"] == crop
+    assert _resolution(ABLATION_ARM).to_dict()["pos_emb_citation"] == bicubic
+    assert _resolution("A6").to_dict()["pos_emb_citation"] is None
+
+    printed = "\n".join(_resolution("A5").lines(verb="run"))
+    assert "1.1429" in printed and "diverges from terratorch's default" in printed
+
+
+def test_the_spacing_figures_are_the_ADRs_own():
+    """Rendered from two named constants, so the sentence cannot drift from the geometry."""
+    adr = (REPO / "docs" / "adr" / "0011-terramind-posemb-rederived-at-14x14.md").read_text()
+    assert f"**{arms.BICUBIC_TOKEN_SPACING}**" in adr
+    assert f"exactly **{arms.CROP_TOKEN_SPACING}**" in adr

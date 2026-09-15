@@ -33,6 +33,22 @@ registry already declares and which is what "which checkpoint was this initializ
 means. ``None`` for the two arms that run no encoder. The registry key stays in ``arm``, because
 that is what the CLI takes and what :data:`benchmark.arms.PRINTED_ROWS` makes a printed row.
 
+### And ``terramind-bicubic`` is a derivation, not an init either
+
+#161 added a second encoder key over the *same* file: ``terramind`` and ``terramind-bicubic``
+share a checkpoint field and an md5, and differ only in ADR-0011's ``pos_emb`` derivation. So
+this column now carries a value that is no more an init than ``A4-S``'s suffix is — which is the
+distinction the section above exists to protect, arriving from the other direction.
+
+It is left as the encoder key anyway, and the reason is that nothing reads ``init`` as an init:
+R5's printed table is keyed on ``arm``, and so is :func:`append_rows`' replacement. What ``init``
+is actually for is letting a rows-only reader tell one encoder's rows from another's without the
+run record, and for that purpose the two *are* different encoders — they emit different features
+from the same weights. The honest gloss is "which encoder produced these features", which is what
+the column has always been; "initialized from" was only ever true because no two encoder entries
+had shared a file. The run record carries ``pos_emb_derivation`` and ``pos_emb_citation`` for a
+reader who needs to know *why* they differ.
+
 ## Re-running a cell replaces it
 
 ``run`` executes exactly one ``(arm, size, seed)`` cell, so that triple is what

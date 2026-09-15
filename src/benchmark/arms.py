@@ -47,6 +47,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+# Stdlib-only itself, and it does not import this module — so R4's value is read from the
+# register without putting torch on `freeze`'s or A1's import path (§3.4).
+from . import prereg
+
 # --- Vocabularies -------------------------------------------------------------
 
 #: What an arm trains. ``nothing`` is A1's classical fill and every inference-only row; ``head``
@@ -79,6 +83,56 @@ NORMALIZATIONS: Final = ("none", "per_tile", "terramind_v1")
 #: ADR-0011 Decision 4 pre-registers an A5-at-20k ablation row against it (ADR-0013 R11) — a
 #: derivation the contract cannot express is an ablation nobody can run.
 POS_EMB_DERIVATIONS: Final = ("as_published", "rederived_14x14_crop", "bicubic_resize")
+
+#: ADR-0011's two token spacings, and the one sentence its Consequences section says the writeup
+#: owes: *"we now diverge from the library's default inference path, and the writeup must say so
+#: plainly — one sentence, with 1.1429-vs-1.0 attached."*
+#:
+#: `align_corners=False` preserves *normalized* position, so terratorch's default resize samples
+#: the native 16-grid at indices 0.071 … 14.929 — spacing 1.1429 where a crop's is exactly 1.0.
+#: The model is told its patches sit ~14% further apart than they do, and because the stretch is
+#: systematic rather than noisy the error accumulates past a full patch width by the far edge.
+BICUBIC_TOKEN_SPACING: Final = 1.1429
+CROP_TOKEN_SPACING: Final = 1.0
+
+
+def pos_emb_citation(encoder: Encoder) -> str | None:
+    """ADR-0011's divergence sentence for one encoder, or ``None`` where there is no divergence.
+
+    Rendered from :attr:`Encoder.pos_emb_derivation` rather than carried as a field per entry —
+    :func:`benchmark.extract._encoder_note`'s rule, "written from the fact rather than copied per
+    entry", and the reason R4's citation *is* a field is the reverse of it: an epoch count is a
+    fact about one published artifact that nothing in this registry could derive, where this
+    sentence is a function of a derivation the registry already declares.
+
+    The two encoders say opposite things and both have to be sayable. A5's line is the divergence
+    — this is not what terratorch does, and here is the arithmetic. A5-BICUBIC's line is that it
+    *is* what terratorch does, run only because ADR-0011 D4 pre-registered a row against it, so a
+    reader who finds its numbers cannot mistake them for the benchmark's own.
+
+    ``None`` for ``as_published``, which is every 224 px-native ViT here: the checkpoint's tensor
+    is already at the run's grid, nothing is derived, and there is no library path to diverge from.
+    """
+    if encoder.pos_emb_derivation == "rederived_14x14_crop":
+        return (
+            f"diverges from terratorch's default inference path on purpose: ADR-0011 D2 takes "
+            f"the centre-anchored {encoder.pos_emb_native_grid_px - 2}x"
+            f"{encoder.pos_emb_native_grid_px - 2} crop of the native "
+            f"{encoder.pos_emb_native_grid_px}x{encoder.pos_emb_native_grid_px} grid, token "
+            f"spacing exactly {CROP_TOKEN_SPACING}. terratorch resizes it bicubically instead, "
+            f"sampling at spacing {BICUBIC_TOKEN_SPACING} — ~14% too wide, accumulating past a "
+            f"full patch by the far edge. The embedding is fixed sin-cos, so the crop *is* the "
+            f"closed form at the smaller grid and nothing is approximated"
+        )
+    if encoder.pos_emb_derivation == "bicubic_resize":
+        return (
+            f"terratorch's own default inference path, at token spacing "
+            f"{BICUBIC_TOKEN_SPACING} against a crop's {CROP_TOKEN_SPACING}. Run **only** as "
+            f"ADR-0011 D4's pre-registered ablation (R11), never as a way to score an arm — "
+            f"these numbers are the thing the benchmark's own path is evidenced against"
+        )
+    return None
+
 
 #: What the closed form a checkpoint's position tensor is **checked against** can be. A tuple
 #: like its three siblings above rather than a free string, because #157 added a third value to
@@ -187,6 +241,13 @@ class Encoder:
     #: (their epoch count is a run record's, not a published artifact's) and for the ImageNet MAE
     #: (whose 1600 is in its filename and in `pretrain.init`, and which no registered rule
     #: governs). Never defaulted to a number — R4 is a citation, and an inherited one is not.
+    #:
+    #: **Deliberately not a field of** :class:`benchmark.extract.EncoderSpec`, so ADR-0012's
+    #: committed contract carries this encoder's `pos_emb` derivation and not its epoch count.
+    #: That contract governs what comes *out of a frozen encoder* — twelve intermediates at a
+    #: declared dtype under a declared diet — and an epoch count changes none of it, where the
+    #: derivation changes every tensor in it. R4's homes are §2.3, §6.4 and §10: prose a reader
+    #: reads, which is what the run record and the resolution block are and the contract is not.
     pretraining_epochs: int | None = None
     #: The per-modality citation itself, in the words R4 requires it be stated in. Beside the
     #: integer rather than derived from it, because what R4 governs is the *sentence*: a bare
@@ -207,13 +268,6 @@ class Encoder:
         # The two fields are one claim in two halves, and the halves have to agree: a derivation
         # that is the identity has no *other* grid to name, and one that is not has nothing to
         # derive from without it.
-        if (self.pretraining_epochs is None) != (self.pretraining_epochs_citation is None):
-            raise ValueError(
-                f"encoder {self.name}: an epoch count and its citation are one claim in two "
-                f"halves (ADR-0013 R4) — a bare {self.pretraining_epochs!r} is a number a "
-                f"reader cannot tell from the paper's headline, and a citation with no figure "
-                f"states nothing"
-            )
         published = self.pos_emb_derivation == "as_published"
         if published != (self.pos_emb_native_grid_px is None):
             raise ValueError(
@@ -221,6 +275,16 @@ class Encoder:
                 f"pos_emb_native_grid_px={self.pos_emb_native_grid_px!r}. An `as_published` "
                 f"derivation names no native grid because it is the run's; every other one names "
                 f"the grid it derives *from* (ADR-0011)"
+            )
+        # ADR-0013 R4's two halves, on the pair above's rule: what R4 governs is the *sentence*,
+        # so a figure with no citation is a number a reader cannot tell from TerraMind's headline
+        # and a citation with no figure states nothing. Neither half is usable alone, which is
+        # what makes this a check rather than two independent optional fields.
+        if (self.pretraining_epochs is None) != (self.pretraining_epochs_citation is None):
+            raise ValueError(
+                f"encoder {self.name}: pretraining_epochs={self.pretraining_epochs!r} with "
+                f"pretraining_epochs_citation={self.pretraining_epochs_citation!r}. R4 asks for "
+                f"the figure and the per-modality citation together or neither (ADR-0013)"
             )
 
 
@@ -258,15 +322,25 @@ IMAGENET_MAE_MD5: Final = "91ecc0345a6d6ecefe9c59041841f180"
 #: artifacts, and the v0.1 tokenizer is a different file with the same shape and a different diet.
 TERRAMIND_TOKENIZER_DEM_MD5: Final = "66b7fbcb81e04684df31873623d7a3de"
 
-#: ADR-0013 **R4**, as the number and the sentence it must be stated in (#138). TerraMind's paper
-#: headlines 100 tokenizer epochs; that is the S-2/S-1 figure. The DEM modality — the only one
-#: this benchmark reads — got 20, per the tokenizer's own recorded training args. Registered as a
-#: rule because the wrong figure is the one a reader reaches for, it is 5x too large, and it errs
-#: in the direction that flatters the baseline C1 is argued against.
-TERRAMIND_DEM_EPOCHS: Final = 20
+#: ADR-0013 **R4**'s epoch count, read out of the register rather than re-typed here.
+#:
+#: `benchmark.prereg` is explicit that past it "no threshold in the benchmark is typed as a
+#: literal", and R4's `20` is one of its seven numbered rules — so this is a lookup where
+#: :data:`IMAGENET_MAE_MD5` and :attr:`Encoder.timm_model` are quotes-pinned-by-a-test. The
+#: difference is that those two quote a module importing **torch** at its top, and §3.4 keeps
+#: this registry torch-free so `freeze` and A1's scoring path run on a box with no CUDA stack.
+#: `prereg` imports only stdlib and does not import this module, so there is no cost to pay and
+#: no cycle to dodge: `zeroshot.py` already reads R6 and R12 exactly this way.
+TERRAMIND_DEM_EPOCHS: Final = prereg.rule("R4").value
+
+#: The sentence R4 requires the figure be stated in. Here rather than in the register because
+#: what `prereg` holds is the *rule* — "carry the per-modality citation wherever stated" — and
+#: what this is, is the citation being carried. The 100 is named on purpose: R4 is a
+#: disambiguation, and a citation reading only "20 epochs" leaves TerraMind's 5x-larger headline
+#: standing as the figure a reader supplies for themselves.
 TERRAMIND_DEM_EPOCHS_CITATION: Final = (
-    "20 epochs over the DEM modality (TerraMind 1.0 DEM tokenizer's recorded training args); "
-    "the paper's 100 is its S-2/S-1 figure — ADR-0013 R4, #138"
+    f"{TERRAMIND_DEM_EPOCHS} epochs over the DEM modality (TerraMind 1.0 DEM tokenizer's "
+    f"recorded training args); the paper's 100 is its S-2/S-1 figure — ADR-0013 R4, #138"
 )
 
 #: The encoders §1 and §2.3 name. TerraMind's 4.92M excess over DEMAE's ViT-B is reported and
@@ -331,9 +405,6 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # means something different here than it does for DEMAE, which is ADR-0012 §3's subject.
         output_is_normed=False,
         has_cls=False,
-        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
-        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
-        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
         pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
@@ -362,9 +433,6 @@ ENCODERS: Final[dict[str, Encoder]] = {
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
         has_cls=False,
-        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
-        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
-        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
         pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
@@ -426,9 +494,6 @@ ENCODERS: Final[dict[str, Encoder]] = {
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
         has_cls=False,
-        # ADR-0013 R4 (#138). The DEM tokenizer's own recorded training args, not the
-        # paper's 100 — that is TerraMind's S-2/S-1 figure, and quoting it here would
-        # overstate this baseline's pretraining by 5x in the one direction that flatters it.
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
         pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),

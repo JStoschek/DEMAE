@@ -55,7 +55,10 @@ done
 $SSH "${HOST}" "mkdir -p ${REMOTE}/artifacts/task1 ${REMOTE}/data/task1 ${REMOTE}/data/corpus_subset"
 rsync -az --delete \
   --exclude '.venv' --exclude 'data' --exclude 'artifacts' --exclude '.git' \
-  --exclude '__pycache__' --exclude '.pytest_cache' --exclude '.ruff_cache' \
+  --exclude '__pycache__' --exclude '.pytest_cache' \
+  `# Not caches: both of these exist on the laptop and are meaningless-to-harmful on the box.` \
+  `# .release-work holds the Phase-1 release bundles the *encoders* were exported from — ~1.4 GB` \
+  `# of checkpoints the box already mounts from /root/ckpt under the paths the config names.` \
   --exclude '.DS_Store' --exclude '.release-work' \
   `# .claude holds this machine's agent worktrees — full sibling checkouts, each with its` \
   `# own data/ and artifacts/, 1.8 GB of them when #161 found this. Shipping it is slow, it` \
