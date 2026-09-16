@@ -473,9 +473,15 @@ def test_a_ruled_out_arm_is_refused_generically_rather_than_by_a_special_case(na
 
 
 #: The conventions that have an implementation rather than a ticket. ``classical_fill`` is
-#: A1's (#158), ``token_drop`` is A2's (#167) and ``a1_fill_plus_mask`` is the §4.1 head's
-#: (#159); the one left names the ticket that builds it.
-BUILT_CONVENTIONS = ("classical_fill", "token_drop", "a1_fill_plus_mask")
+#: A1's (#158), ``token_drop`` is A2's (#167), ``a1_fill_plus_mask`` is the §4.1 head's (#159)
+#: and ``a1_fill_through_tokenizer`` is A9's (#168) — so as of #168 this is all four of them,
+#: and the loop below is a completeness claim with nothing left to iterate.
+BUILT_CONVENTIONS = (
+    "classical_fill",
+    "token_drop",
+    "a1_fill_plus_mask",
+    "a1_fill_through_tokenizer",
+)
 
 
 def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_name_a_ticket():
@@ -491,8 +497,15 @@ def test_every_registered_input_convention_has_an_entry_and_the_unbuilt_ones_nam
     an encoder has to load one once per pass rather than once per instance, and ``token_drop`` is
     shared by two arms whose weights differ. So the refusal is raised by the filler a factory
     returns, which is exactly where a built convention would do its work.
+
+    **Every convention is built as of #168, and the mechanism outlives that.** The loop below has
+    nothing left to walk, which is why the completeness assertion above it is the load-bearing
+    half: an entry added to the registry without one here would fail as a `KeyError` on a rented
+    box rather than as a sentence naming its ticket. `_unbuilt` itself is still reached — A3
+    shares `token_drop` with A2 and is told so — and `tests/test_benchmark_a2.py` holds that.
     """
     assert set(evaluate.FILLERS) == set(arms.INPUT_CONVENTIONS)
+    assert set(BUILT_CONVENTIONS) == set(arms.INPUT_CONVENTIONS), "#168 built the last one"
 
     for convention, factory in evaluate.FILLERS.items():
         if convention in BUILT_CONVENTIONS:

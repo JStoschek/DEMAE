@@ -479,9 +479,17 @@ ENCODERS: Final[dict[str, Encoder]] = {
     ),
     # A9's entry. Same file, same 90.2 M-parameter encoder, same diet — what differs is what the
     # arm does *after* the features (§1: encode, FSQ, diffusion decode), which is not something
-    # the frozen-feature contract has an opinion about. `params` stays `None` here rather than
-    # repeating 90,172,416: §6 item 4 prints parameter counts, and A9's total is the encoder plus
-    # the 196 M-parameter decoder it actually runs, which is a number no source in this plan gives.
+    # the frozen-feature contract has an opinion about. That is also why `params` is a different
+    # number here than on `terramind` above and not a disagreement with it: `parameter_counts`
+    # reports what an arm *runs*, A5 runs the encoder half, and A9 runs the whole tokenizer.
+    #
+    # **Counted, where every other entry's is quoted** (#168). This line read `None` for as long
+    # as A9's convention was unbuilt, on the rule that a count this registry guessed would print
+    # as a measurement — and no source in this plan gives the sum. It is 286,316,821: p118 §8's
+    # 90,172,416 encoder, a 196,140,560 diffusion decoder, and 3,845 across the FSQ quantizer and
+    # the post-quant projection, off the strict load in `benchmark.passthrough.load` and
+    # reproducible by `benchmark.passthrough.parameter_count`. The 46,080 ADR-0011's crop removes
+    # is `params`' standing caveat here as above: this is the tokenizer **as published**.
     "terramind-tokenizer": Encoder(
         name="terramind-tokenizer",
         family="terramind",
@@ -490,6 +498,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_emb_derivation="rederived_14x14_crop",
         pos_emb_native_grid_px=16,
         checkpoint_field="terramind_checkpoint",
+        params=286_316_821,
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
