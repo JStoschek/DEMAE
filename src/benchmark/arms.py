@@ -479,9 +479,17 @@ ENCODERS: Final[dict[str, Encoder]] = {
     ),
     # A9's entry. Same file, same 90.2 M-parameter encoder, same diet — what differs is what the
     # arm does *after* the features (§1: encode, FSQ, diffusion decode), which is not something
-    # the frozen-feature contract has an opinion about. `params` stays `None` here rather than
-    # repeating 90,172,416: §6 item 4 prints parameter counts, and A9's total is the encoder plus
-    # the 196 M-parameter decoder it actually runs, which is a number no source in this plan gives.
+    # the frozen-feature contract has an opinion about. That is also why `params` is a different
+    # number here than on `terramind` above and not a disagreement with it: `parameter_counts`
+    # reports what an arm *runs*, A5 runs the encoder half, and A9 runs the whole tokenizer.
+    #
+    # **Counted, where every other entry's is quoted** (#168). This line read `None` for as long
+    # as A9's convention was unbuilt, on the rule that a count this registry guessed would print
+    # as a measurement — and no source in this plan gives the sum. It is 286,316,821: p118 §8's
+    # 90,172,416 encoder, a 196,140,560 diffusion decoder, and 3,845 across the FSQ quantizer and
+    # the post-quant projection, off the strict load in `benchmark.passthrough.load` and
+    # reproducible by `benchmark.passthrough.parameter_count`. The 46,080 ADR-0011's crop removes
+    # is `params`' standing caveat here as above: this is the tokenizer **as published**.
     "terramind-tokenizer": Encoder(
         name="terramind-tokenizer",
         family="terramind",
@@ -490,6 +498,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pos_emb_derivation="rederived_14x14_crop",
         pos_emb_native_grid_px=16,
         checkpoint_field="terramind_checkpoint",
+        params=286_316_821,
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
         output_is_normed=False,
@@ -520,6 +529,24 @@ class Arm:
     #: Whether this arm is one of R5's eleven printed rows (:data:`PRINTED_ROWS`) or a §2.3
     #: appendix cell reported as a single observation without a ±.
     printed: bool = True
+    #: Whether the tokenizer's diffusion sampler keeps TerraMind's **published** dynamic
+    #: thresholding. Only the ``a1_fill_through_tokenizer`` arms read it; every other arm runs no
+    #: sampler and leaves it at the published ``True``.
+    #:
+    #: A field on the *arm* rather than a second :data:`ENCODERS` entry, which is where
+    #: ``terramind-bicubic`` puts its one knob. The difference is what the knob moves.
+    #: ADR-0011's crop changes the encoder's own `pos_emb` tensor, and
+    #: :class:`benchmark.extract.Extractor` caches built models **by encoder name**, so two arms
+    #: sharing a name would share one cached model and silently score the same weights twice.
+    #: Thresholding changes no weight and no tensor: it is a property of the DDIM sampler the
+    #: 196 M decoder is run under, and A9 and A9-NOTHRESH really do read one encoder — which
+    #: :func:`benchmark.passthrough.assert_same_encoder` goes on proving for both. Putting it on
+    #: the encoder would assert a difference in the encoder that does not exist.
+    #:
+    #: It is likewise **not** a field of :class:`benchmark.extract.EncoderSpec`, on
+    #: :attr:`Encoder.pretraining_epochs`' rule: ADR-0012's committed contract governs what comes
+    #: out of a frozen *encoder*, and the sampler changes nothing in it.
+    sampler_thresholding: bool = True
 
     def __post_init__(self) -> None:
         if self.encoder is not None and self.encoder not in ENCODERS:
@@ -530,6 +557,12 @@ class Arm:
             raise ValueError(f"arm {self.name}: unknown input {self.input_convention!r}")
         if self.normalization not in NORMALIZATIONS:
             raise ValueError(f"arm {self.name}: unknown normalization {self.normalization!r}")
+        if not self.sampler_thresholding and self.input_convention != "a1_fill_through_tokenizer":
+            raise ValueError(
+                f"arm {self.name}: `sampler_thresholding` is the tokenizer's diffusion sampler "
+                f"and only {'a1_fill_through_tokenizer'!r} runs one. An arm that moved it "
+                f"without running a sampler would print a knob that changed nothing"
+            )
         if (self.encoder is None) != (self.normalization == "none"):
             raise ValueError(
                 f"arm {self.name}: an arm with an encoder declares that encoder's diet and an "
@@ -693,6 +726,45 @@ ARMS: Final[dict[str, Arm]] = dict(
             normalization="terramind_v1",
             what="TerraMind tokenizer pass-through — encode, FSQ, diffusion decode. §7's one "
             "unpriced line: measure per-instance cost before committing the full pass",
+        ),
+        # The fair fight (#168). A9 runs the tokenizer exactly as terratorch's registry builds it,
+        # and that registry hands the DEM DiVAE a DDIM sampler with `thresholding=True` and
+        # `sample_max_value=1.0`. Dynamic thresholding is Imagen's trick for *images*, whose data
+        # really are bounded to [-1, 1]; it rescales every sample into that interval. TerraMind's
+        # DEM diet is (h - 670.665) / 951.272 — zero-mean, unit-**std**, so a third of real
+        # elevation sits outside |1| by construction — and the interval therefore lands at
+        # [-280.6 m, +1621.9 m]. Measured on flat tiles: 2500 m, 3000 m and 4000 m all decode to
+        # 1621.9 m, and 6000 m *wraps* to -277 m.
+        #
+        # 37.7% of the committed eval instances sit on tiles above that ceiling, and for them the
+        # overshoot predicts the scored bias at r = 0.985. So A9's row measures the published
+        # sampler's ceiling far more than it measures the tokenizer, and this arm is what lets the
+        # table say which. The setting is the *only* difference: same weights, same md5, same
+        # diet, same 50 timesteps, one knob.
+        #
+        # The knob is defensible rather than flattering. The DEM tokenizer's own recorded training
+        # args carry `run_name="tokenization/divae/rgb/DEM-ViTB-UNetP4_16k_224-264"` — **rgb** —
+        # so the recipe is the image one, and the bounded-data assumption it inherits is false for
+        # elevation. Turning it off recovers capability the model already has rather than granting
+        # it any: the UNet predicts `sample` and was trained against unclipped targets, and with
+        # thresholding off 4000 m decodes to 3974.6 m.
+        _arm(
+            "A9-NOTHRESH",
+            encoder="terramind-tokenizer",
+            trains="nothing",
+            input_convention="a1_fill_through_tokenizer",
+            normalization="terramind_v1",
+            sampler_thresholding=False,
+            # An appendix cell, on `A5-BICUBIC`'s precedent and for its reason. R5's printed
+            # table is **pre-registered** at eleven rows, and this arm was registered after A9's
+            # pass had run and been read. A post-hoc ablation promoted into the pre-registered
+            # table is the exact move pre-registration exists to prevent — and it would be the
+            # flattering direction, which is worse. The row is reported in full beside
+            # `A5-BICUBIC`; what carries the finding into the headline is §7's prose and A9's own
+            # row, which now says what its ceiling costs.
+            printed=False,
+            what="TerraMind tokenizer pass-through, sampler thresholding off — A9's one knob, "
+            "and the row that separates the published ceiling from the model",
         ),
         _arm(
             "A5-BICUBIC",

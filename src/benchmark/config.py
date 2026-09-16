@@ -566,6 +566,55 @@ class Unet(_Frozen):
             )
 
 
+# --- §1's A9 pass-through -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Tokenizer(_Frozen):
+    """A9 — the TerraMind DEM tokenizer run as published (plan §1, #168).
+
+    Two knobs, and both are **recipe** rather than environment: each one moves the numbers A9's
+    row prints, so each one is in :attr:`BenchmarkConfig.config_hash` and a cell run at a moved
+    value cannot be mistaken for this one. That is the opposite disposition from
+    :class:`Runtime`, and the difference is the whole reason the two classes are separate.
+
+    Nothing here names an output raster. #163 measured that :meth:`DiVAE.decode_quant` sizes its
+    output from the *decoder's* 256 px training resolution and takes no hint from the 14x14
+    latent it is handed, so a 224 px tile comes back 256 px and silently — every §5 metric would
+    compute, and be wrong. The fix is not a knob: the raster A9 decodes to is the corpus's tile,
+    which :mod:`benchmark.passthrough` reads off the tile it was handed and then checks the
+    decode against. A knob there would be a second answer to a question the corpus already
+    settles.
+    """
+
+    #: TerraMind's own ``num_eval_timesteps``, and why A9 is the tokenizer *as published* rather
+    #: than a cheaper reading of it. #163 priced the lever: cost is linear in timesteps to 2.2%
+    #: over a tenfold range, so halving this halves the bill — and would hand any unflattering A9
+    #: result an objection costing more to answer than the whole line costs to run ($0.12).
+    timesteps: int = 50
+    #: Instances per decode, at #163's measured plateau.
+    #:
+    #: **Recipe, not runtime, and this is the field that makes the distinction load-bearing.**
+    #: The decoder's initial noise is one ``torch.randn`` over the whole batch
+    #: (``PipelineCond.__call__``), drawn row-major, so an instance's noise is a function of its
+    #: *position in its batch* and of how many instances share it. Rows scored at batch 32 and
+    #: rows scored at batch 8 are therefore different numbers from the same weights, and a field
+    #: outside the hash would let a box that had to halve this for memory write them into one
+    #: parquet under one identity. Per-instance seeding would remove the dependence; it is not
+    #: taken, because the only way to draw one instance's noise independently here is a batch of
+    #: one, at #163's measured 1.43x.
+    batch_size: int = 32
+
+    def __post_init__(self) -> None:
+        if self.timesteps < 1:
+            raise ValueError(
+                f"timesteps {self.timesteps} must be >= 1; TerraMind's own eval default is 50 "
+                f"and A9 is a reference row for the tokenizer as published"
+            )
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size {self.batch_size} must be >= 1")
+
+
 # --- ADR-0012's extractor contract --------------------------------------------
 
 
@@ -762,6 +811,7 @@ _GROUPS: Final = {
     "head": Head,
     "finetune": Finetune,
     "unet": Unet,
+    "tokenizer": Tokenizer,
     "extract": Extract,
     "runtime": Runtime,
     "paths": Paths,
@@ -809,6 +859,7 @@ class BenchmarkConfig(_Frozen):
     head: Head = field(default=TUNED_HEAD)
     finetune: Finetune = field(default_factory=Finetune)
     unet: Unet = field(default_factory=Unet)
+    tokenizer: Tokenizer = field(default_factory=Tokenizer)
     extract: Extract = field(default_factory=Extract)
     runtime: Runtime = field(default_factory=Runtime, metadata=ENVIRONMENT)
     paths: Paths = field(default_factory=Paths, metadata=ENVIRONMENT)

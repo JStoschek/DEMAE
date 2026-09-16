@@ -1621,8 +1621,9 @@ training masks read from the committed bank** ([#121](https://github.com/JStosch
 | Label-efficiency sweep (1k, 5k; 2 seeds) | 3 cells x 2 seeds x 50 ep x 6k | 5.4 | R4 and ViT-S are both out of the sweep (§2.3) |
 | Inference over the eval instances | 37 passes x **40k** | 4.4 | frozen forward is **0.179 ms/tile** at ViT-B; prices an encoder pass, so A2/A3's decode is not in it. 37 is the 38 scored passes below minus A1, which runs no encoder |
 | A3 fine-tune (R5 ViT-B + R4 ViT-B) | 20 ep x 20k | 4.4 | fine-tune epoch is **6.66 s**; measured equal to a pretraining epoch. **Derived, not re-measured** — the old 3.1 was ViT-B + ViT-S, re-split at Phase 1's measured 3,001 / 7,291 samples/s |
-| **GPU total** | | **324.2 min = 5.40 h** | **$2.17** at $0.4016/hr — **305.6 min / $2.05 for the lines above, plus A9's 18.6 min / $0.12 below**, which was outside this total for as long as it was unpriced *(was 163.7 min / $1.09 until [#175](https://github.com/JStoschek/DEMAE/issues/175) measured A7, and 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147), still excluding A9)* |
-| **A9 (TerraMind full tokenizer)** | **40k** instances | **18.6** | **Measured 2026-08-13 — [p163](p163-a9-decode-cost.md) ([#163](https://github.com/JStoschek/DEMAE/issues/163)).** Diffusion decode is **2.72 s/instance** on this laptop at TerraMind's own 50 timesteps, **0.31 GPU-h = $0.12** transferred at p120's ratio. Prices the *decode only* — the encoder forward is already in the inference line above, and A9 is one of its 38 passes. **The row read `unpriced`, at a guessed 1 s/instance = 11.1 GPU-h**; that guess overstates the line by 36x and is the wrong side of the device, since 1 s/instance would make the 5090 2.7x slower than the laptop this was measured on |
+| **GPU total** | | **589.8 min = 9.83 h** | **$3.95** at $0.4016/hr — **305.6 min / $2.05 for the lines above, plus the two pass-through rows' measured 284.2 min / $1.90 below**, which was outside this total for as long as it was unpriced *(was 163.7 min / $1.09 until [#175](https://github.com/JStoschek/DEMAE/issues/175) measured A7, and 148.2 min / $0.99 before [#147](https://github.com/JStoschek/DEMAE/issues/147), still excluding A9)* |
+| **A9 (TerraMind full tokenizer)** | **36,411** instances | **142.2** | **Measured 2026-09-16 by the pass itself, on the rented card — [#168](https://github.com/JStoschek/DEMAE/issues/168).** 8,534 s for 36,411 rows = **0.2344 s/instance**, **2.37 GPU-h = $0.95**. Supersedes p163's transferred **18.6 min / $0.12**, which was **7.6x low**, and #163's own UNet-factor exposure of 83 min / $0.56, which was still **1.7x low**. A capacity pilot on the same card read 0.2320 s/instance *before* the pass was committed to, so this line stopped being a transfer at the moment it stopped being a projection. Part of the residual gap is the card and not the ratio: this is a **5080**, where every other line in this table prices a 5090. Prices the *decode only* — the encoder forward is already in the inference line above, and A9 is one of its 38 passes |
+| **A9-NOTHRESH (the same pass, sampler thresholding off)** | **36,411** instances | **142.0** | **#168's fair fight, and the same bill to 0.17%**: 8,519.9 s against A9's 8,534.5 for the same instances, because dynamic thresholding is a clamp applied *on* each denoising step and not a step. Registered because A9's row measures terratorch's published DDIM config more than it measures the tokenizer: that config rescales every decode into [-1, 1], which under TerraMind's own DEM affine is **[-280.6 m, +1621.9 m]**, and **37.7%** of the committed instances sit on tiles above it. Measured over the full pass, mean RMSE is **32.6 m** against the published path's **345.7**, and the split at that ceiling is the whole argument: A9 scores **19.11 below / 753.57 above**, this row **18.73 / 19.47** — flat across a line the published sampler cannot cross |
 | Eval passes (CPU, local, single core) | **38** arm-seed passes x **40k** instances | **1.9-5.1 h** | 4.6 ms/instance scoring-only, 12.1 ms end-to-end as [p119](p119-fill-headroom.md) measured it. **No longer unambiguously the largest single line**: A7 measures **3.44 h** ([#175](https://github.com/JStoschek/DEMAE/issues/175)), which sits inside this line's range, so this is the largest only at the end-to-end rate and A7 is the largest at the scoring-only one. It stays the largest *CPU* line, which is the claim that carried the argument |
 | Train mask bank, generated once (CPU, local, single core) | 20k tiles x K=50 | **21.1 min** | **Measured by `freeze` itself**, 2026-08-13: 1,000,000 rows, **104 MB**, 21.1 min of one core, and two independent freezes produced the same md5, draw hash and byte count. The draw is **0.947 ms** on the shipped generator against the 2.00 ms p121 measured on the prototype, [#150](https://github.com/JStoschek/DEMAE/issues/150)'s one-pass dilation having roughly halved it. **Drawn on the fly instead this line would be 8.2 CPU-h** at that primitive (17.3 at p121's), since this table's own counts total **31.2M** training tile presentations — both re-derived below ([#151](https://github.com/JStoschek/DEMAE/issues/151)) |
 
@@ -1674,10 +1675,13 @@ with the paragraph that prices it):
   anchor that held. Only **22%** of head tuning and **27%** of head training and the label sweep
   is the exposed primitive. Scaling *that* share by the UNet's 4.5x and leaving the encoder
   alone: head tuning 45.7 -> **80.6**, head training 39.1 -> **76.3**, label sweep 5.4 ->
-  **10.5**, and the GPU total reaches **6.69 h / $2.69**. That is the honest worst case and it
-  clears the $25 target by 9x. *(Scaling the whole line instead gives 10.6 h / $4.27 — wrong,
+  **10.5**, and the GPU total reaches **8.75 h / $3.51**. That is the honest worst case and it
+  clears the $25 target by 7.1x. *(Scaling the whole line instead gives 12.7 h / $5.11 — wrong,
   because it applies a convnet-specific error to the transformer forward that is three quarters
-  of the line, which is exactly the conflation this section is about.)* **The first head cell
+  of the line, which is exactly the conflation this section is about.)* **Both figures moved with
+  A9's measurement** ([#168](https://github.com/JStoschek/DEMAE/issues/168)): they were 6.69 h /
+  $2.69 and 10.6 h / $4.27 against a base that priced A9 at $0.12, and the head deltas they add
+  are unchanged — what moved underneath them is the floor. **The first head cell
   should print its per-epoch seconds and this line should be re-derived from it**, the way this
   one just was.
 
@@ -1691,27 +1695,31 @@ against a $25 target — the CPU hours are the project's own laptop, not rent �
 #117's standing note that *attention and wall-clock are the real budget* is now measured
 rather than asserted.
 
-**Every line is now costed, and exactly one of them is measured on the rented card**
+**Every line is now costed, and two of them are measured on the rented card**
 ([#163](https://github.com/JStoschek/DEMAE/issues/163), 2026-08-13;
-[#175](https://github.com/JStoschek/DEMAE/issues/175), 2026-09-14). *This paragraph read "every
+[#175](https://github.com/JStoschek/DEMAE/issues/175), 2026-09-14;
+[#168](https://github.com/JStoschek/DEMAE/issues/168), 2026-09-16). *This paragraph read "every
 line is now measured" until #175, which is the distinction that failed: A7 was costed, not
-measured, and it was 4.5x out.* A9 was the last **unpriced** line. It closes at **$0.12** —
-**5.7%** of the GPU program, where its 1 s/instance placeholder would have been **2.2x** the whole
-table *(that multiple read 4.5x against the 2.42 h total of the day, and is restated here because
-its denominator moved, not its numerator)*. And it closes with room that is not worth
-re-checking: p120's local-to-5090 transfer would have to overstate that card by **201x**
-before A9 alone reached $25. See [p163](p163-a9-decode-cost.md) §8 for the sensitivity table and
-for what the transfer is worth, which is the same caveat p120 §3 states and inherits its weaker
-case, A9's decoder being a UNet.
+measured, and it was 4.5x out.* A9 was the last **unpriced** line, then for a month the last
+**transferred** one. It closes at **$0.95** — **32%** of the GPU program, and the single largest
+GPU line in the table, ahead of A7's 3.44 h only in dollars and not in hours. Its 1 s/instance
+placeholder would still have been **2.5x** the whole table. What does *not* survive the
+measurement is the reassurance that followed: the claim that p120's transfer would have to
+overstate the 5090 by **201x** before A9 alone reached $25 was arithmetic on a number that was
+itself 7.6x low, and the honest version is that A9 came in at 8x its transferred price and is
+still $24 short of the bar. See [p163](p163-a9-decode-cost.md) §8 for the sensitivity table that
+bracketed this correctly.
 
-**That last clause is now load-bearing, and it points the same way #175 does.** A9's decode is
-transferred across the ratio whose UNet case #175 measured as **4.5x overstated**, and A9's
-decoder is the one other convnet in the table. Overstating the ratio understates the cost, so
-A9's row is more likely low than high: at the UNet's measured factor it would be **83 min /
-$0.56** rather than 18.6 min / $0.12, taking the GPU total to 6.5 h / $2.60. That is an exposure
-with its arithmetic shown, not a re-derivation — the row keeps p163's measured projection until
-someone times a decode on the 5090 — and it is the third place in this section where the same
-transfer is the thing that owes a measurement.
+**That exposure was real, and it was still not large enough.** A9's decode was transferred
+across the ratio whose UNet case #175 measured as **4.5x overstated**, and A9's decoder is the
+one other convnet in the table; this section predicted **83 min / $0.56** at the UNet's measured
+factor. The pass ran at **142.2 min / $0.95** — so the direction was right, the mechanism was
+right, and the magnitude was *still* 1.7x short even after correcting for the thing that was
+known to be wrong. Some of that residual is the card (a 5080 here against the 5090 this table
+prices) rather than the ratio. The lesson the third correction teaches that the first two did
+not: a transferred primitive corrected by another transferred primitive is not a measurement,
+and the only line in this section that has ever been right about a convnet is the one that ran
+it. **The head primitive is now the last transferred line**, and it is a convnet too.
 
 Two things [p163](p163-a9-decode-cost.md) found that are **not** budget items and belong to
 whoever runs the pass: `decode_quant` sizes its output raster from the decoder's 256 px training

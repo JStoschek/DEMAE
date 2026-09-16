@@ -390,6 +390,51 @@ def precision_block(resolution: Resolution, agreement: Mapping[str, Any] | None)
     return {"agreement": dict(agreement), "absent_because": None}
 
 
+def sampler_block(resolution) -> dict | None:
+    """What diffusion sampler the decode ran under, for the arms that run one (#168).
+
+    ``None`` for every arm that runs no sampler, and the key is then absent rather than null on
+    :func:`run_record`'s ``register`` rule: a block on every row is one a reviewer stops reading.
+
+    Recorded explicitly because :meth:`benchmark.artifacts.Resolution.to_dict` carries the
+    *config*, and this knob is a field of the **arm** — so without this the two pass-through rows
+    would differ in the parquet by their arm name and by nothing a record could be read for.
+    ``thresholding`` is the whole of what separates A9 from A9-NOTHRESH, and the elevation
+    interval is written out because it is the consequence a reader needs and not a derivation
+    anyone should have to redo.
+    """
+    arm = resolution.arm
+    if arm.input_convention != "a1_fill_through_tokenizer":
+        return None
+    mean, std = 670.665, 951.272
+    block = {
+        "scheduler": "DDIMScheduler",
+        "timesteps": resolution.config.tokenizer.timesteps,
+        "thresholding": arm.sampler_thresholding,
+        "published_default": True,
+    }
+    if arm.sampler_thresholding:
+        block["published_default"] = True
+        block["representable_elevation_m"] = [
+            round(mean - std, 3),
+            round(mean + std, 3),
+        ]
+        block["note"] = (
+            "TerraMind's published DDIM config: dynamic thresholding rescales every sample into "
+            "[-1, 1], which under this arm's own affine is the metre interval above. Terrain "
+            "outside it cannot be represented and is not an error the model made."
+        )
+    else:
+        block["published_default"] = False
+        block["representable_elevation_m"] = None
+        block["note"] = (
+            "Dynamic thresholding (and `clip_sample` with it) turned off; every other term "
+            "carried from the checkpoint's own scheduler config. The one knob separating this "
+            "row from the published one."
+        )
+    return block
+
+
 def run_record(
     resolution: Resolution,
     *,
@@ -432,6 +477,7 @@ def run_record(
             "size": resolution.config.size,
             "seed": resolution.config.seed,
         },
+        **({"sampler": sampler} if (sampler := sampler_block(resolution)) is not None else {}),
         "parameters": dict(parameters),
         "produced": {
             "rows": rows,

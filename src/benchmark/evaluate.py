@@ -338,6 +338,37 @@ def _head_fill(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
     return Fill(fill=fill_batch, batch=cfg.head.batch_size)
 
 
+def _tokenizer_pass_through(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
+    """A9 — §1's reference row, the A1 fill through TerraMind's whole tokenizer (#168).
+
+    The model is loaded **here**, when the pass is built, on :func:`_token_drop`'s rule and for
+    a sharper version of its reason: this is the arm that reads 1.15 GB and 286 M parameters, so
+    an unmounted checkpoint, a moved md5 or a terratorch whose DEM affine has been retuned all
+    stop the run before the first instance rather than 30,000 rows in.
+
+    §4.1's composition is shared with the learned arms rather than rebuilt —
+    :func:`benchmark.train.compose` is what turns tiles and voids into the A1 fill, its int16
+    rounding and ADR-0012's valid mask. A5 and A9 read the same encoder over the same input, and
+    a second composition here would make that a claim instead of a fact.
+
+    The batch is :attr:`benchmark.config.Tokenizer.batch_size` rather than §4.1's 128, and it is
+    the convention's to declare for :class:`Fill`'s stated reason — except that here it is also
+    recipe, because the decoder's noise is drawn once per batch. See
+    :class:`benchmark.config.Tokenizer`.
+    """
+    # Imported here rather than at the top, on this module's standing rule: `benchmark.train`
+    # and `benchmark.passthrough` both reach torch, and A1's scoring path runs on a box with no
+    # CUDA stack (§3.4).
+    from . import passthrough, train
+
+    model = passthrough.load(cfg, arm)
+
+    def fill_batch(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+        return model.run(train.compose([t.raw_i16 for t in tiles], voids, cfg))
+
+    return Fill(fill=fill_batch, batch=cfg.tokenizer.batch_size)
+
+
 def _unbuilt(convention: str, what: str, ticket: str) -> FillerFor:
     """A convention that is registered and not yet built, saying which ticket builds it."""
 
@@ -362,9 +393,7 @@ FILLERS: Final[dict[str, FillerFor]] = {
     "classical_fill": _classical_fill,
     "a1_fill_plus_mask": _head_fill,
     "token_drop": _token_drop,
-    "a1_fill_through_tokenizer": _unbuilt(
-        "a1_fill_through_tokenizer", "A9's encode/FSQ/diffusion-decode pass", "#163"
-    ),
+    "a1_fill_through_tokenizer": _tokenizer_pass_through,
 }
 
 

@@ -354,16 +354,24 @@ def _measured_agreement(resolution: Resolution, trained) -> dict | None:
     :func:`benchmark.results.precision_block`'s question, not this one's; all this reports is
     whether there is a number.
 
-    **The trained stack is the only seam this reaches through, and A9 will not fit it.** A9 trains
-    nothing, so `launch` holds no :class:`benchmark.train.Trained` for it, while its eval pass does
-    run an extractor — inside the filler, which :class:`benchmark.evaluate.Pass` does not carry
-    back. So A9 would record *no measurement reached the record* for a figure that was in fact
-    taken. Left rather than plumbed because A9's input convention is unbuilt
-    (`a1_fill_through_tokenizer`, #163) and a seam added now would be a seam added against a
-    guess at what that pass looks like; the arm that builds it should carry the filler's
-    extractor out of `run_pass` and hand it here. ADR-0012 §6 requires A9's figure to be A9's own,
-    which the encoder-name key already guarantees — `terramind-tokenizer` is a separate registry
-    entry from A5's `terramind` — so what is deferred is *recording* it, never inheriting it.
+    **The trained stack is the only seam this reaches through, and #168 settled why A9 does not
+    need a second one.** The note here used to say that A9 would record *no measurement reached
+    the record* for a figure it had in fact taken, and that the arm building
+    `a1_fill_through_tokenizer` should carry the filler's extractor out of `run_pass` and hand it
+    here. It did not, because there is no such figure to carry: A9 runs TerraMind's diffusion
+    decoder, which ADR-0012 §6 does not govern and nothing in this plan has measured at a reduced
+    precision, so :func:`benchmark.passthrough.load` **refuses** a cell declaring anything but the
+    reference dtype. A9's cells therefore land on :func:`benchmark.results.precision_block`'s
+    third branch — *the run declares the reference dtype* — which is the true reading and reaches
+    it without a seam. What A9 does owe, and what that seam was standing in for, is proof that its
+    encoder half is the contract's; it discharges that at load time and exactly, by comparing the
+    two builds' parameters rather than two forward passes (:func:`benchmark.passthrough.
+    assert_same_encoder`).
+
+    ``None`` from every arm with no extractor in the loop — A1, A7's scratch UNet, and the
+    inference-only arms that hand `run_pass` no trained stack. Which of those it was is
+    :func:`benchmark.results.precision_block`'s question, not this one's; all this reports is
+    whether there is a number.
     """
     extractor = getattr(trained, "stack", None)
     extractor = None if extractor is None else getattr(extractor, "extractor", None)
