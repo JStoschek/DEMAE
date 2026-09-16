@@ -51,6 +51,17 @@ TIMESTEPS = 50
 USD_PER_HOUR = 0.4016
 
 
+#: #168's measurement — A9's full pass, timed by the pass itself. §7's A9 cell is read against
+#: **this** rather than against p163's projection: the row's authority moved from a transfer to a
+#: measurement the moment the pass ran, and a test still pinned to the projection would hold the
+#: plan at the number the ticket existed to replace.
+PASS_RECORD_PATH = REPO / "docs" / "research" / "p168-a9-pass-cost.json"
+
+
+def pass_record() -> dict:
+    return json.loads(PASS_RECORD_PATH.read_text())
+
+
 def driver():
     """The probe driver, loaded by path — `scripts/` is not a package and should not become one."""
     path = REPO / "scripts" / "p163_a9_decode_cost.py"
@@ -78,6 +89,11 @@ _GPU_ITEMS: Final = (
     "Inference over the eval instances",
     "A3 fine-tune",
     "A9 ",
+    # #168's sampler ablation, which costs exactly what A9 costs: dynamic thresholding is a
+    # clamp applied on each denoising step, not a step, so turning it off moves no arithmetic
+    # here. It is a separate row because it is a separate pass over the same 36,411 instances,
+    # and a total that quietly counted one pass for two would understate the card by half.
+    "A9-NOTHRESH ",
 )
 
 
@@ -382,12 +398,17 @@ def test_section_7s_a9_row_is_no_longer_unpriced():
     it replaced, which is how every other amended line in §7 is written — so a substring test over
     the whole row would be testing the prose rather than the table.
     """
-    r, plan = record(), PLAN_PATH.read_text()
+    plan = PLAN_PATH.read_text()
     row = next(line for line in plan.splitlines() if line.startswith("| **A9 "))
     cells = [c.strip() for c in row.strip().strip("|").split("|")]
     minutes = float(cells[2].strip("*"))
-    assert minutes == pytest.approx(r["projection"]["host_gpu_hours"] * 60, abs=0.1)
+    # The measurement, not p163's projection — see PASS_RECORD_PATH. The projection is still
+    # asserted, one line down, as the thing the cell *replaced*: a row that quietly dropped the
+    # number it corrected would lose the correction's whole point.
+    assert minutes == pytest.approx(pass_record()["measured"]["minutes"], abs=0.1)
+    assert str(record()["projection"]["host_gpu_hours"] * 60)[:4] in row or "18.6" in row
     assert "#163" in row
+    assert "#168" in row
     # §7's closing paragraph named A9 as the one open number; with it measured, that sentence
     # cannot still be standing.
     assert "The one number that could still move the total is A9's." not in plan
@@ -406,8 +427,14 @@ def test_section_7s_a9_row_is_no_longer_unpriced():
     # The cell also splits itself into "lines above" plus A9, which is the split that made A9's
     # arrival visible in the first place. Checked too, so a typo in either half cannot pass by
     # agreeing with nothing.
-    above = gpu_minutes - next(v for k, v in rows.items() if k.startswith("A9"))
+    #
+    # **Every** A9 row, not the first one: #168 registered a second pass-through pass over the
+    # same instances (`A9-NOTHRESH`), and a `next(...)` here would have quietly gone on
+    # subtracting one of the two and called the difference "the lines above".
+    below = sum(v for k, v in rows.items() if k.startswith("A9"))
+    above = gpu_minutes - below
     assert f"{above:.1f} min / ${above / 60 * USD_PER_HOUR:.2f}" in total
+    assert f"{below:.1f} min / ${below / 60 * USD_PER_HOUR:.2f}" in total
 
 
 def test_the_memo_quotes_the_records_numbers_rather_than_its_own():

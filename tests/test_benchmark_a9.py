@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import fields
 from pathlib import Path
 
 import numpy as np
@@ -76,9 +77,17 @@ class StubTokenizer:
         batch = tensor.shape[0]
         return torch.zeros((batch, 5, 14, 14)), None, None
 
-    def decode_quant(self, quant, *, timesteps, image_size, verbose, generator):
+    def decode_quant(self, quant, *, timesteps, image_size, verbose, generator, scheduler=None):
+        # `scheduler` is #168's knob: `None` is the tokenizer's own published sampler, which is
+        # what `decode_quant` falls back to, and an arm that turns thresholding off passes one.
+        # Recorded rather than ignored so the published arm can be tested for passing nothing.
         self.calls.append(
-            {"timesteps": timesteps, "image_size": image_size, "seeded": generator is not None}
+            {
+                "timesteps": timesteps,
+                "image_size": image_size,
+                "seeded": generator is not None,
+                "scheduler": scheduler,
+            }
         )
         px = image_size if self.raster is None else self.raster
         noise = torch.randn((quant.shape[0], 1, px, px), generator=generator)
@@ -573,3 +582,127 @@ def test_the_encoder_half_is_the_one_the_contract_builds():
         extract.load_spec(extract.spec_path(_real_cfg())), _real_cfg(), device="cpu"
     ).encoder(ARM)
     assert passthrough.assert_same_encoder(model.model.encoder, contract)["identical"]
+
+
+# --- A9-NOTHRESH: the fair fight (#168) ----------------------------------------
+#
+# A9 measures TerraMind's tokenizer *as terratorch builds it*, and what terratorch builds hands
+# the DEM DiVAE a DDIM sampler with dynamic thresholding on. That rescales every decode into
+# [-1, 1], which under TerraMind's own DEM affine is [-280.6 m, +1621.9 m] — a ceiling 37.7% of
+# the committed instances sit above. These tests pin the second arm to being *one knob* from the
+# first, because that is the whole claim the pair of rows makes.
+
+NOTHRESH = "A9-NOTHRESH"
+
+
+def _resolution_for(arm_name: str):
+    """A `Resolution` for one arm, against this repo's committed artifacts.
+
+    Built through `artifacts.resolve` rather than by hand so the block under test is read off the
+    same object `launch` writes its run record from.
+    """
+    from benchmark import artifacts
+
+    cfg = BenchmarkConfig(arm=arm_name)
+    return artifacts.resolve(cfg, arms.get(arm_name))
+
+
+def test_the_fair_arm_differs_from_a9_in_exactly_one_field():
+    """The pair's entire evidential value: same everything, one sampler knob."""
+    a9, fair = arms.get(ARM), arms.get(NOTHRESH)
+    # `name`, `what` and `printed` are how a row is *reported*; everything else is what the pass
+    # actually does. Split rather than listed as one set of exceptions, because the claim the
+    # pair of rows makes is about the second group: same encoder, same diet, same input
+    # convention, same trainable parts — one sampler knob.
+    presentation = {"name", "what", "printed"}
+    recipe = {
+        f.name
+        for f in fields(a9)
+        if f.name not in presentation and getattr(a9, f.name) != getattr(fair, f.name)
+    }
+    assert recipe == {"sampler_thresholding"}, recipe
+    assert a9.sampler_thresholding is True, "A9 keeps the published sampler"
+    assert fair.sampler_thresholding is False
+    # And the ablation stays out of R5's pre-registered eleven, on `A5-BICUBIC`'s precedent.
+    assert a9.printed is True and fair.printed is False
+    assert NOTHRESH not in arms.PRINTED_ROWS
+
+
+def test_both_pass_through_arms_read_one_encoder():
+    """Not 'the same weights' — the same registry entry, so no cache can hand them two models."""
+    assert arms.get(NOTHRESH).encoder == arms.get(ARM).encoder == "terramind-tokenizer"
+
+
+def test_the_two_arms_share_one_noise_namespace():
+    """A9's committed rows were seeded under the literal `A9`, and the ablation shares the draw.
+
+    Both halves matter. Re-seeding on the arm's own name would stop A9's 36,411 committed rows
+    reproducing, and it would also make the pair differ by their initial noise as well as by the
+    sampler — two knobs wearing one row's name.
+    """
+    assert passthrough.PASS_THROUGH_NOISE_NAMESPACE == "A9"
+    key = passthrough.batch_key([np.zeros((4, 4), bool)])
+    assert passthrough.generator_for(0, key).initial_seed() == (
+        passthrough.generator_for(0, key).initial_seed()
+    )
+
+
+def test_an_arm_that_runs_no_sampler_cannot_move_the_knob():
+    """A knob that changed nothing would still print in the resolution block."""
+    with pytest.raises(ValueError, match="only 'a1_fill_through_tokenizer' runs one"):
+        arms.Arm(
+            name="A-BOGUS",
+            encoder="terramind",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="terramind_v1",
+            what="an arm that runs no diffusion sampler",
+            sampler_thresholding=False,
+        )
+
+
+def test_the_published_arm_passes_no_scheduler_at_all():
+    """A9's decode must reach `decode_quant` exactly as it did before this arm existed.
+
+    `None` rather than a rebuilt copy of the published scheduler: rebuilding is how a row that is
+    supposed to be unchanged acquires a silent difference.
+    """
+    assert stub_pass_through().scheduler is None
+
+
+@requires_terramind
+def test_the_fair_arm_turns_thresholding_off_and_moves_nothing_else():
+    """Every other term carried from the checkpoint's own config, by `from_config`."""
+    cfg = _real_cfg()
+    published = passthrough.load(cfg, arms.get(ARM), device="cpu")
+    fair = passthrough.load(cfg, arms.get(NOTHRESH), device="cpu")
+
+    assert published.scheduler is None
+    assert fair.scheduler is not None
+    before = dict(published.model.noise_scheduler.config)
+    after = dict(fair.scheduler.config)
+    moved = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+    assert moved == {"thresholding", "clip_sample"}, moved
+    assert after["thresholding"] is False
+    assert after["clip_sample"] is False
+    # The terms that make this the checkpoint's sampler rather than a fresh one.
+    assert after["prediction_type"] == before["prediction_type"]
+    assert after["num_train_timesteps"] == before["num_train_timesteps"]
+
+
+def test_the_run_record_says_which_sampler_ran():
+    """Without this the two rows differ in the parquet by their arm name and by nothing else."""
+    published = results.sampler_block(_resolution_for(ARM))
+    fair = results.sampler_block(_resolution_for(NOTHRESH))
+
+    assert published["thresholding"] is True
+    assert published["published_default"] is True
+    assert published["representable_elevation_m"] == [-280.607, 1621.937]
+    assert fair["thresholding"] is False
+    assert fair["published_default"] is False
+    assert fair["representable_elevation_m"] is None
+
+
+def test_an_arm_with_no_sampler_records_no_sampler_block():
+    """A block on every row is one a reviewer stops reading."""
+    assert results.sampler_block(_resolution_for("A1")) is None

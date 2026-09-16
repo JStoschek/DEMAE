@@ -370,6 +370,25 @@ class Resolution:
             f"(N, {extract.tokens}, {encoder.width}), {extract.reference_dtype} reference / "
             f"{extract.compute_dtype} compute, valid = {extract.valid_mask}"
         )
+        if self.arm.input_convention == "a1_fill_through_tokenizer":
+            # The sampler, printed next to the diet and for the same reason (#168). TerraMind's
+            # published DDIM config rescales every decode into [-1, 1], which its own DEM affine
+            # puts at [-280.6 m, +1621.9 m] — so this line is the difference between a row about
+            # the tokenizer and a row about that ceiling, and it costs 37.7% of the committed
+            # instances. A pre-flight fact, not an implementation detail.
+            tok = self.config.tokenizer
+            if self.arm.sampler_thresholding:
+                sampler = (
+                    "TerraMind's published DDIM — dynamic thresholding ON, so the decode is "
+                    "rescaled into [-1, 1] = [-280.6 m, +1621.9 m] and terrain above that "
+                    "ceiling cannot be represented"
+                )
+            else:
+                sampler = (
+                    "TerraMind's published DDIM with dynamic thresholding OFF (and `clip_sample` "
+                    "with it) — every other term carried from the checkpoint's own config"
+                )
+            lines.append(f"{'sampler':<16} {sampler}, {tok.timesteps} timesteps")
         if self.arm.trains_head:
             # §4.1's frozen recipe, printed before anything is spent, for the same reason the
             # checkpoint md5 is: a head trained at a moved learning rate converges normally and

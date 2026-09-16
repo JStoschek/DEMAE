@@ -71,8 +71,19 @@ from . import arms, extract
 #: from here — see this module's docstring — so ``pretrained=False`` is not a fallback.
 REGISTRY_MODEL: Final = "terramind_v1_tokenizer_dem"
 
-#: The arm this module is. Named once rather than threaded through, because every refusal below
-#: quotes it and an arm that shared this path would be a second arm with A9's mechanism.
+#: The **noise namespace** every pass-through arm draws in, and deliberately a constant rather
+#: than the arm's own name (#168).
+#:
+#: Two things rest on it. A9's committed rows were scored under this literal, so threading the
+#: arm name through :func:`generator_for` would re-seed them and they would stop reproducing.
+#: And A9-NOTHRESH is registered as A9's *one-knob* ablation: sharing this namespace makes the
+#: two arms start their decodes from the same initial noise for the same batch, so what separates
+#: their rows is the sampler and not the draw. The spec lookups in :func:`load` take the arm's own
+#: name — an arm asserts the encoder *it* declares — which is why this is no longer spelled `ARM`.
+PASS_THROUGH_NOISE_NAMESPACE: Final = "A9"
+
+#: The arm this module was written for, kept for the refusals that quote a name where no arm
+#: object is in hand.
 ARM: Final = "A9"
 
 
@@ -126,8 +137,42 @@ def generator_for(seed: int, key: str) -> Any:
     """
     import torch
 
-    digest = hashlib.blake2b(f"{ARM}:{seed}:{key}".encode(), digest_size=8).digest()
+    digest = hashlib.blake2b(
+        f"{PASS_THROUGH_NOISE_NAMESPACE}:{seed}:{key}".encode(), digest_size=8
+    ).digest()
     return torch.Generator().manual_seed(int.from_bytes(digest, "big") % (2**63 - 1))
+
+
+def unthresholded_scheduler(model) -> Any:
+    """The tokenizer's own DDIM sampler with dynamic thresholding off, and nothing else moved.
+
+    Built with ``from_config`` off ``model.noise_scheduler`` so every other term the checkpoint
+    recorded — ``zero_terminal_snr``, the beta schedule, ``prediction_type="sample"``, the
+    1,000 training timesteps — is carried rather than retyped. Retyping them is how a "one knob"
+    ablation quietly becomes several.
+
+    ``clip_sample`` is turned off **with** ``thresholding``, and it is not the knob that matters:
+    diffusers applies dynamic thresholding *instead of* the clamp, so with thresholding on,
+    ``clip_sample`` is dead. Measured — turning ``clip_sample`` off alone changes the decode by
+    nothing at all, to the digit. It is moved so that the sampler this arm runs cannot clamp by
+    either mechanism, rather than leaving a live clamp behind the one that was disabled.
+
+    terratorch's own :class:`DDIMScheduler` subclass, not diffusers': the pipeline calls
+    ``set_timesteps(timesteps, mode=...)``, which diffusers' signature does not take, and
+    ``from_config`` on the wrong class also drops ``zero_terminal_snr`` with a warning that reads
+    like a formatting nit.
+    """
+    from terratorch.models.backbones.terramind.tokenizer.scheduling import DDIMScheduler
+
+    published = model.noise_scheduler
+    if not getattr(published.config, "thresholding", False):
+        raise PassThroughError(
+            f"the tokenizer's sampler already has `thresholding` off, so the arm that exists to "
+            f"turn it off has nothing to turn off. terratorch's registry built this model with "
+            f"it on at the version this path is verified against; a build that does not is a "
+            f"different inference path and the row would not be A9's one-knob ablation"
+        )
+    return DDIMScheduler.from_config(published.config, thresholding=False, clip_sample=False)
 
 
 def to_metres(normalized: np.ndarray, *, mean: float, std: float) -> np.ndarray:
@@ -185,6 +230,12 @@ class PassThrough:
     seed: int
     mean: float
     std: float
+    #: The diffusion sampler the decode runs under, or ``None`` for the tokenizer's own — the
+    #: published one, with `thresholding=True`. Set only by an arm declaring
+    #: ``sampler_thresholding=False`` (:attr:`benchmark.arms.Arm.sampler_thresholding`).
+    #: ``decode_quant`` falls back to ``model.noise_scheduler`` when this is ``None``, so the
+    #: published path is the one that passes nothing rather than the one that rebuilds it.
+    scheduler: Any = None
 
     def decode(self, quant: Any, *, tile_px: int, key: str) -> Any:
         """One batch of latents to one batch of rasters, at the tile's own resolution.
@@ -203,6 +254,7 @@ class PassThrough:
                 image_size=tile_px,
                 verbose=False,
                 generator=generator_for(self.seed, key),
+                scheduler=self.scheduler,
             )
         height, width = int(decoded.shape[-2]), int(decoded.shape[-1])
         if (height, width) != (tile_px, tile_px):
@@ -327,8 +379,8 @@ def load(cfg, arm: arms.Arm, *, device: str | None = None) -> PassThrough:
     # Built first, and deliberately: it is the object that applies §7.1's four refusals, so an
     # unmounted checkpoint, a moved md5 or a retuned affine stops the pass here — before 1.15 GB
     # is read a second time, and on a clock that is still cheap.
-    contract_encoder = extractor.encoder(ARM)
-    spec_entry = spec.encoder_for(ARM)
+    contract_encoder = extractor.encoder(arm.name)
+    spec_entry = spec.encoder_for(arm.name)
     path = getattr(cfg.paths, entry.checkpoint_field)
     mean, std = extract.terramind_constants()
 
@@ -361,13 +413,17 @@ def load(cfg, arm: arms.Arm, *, device: str | None = None) -> PassThrough:
     # substituted model, and an identity check on the shipped `pos_emb` would prove a claim about
     # a model neither arm uses.
     assert_same_encoder(model.encoder, contract_encoder)
+    model = model.eval().to(device)
     return PassThrough(
-        model=model.eval().to(device),
+        model=model,
         device=device,
         timesteps=cfg.tokenizer.timesteps,
         seed=cfg.seed,
         mean=mean,
         std=std,
+        # `None` is the published sampler, and the arm that wants it passes nothing rather than
+        # rebuilding it — so A9's decode reaches `decode_quant` exactly as it did before #168.
+        scheduler=None if arm.sampler_thresholding else unthresholded_scheduler(model),
     )
 
 

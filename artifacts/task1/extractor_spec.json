@@ -13,7 +13,8 @@
     "A5-BICUBIC": "terramind-bicubic",
     "A6": "imagenet-mae",
     "A7": null,
-    "A9": "terramind-tokenizer"
+    "A9": "terramind-tokenizer",
+    "A9-NOTHRESH": "terramind-tokenizer"
   },
   "encoders": {
     "demae-r4": {
