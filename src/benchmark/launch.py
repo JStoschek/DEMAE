@@ -85,10 +85,15 @@ from . import (
     zeroshot,
 )
 from .artifacts import Resolution
-from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
+from .config import (
+    LABEL_EFFICIENCY_SIZES,
+    BenchmarkConfig,
+    add_config_arguments,
+    config_from_args,
+)
 
 
-def assert_in_label_sweep(cfg) -> None:
+def assert_in_label_sweep(cfg: BenchmarkConfig) -> None:
     """Refuse a cell below the headline size that §7's pass breakdown does not have (#165).
 
     C3's low-label sweep is **R10, the pre-registered fallback claim**, which means its nulls are
@@ -104,9 +109,13 @@ def assert_in_label_sweep(cfg) -> None:
     docstring is the argument. R4 and ViT-S are the two this is really about, and both were cut
     by §2.3 rather than by anything the arm registry declares.
 
-    **An arm that trains nothing.** Said separately from the list because the failure is of a
-    different kind, and because it is the one an arm list alone would let through the next time
-    somebody adds an inference-only arm. A1, A2 and A9 read no head-train list at all, so
+    **An arm that trains nothing.** Checked ahead of the list rather than left to it, and it is
+    worth being exact about what that buys, because it is not coverage: A1, A2 and A9 are absent
+    from :data:`~benchmark.arms.LABEL_SWEEP_ARMS` and the membership check below already refuses
+    every one of them. What the order buys is a refusal that names the real reason, and one case
+    the list cannot cover at all — an inference-only arm mistakenly *added* to it. The reason is
+    worth the duplication because it is the subtlest failure here: A1, A2 and A9 read no
+    head-train list at all, so
     ``--size`` moves nothing they compute: the rows a 1k pass writes are **byte-identical** to
     the 20k ones, under a different ``size`` label. Nothing downstream would catch it — the rows
     are individually valid, ``append_rows`` replaces by cell and would see a new cell, and
@@ -123,30 +132,38 @@ def assert_in_label_sweep(cfg) -> None:
     observation drawn *after* seeing two, on the claim that promised to report its nulls, is the
     forking path pre-registration closes. The way past it is to move ``head.label_sweep_seeds``,
     which is not in :data:`benchmark.config.TUNED_FIELDS` — deliberately, since a seed count is
-    not a hyperparameter — so it does not read as a thumb on the scale, and it prints in the
-    resolution line. The escape hatch is on the record rather than in somebody's shell history.
+    not a hyperparameter — so it does not read as a thumb on the scale. It is **not** printed in
+    the resolution line, and that is worth stating because the obvious assumption is wrong twice
+    over: `tune.format_frozen` prints ``Head.tuned``, which is `TUNED_FIELDS` and excludes the
+    seed counts, and the head block it belongs to is printed only ``if arm.trains_head``, so for
+    A7 there is no recipe line at all. What puts the override on the record is
+    :attr:`~benchmark.config.BenchmarkConfig.config_hash`: ``head`` is a recipe group, so moving
+    the count moves the fingerprint the run record and every row carry.
 
-    Scoped to the rungs. Seed counts *at* the headline size are §4.1's business — three per
-    primary cell, one for the appendix — and belong to whatever ticket enforces those.
+    Scoped to the rungs **below** the headline — 1k and 5k. CONTEXT.md's ladder counts the 20k
+    list as the top rung, so "the rungs" alone would read as all three. Seed counts *at* 20k are
+    §4.1's business — three per primary cell, one for the appendix — and belong to whatever
+    ticket enforces those.
     """
     if cfg.size == report.HEADLINE_SIZE:
         return
+    # Said once and used by both arm refusals below, which otherwise carry the same clause and
+    # would drift apart the first time §7's sweep changes shape.
+    sweep = f"§7's sweep is {list(arms.LABEL_SWEEP_ARMS)}; run this arm at {report.HEADLINE_SIZE}"
     arm = arms.get(cfg.arm)
     if arm.is_inference_only:
         raise ValueError(
             f"arm {cfg.arm} trains nothing, so `--size {cfg.size}` moves nothing it computes: "
             f"its rows would be identical to the {report.HEADLINE_SIZE} ones under a different "
             f"size label, and C3's label-efficiency figure would draw them as a flat curve. "
-            f"§7's sweep is {list(arms.LABEL_SWEEP_ARMS)}; run this arm at "
-            f"{report.HEADLINE_SIZE}"
+            f"{sweep}"
         )
     if cfg.arm not in arms.LABEL_SWEEP_ARMS:
         raise ValueError(
             f"arm {cfg.arm} is not in C3's label-efficiency sweep, so it has no cell at "
-            f"`--size {cfg.size}`. §7's pass breakdown is the authority on which cells exist "
-            f"and its sweep is {list(arms.LABEL_SWEEP_ARMS)} — §2.3 took R4 out (a secondary "
-            f"row at {report.HEADLINE_SIZE} only, so C1 and C3 read the R5 release encoder "
-            f"alone) and cut ViT-S in the same sentence. Run this arm at {report.HEADLINE_SIZE}, "
+            f"`--size {cfg.size}`. §7's pass breakdown is the authority on which cells exist — "
+            f"§2.3 took R4 out (a secondary row at {report.HEADLINE_SIZE} only, so C1 and C3 "
+            f"read the R5 release encoder alone) and cut ViT-S in the same sentence. {sweep}, "
             f"or add it to `benchmark.arms.LABEL_SWEEP_ARMS` and say there why §7 has it"
         )
     if cfg.seed >= cfg.head.label_sweep_seeds:
@@ -158,8 +175,9 @@ def assert_in_label_sweep(cfg) -> None:
             f"nothing else. C3 is R10, the "
             f"pre-registered fallback claim whose nulls are reported with the prominence of its "
             f"wins, and a further seed drawn after seeing these two is the forking path "
-            f"ADR-0013 closes. If a third is wanted, `--set head.label_sweep_seeds=3` moves it "
-            f"where the resolution line and the run record both print it"
+            f"ADR-0013 closes. If a third is wanted, `--set head.label_sweep_seeds=3` moves it, "
+            f"and moves this cell's config_hash with it — so the extra seed is on the record "
+            f"rather than in somebody's shell history"
         )
 
 
@@ -184,7 +202,9 @@ def resolve(args: argparse.Namespace) -> Resolution:
     arm = arms.get(cfg.arm)
     if args.verb == "run":
         # Before the recipe checks: "this cell does not exist" should arrive ahead of "this
-        # cell's recipe has drifted", and a tuning pass is a 20k pass, so this never fires on one.
+        # cell's recipe has drifted". A tuning pass is not exempt and is not meant to be —
+        # `tune.assert_tuning_arm` constrains the arm and says nothing about the size, so
+        # `--tune --size 1k --seed 2` is refused here, which is the right answer.
         assert_in_label_sweep(cfg)
         if getattr(args, "tune", False):
             tune.assert_tuning_arm(cfg)

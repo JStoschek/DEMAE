@@ -468,6 +468,20 @@ def test_a_third_seed_is_refused_at_a_sweep_rung(flags):
     ) == 0
 
 
+def test_moving_the_sweep_seed_count_moves_the_config_hash(flags):
+    """Which is the claim the refusal above makes to whoever reads it, so it is pinned here.
+
+    The refusal used to say the override "prints in the resolution line". It does not: that line
+    prints `Head.tuned`, and `label_sweep_seeds` is deliberately outside `TUNED_FIELDS` because a
+    seed count is not a hyperparameter — and for A7, which trains everything rather than a head,
+    no recipe line prints at all. What does carry it is the recipe fingerprint, since `head` is a
+    recipe group. An escape hatch whose only record was a shell history would not be one.
+    """
+    base = BenchmarkConfig(arm="A5", size="1k", seed=0)
+    moved = base.replace(head=base.head.replace(label_sweep_seeds=3))
+    assert base.config_hash != moved.config_hash
+
+
 def test_the_headline_size_is_left_alone_by_all_of_this(flags):
     """The gate is about the rungs. Seed counts at 20k are §4.1's business and another ticket's."""
     assert launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "20k", "--seed", "2", *flags]) == 0

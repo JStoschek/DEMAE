@@ -808,11 +808,16 @@ PRINTED_ROWS: Final[tuple[str, ...]] = tuple(
 #:   about the arm's encoder, its trainable part or its diet. A4-R5 and A4-R4 differ in no
 #:   property this registry declares except which checkpoint they read.
 #: * **ViT-S is out** by the same section's sentence, which cuts A4-S from A2/A3 and from the
-#:   sweep together. :attr:`Arm.printed` is close to this and is not it — it is about the table
-#:   the arm prints in, and #147 set it for A6-S too, which is dropped entirely.
-#: * **A1, A2 and A9 are out** because they train nothing, which *is* a declared property — but
-#:   see :func:`benchmark.launch.assert_in_label_sweep` for why that one is checked separately
-#:   and said differently.
+#:   sweep together. :attr:`Arm.printed` is the near-miss to reach for here and is about a
+#:   different question — which table an arm's row goes in, not which sizes it runs at. A4-S
+#:   carries ``printed=False`` and is a real 20k cell; A6-S, the other ViT-S arm, is not in this
+#:   registry at all (#147 removed it rather than disabling it), so `printed` never spoke for it.
+#: * **A1, A2 and A9 are out** because they train nothing, which *is* a declared property — and
+#:   their absence from this tuple is already what refuses them.
+#:   :func:`benchmark.launch.assert_in_label_sweep` checks it a second time anyway, ahead of
+#:   this list, and that ordering buys a message naming the real reason rather than extra
+#:   coverage — plus one thing this tuple cannot give: an inference-only arm mistakenly *added*
+#:   below is still refused.
 #:
 #: So a derivation would have had to read three unrelated properties and would still have been
 #: one §2.3 rewrite away from wrong — and it would have **failed open**: a new training arm
