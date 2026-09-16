@@ -793,6 +793,38 @@ PRINTED_ROWS: Final[tuple[str, ...]] = tuple(
     name for name, arm in ARMS.items() if arm.printed
 )
 
+#: The arms C3's label-efficiency sweep has, and the only ones a rung below the headline size
+#: may be run at (#165). **§7's pass breakdown is the authority on cell and seed counts** — its
+#: sweep line is `3 cells x 2 seeds x 50 ep x 6k` plus A7's own `2 x 50 ep x 6k`, and its pass
+#: total spells the same shape out: *"16 for the label-efficiency sweep (3 cells x 2 seeds x 2
+#: sizes, plus A7)"*.
+#:
+#: Written out rather than derived from a property of :class:`Arm`, and that is the whole
+#: decision here. Every membership rule below is true of the four names and none of them is
+#: *why* the name is on the list:
+#:
+#: * **R4 is out** because §2.3 made it a pre-registered secondary row at 20k only — "C1 and C3
+#:   are evaluated on the R5 release encoder alone". That is a fact about a forking path, not
+#:   about the arm's encoder, its trainable part or its diet. A4-R5 and A4-R4 differ in no
+#:   property this registry declares except which checkpoint they read.
+#: * **ViT-S is out** by the same section's sentence, which cuts A4-S from A2/A3 and from the
+#:   sweep together. :attr:`Arm.printed` is close to this and is not it — it is about the table
+#:   the arm prints in, and #147 set it for A6-S too, which is dropped entirely.
+#: * **A1, A2 and A9 are out** because they train nothing, which *is* a declared property — but
+#:   see :func:`benchmark.launch.assert_in_label_sweep` for why that one is checked separately
+#:   and said differently.
+#:
+#: So a derivation would have had to read three unrelated properties and would still have been
+#: one §2.3 rewrite away from wrong — and it would have **failed open**: a new training arm
+#: registered later would satisfy every clause and join the sweep silently, which is exactly how
+#: `launch.resolve`'s frozen-recipe check let A7 through until #162 noticed. A list fails closed.
+#: An arm not named here cannot be swept until somebody adds it to this tuple and says why.
+#:
+#: §4.5 orders these passes and is **not** the authority: it has drifted from §7 once already
+#: (#129), which is why that step now says to re-read it against §7 rather than maintain it
+#: beside it. This tuple is that re-reading, in the one form that cannot go stale unnoticed.
+LABEL_SWEEP_ARMS: Final[tuple[str, ...]] = ("A4-R5", "A5", "A6", "A7")
+
 
 def normalization_for(encoder_name: str) -> str:
     """§2.1's declared diet for an encoder, read off the arms that eat it.

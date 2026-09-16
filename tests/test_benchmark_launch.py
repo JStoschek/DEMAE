@@ -159,10 +159,12 @@ def test_an_unknown_arm_is_refused_by_name(flags):
 
 
 def test_a_dry_run_assembles_the_config_the_artifacts_the_extractor_and_the_arm(flags, capsys):
-    assert launch.main(["run", "--dry-run", "--arm", "A5", "--size", "5k", "--seed", "2", *flags]) == 0
+    # Seed 1 rather than 2: this test is about what the resolution line assembles, and the cell
+    # was incidental until #165 gave `--size 5k` only the two seeds §7 prices the sweep at.
+    assert launch.main(["run", "--dry-run", "--arm", "A5", "--size", "5k", "--seed", "1", *flags]) == 0
     out = capsys.readouterr().out
-    assert "arm A5" in out and "5k" in out and "seed 2" in out  # the cell
-    assert BenchmarkConfig(arm="A5", size="5k", seed=2).config_hash in out  # the config
+    assert "arm A5" in out and "5k" in out and "seed 1" in out  # the cell
+    assert BenchmarkConfig(arm="A5", size="5k", seed=1).config_hash in out  # the config
     assert "terramind" in out  # the arm's encoder, off the registry
     assert "terramind_v1 normalization" in out  # §2.1's diet, which the encoder would not refuse
     assert "12 blocks + `output`" in out  # ADR-0012's contract, as this run will call it
@@ -404,3 +406,80 @@ def test_the_bank_and_its_sidecar_resolve_as_two_inputs(frozen, flags, capsys):
     out = capsys.readouterr().out
     assert "mask bank" in out and "not frozen" in out
     assert MASK_BANK_SIDECAR_NAME in out
+
+
+# --- Which cells C3's sweep has (#165) ----------------------------------------
+# §7's pass breakdown is the authority on cell and seed counts, and §4.5 — which merely orders
+# them — has drifted from it once already. These hold the authority in code, where a drift is a
+# refusal rather than a paragraph nobody re-read.
+
+
+@pytest.mark.parametrize("size", ["1k", "5k"])
+@pytest.mark.parametrize("arm", ["A4-R5", "A5", "A6", "A7"])
+def test_the_four_sweep_arms_run_at_both_rungs(arm, size, flags):
+    assert launch.main(["run", "--dry-run", "--arm", arm, "--size", size, "--seed", "0", *flags]) == 0
+
+
+def test_r4_is_refused_at_a_sweep_rung_and_runs_at_the_headline(flags):
+    """§2.3 took R4 out of the sweep: it is a secondary row at 20k only.
+
+    The refusal is the whole of the ticket's third acceptance criterion. Nothing else in this
+    repository held it — `--arm A4-R4 --size 1k` printed a clean pre-flight naming R4's own
+    checkpoint, and the resulting rows would have put a second DEMAE identity on C3's curve,
+    which is the forking path §2.3 closed.
+    """
+    with pytest.raises(ValueError, match="A4-R4.*sweep|sweep.*A4-R4"):
+        launch.main(["run", "--dry-run", "--arm", "A4-R4", "--size", "1k", "--seed", "0", *flags])
+    assert launch.main(["run", "--dry-run", "--arm", "A4-R4", "--size", "20k", "--seed", "0", *flags]) == 0
+
+
+def test_the_vit_s_appendix_cell_is_refused_at_a_sweep_rung(flags):
+    """§2.3 cut ViT-S from the sweep in the same sentence it cut it from A2/A3."""
+    with pytest.raises(ValueError, match="A4-S"):
+        launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "1k", "--seed", "0", *flags])
+
+
+@pytest.mark.parametrize("arm", ["A1", "A2-R5", "A9"])
+def test_an_arm_that_trains_nothing_is_refused_at_a_sweep_rung(arm, flags):
+    """The one an arm list alone would not have caught, and the worst of them.
+
+    A1, A2 and A9 read no head-train list at all, so `--size 1k` moves nothing they compute:
+    the rows are byte-identical to the 20k ones under a different `size` label. Two such passes
+    would give `benchmark.report.label_efficiency` two points and it would draw a perfectly flat
+    line that reads as a measured null and is a relabelling.
+    """
+    with pytest.raises(ValueError, match="trains nothing|sweep"):
+        launch.main(["run", "--dry-run", "--arm", arm, "--size", "5k", "--seed", "0", *flags])
+
+
+def test_a_third_seed_is_refused_at_a_sweep_rung(flags):
+    """§7 prices the sweep at two seeds, and `head.label_sweep_seeds` has held that 2 unread.
+
+    Refused rather than allowed-and-reported, because this benchmark is pre-registered: a third
+    observation drawn after seeing two is the forking path ADR-0013 exists to close. Moving
+    `head.label_sweep_seeds` is the way past it, and that knob prints in the resolution line, so
+    the escape hatch is on the record rather than in somebody's shell history.
+    """
+    with pytest.raises(ValueError, match="two seeds|label_sweep_seeds"):
+        launch.main(["run", "--dry-run", "--arm", "A5", "--size", "1k", "--seed", "2", *flags])
+    assert launch.main(
+        ["run", "--dry-run", "--arm", "A5", "--size", "1k", "--seed", "2",
+         "--set", "head.label_sweep_seeds=3", *flags]
+    ) == 0
+
+
+def test_the_headline_size_is_left_alone_by_all_of_this(flags):
+    """The gate is about the rungs. Seed counts at 20k are §4.1's business and another ticket's."""
+    assert launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "20k", "--seed", "2", *flags]) == 0
+
+
+def test_freeze_and_report_cannot_be_given_a_cell_at_all(flags):
+    """So the gate cannot reach them — which is stronger than the gate exempting them.
+
+    `freeze` writes what the tiles and masks groups say (`artifact_hash`) and reads no arm;
+    `report` re-runs nothing, which is what makes it free to re-render. Neither carries the cell
+    flags, so a refusal about a cell has no verb to fire on but `run`.
+    """
+    for verb in ("freeze", "report"):
+        with pytest.raises(SystemExit):
+            launch.main([verb, "--dry-run", "--arm", "A4-R4", "--size", "1k", *flags])
