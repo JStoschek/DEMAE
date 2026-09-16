@@ -35,5 +35,38 @@
     "p163_unet_corrected_usd": 0.56,
     "factor_low_after_unet_correction": 1.714,
     "note": "section 7 predicted the direction and the mechanism and was still short: a transferred primitive corrected by another transferred primitive is not a measurement."
+  },
+  "fair_pass": {
+    "arm": "A9-NOTHRESH",
+    "run_id": "187ba54938687f88",
+    "git_sha": "a4c8398",
+    "config_hash": "82d57ff4d3e945fd",
+    "knob": "DDIM dynamic thresholding off (clip_sample with it); every other term carried",
+    "rows": 36411,
+    "seconds": 8519.906,
+    "seconds_per_instance": 0.233993,
+    "minutes": 141.998,
+    "gpu_hours": 2.36664,
+    "usd": 0.9504,
+    "cost_delta_vs_a9_pct": -0.171,
+    "scored": {
+      "median_rmse": 19.17,
+      "mean_rmse": 32.64,
+      "median_nmad": 9.44,
+      "median_bias_abs": 9.16,
+      "median_seam_gap": 0.73,
+      "median_rmse_below_ceiling": 18.73,
+      "median_rmse_above_ceiling": 19.47
+    },
+    "published_path_for_comparison": {
+      "median_rmse": 70.66,
+      "mean_rmse": 345.68,
+      "median_rmse_below_ceiling": 19.11,
+      "median_rmse_above_ceiling": 753.57
+    },
+    "a1_for_comparison": {
+      "median_rmse": 8.24,
+      "mean_rmse": 14.68
+    }
   }
 }
