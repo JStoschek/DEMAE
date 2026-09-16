@@ -435,6 +435,41 @@ def sampler_block(resolution) -> dict | None:
     return block
 
 
+def observations_block(resolution) -> dict | None:
+    """How many observations this cell **is**, for the one arm that is not three (#164).
+
+    ``None`` for every arm §2.3 did not cut, and the key is then absent rather than null on
+    :func:`sampler_block`'s rule: a block on every row is one a reviewer stops reading.
+
+    Recorded rather than counted, and the difference is the whole reason this exists. A reader
+    can already count seeds in the parquet, but that answers *how many ran* — a primary cell
+    that was meant to carry three and lost two to a preempted box looks identical from the rows
+    alone. What §2.3 decided is how many the cell **is**, and a decision is the kind of fact a
+    run record carries. It is also the half a reader needs to know that the missing ± is the
+    plan's and not an omission: the note says so in the words §2.3 states it in, so a reviewer
+    reaching this row has the reason without opening the plan.
+
+    Read off :attr:`benchmark.arms.Arm.single_observation` and
+    :attr:`benchmark.config.Head.appendix_seeds` — the same two fields
+    :func:`benchmark.launch._checked_seed` refuses on, so the record cannot claim a seed
+    structure the refusal would have allowed something else.
+    """
+    arm = resolution.arm
+    if not arm.single_observation:
+        return None
+    return {
+        "seeds": resolution.config.head.appendix_seeds,
+        "reported_with_interval": False,
+        "note": (
+            "§2.3's appendix cell: one seed, reported as a single observation with no ±. The "
+            "absence of the interval is the plan's decision and not a gap — ViT-B is the "
+            "primary capacity on both sides and this ViT-S row rides along as a cheap extra, "
+            "so a ± here would read as a capacity bracket §2.3's rewrite removed. `printed` is "
+            "false for the same reason: it does not widen R5's pre-registered table."
+        ),
+    }
+
+
 def run_record(
     resolution: Resolution,
     *,
@@ -478,6 +513,13 @@ def run_record(
             "seed": resolution.config.seed,
         },
         **({"sampler": sampler} if (sampler := sampler_block(resolution)) is not None else {}),
+        # §2.3's one-seed cell, saying so itself (#164). Absent for every arm that is three
+        # observations, on `sampler`'s rule directly above.
+        **(
+            {"observations": seen}
+            if (seen := observations_block(resolution)) is not None
+            else {}
+        ),
         "parameters": dict(parameters),
         "produced": {
             "rows": rows,

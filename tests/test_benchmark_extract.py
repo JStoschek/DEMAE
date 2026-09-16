@@ -17,8 +17,10 @@ which is refused by *type* rather than caught by an assertion.
 
 The three checkpoints this contract covers are 340 MB each and two of them are not mounted on
 any box. The registry's ``demae-vits`` entry (§2.3's appendix backbone, arm ``A4-S``) is a real
-registered encoder with no released weights, so a randomly-initialized `vit_small_patch16_224`
-saved under its path is a *legitimate* subject: every property Decision 4 names — twelve
+registered encoder whose weights were never *released* — #164 exports them from R1 rather than
+from a §14 bundle, and the file is not in this repository — so a randomly-initialized
+`vit_small_patch16_224` saved under its path is a *legitimate* subject: every property
+Decision 4 names — twelve
 intermediates in block order, the canonical ``(N, 196, D)`` slice, the final norm standing
 between block twelve and ``output`` — is a property of the composition and not of the weights.
 The refusals that never reach a forward pass use hand-built state dicts of a few tensors, which
@@ -110,13 +112,16 @@ def _sincos(order: str, *, width: int = WIDTH):
 
 
 @pytest.fixture(scope="module")
-def vits_checkpoint(tmp_path_factory):
+def _vits_file(tmp_path_factory):
     """A real `vit_small_patch16_224` at random weights, saved the way §14 exports one.
 
     Random weights and a *correct* composition: what Decision 4 asks about is the shape of the
     pass, and `pretrain.release` already guarantees the released state dict loads strictly into
     this timm model. Its `pos_embed` is MAE's own column-first sin-cos, which is what the
     registry declares for this encoder.
+
+    Built once for the module because it is the expensive half; the registry patch that makes it
+    loadable is per-test, and :func:`vits_checkpoint` is where that split is argued.
     """
     import timm
     import torch
@@ -129,6 +134,31 @@ def vits_checkpoint(tmp_path_factory):
     path = tmp_path_factory.mktemp("vits") / "encoder.pt"
     torch.save(state, path)
     return path
+
+
+@pytest.fixture
+def vits_checkpoint(_vits_file, monkeypatch):
+    """The synthesized ViT-S, with the registry pinned to *it* for the duration of one test.
+
+    Since #164 the registry pins this encoder, so the stand-in needs a stand-in pin: without one
+    `build_spec` refuses the fixture by name, and rightly — a mounted file whose md5 is not the
+    registry's is exactly the "weights nobody ran" case that check exists for.
+
+    **Function-scoped, where the file it wraps is module-scoped**, and the asymmetry is the
+    point. `test_the_committed_contract_in_this_repository_is_what_this_code_writes` calls
+    `build_spec()` against the real config and compares it byte-for-byte with the committed
+    artifact, so a patch still standing when that test ran would fail it — and under `xdist`
+    whether it was still standing would depend on which worker took which test. That is a
+    flake that reports itself as a stale committed contract, which is the one thing that test
+    exists to detect. Paying for one `dataclasses.replace` per test buys the patch a lifetime
+    that cannot outlive the test that asked for it.
+
+    What the patch does **not** weaken is anything this module asserts. Decision 4's claims are
+    properties of the composition rather than of the weights, and the one claim that is about
+    the real file — that the committed contract carries `arms.DEMAE_VITS_MD5` — is asserted in
+    that same committed-contract test, which never requests this fixture.
+    """
+    return _publish(monkeypatch, _vits_file)
 
 
 def _config(tmp_path, checkpoint) -> BenchmarkConfig:
@@ -172,6 +202,18 @@ def _stub_checkpoint(path, *, depth=LAYERS, pos_embed="col_row", width=WIDTH):
     return path
 
 
+def _pin(monkeypatch, encoder, md5):
+    """Swap one registry entry's ``checkpoint_md5`` for the life of a test.
+
+    The primitive under :func:`_publish` and :func:`_unpublish`, which are the two directions
+    worth naming at a call site — a test says *publish this file* or *leave this encoder
+    unpinned*, never *set this field*.
+    """
+    monkeypatch.setitem(
+        arms.ENCODERS, encoder, replace(arms.ENCODERS[encoder], checkpoint_md5=md5)
+    )
+
+
 def _publish(monkeypatch, path, encoder=ENCODER):
     """Pin a checkpoint's md5 in the registry — the reviewed line a real box would commit.
 
@@ -181,15 +223,20 @@ def _publish(monkeypatch, path, encoder=ENCODER):
     not a way around it — `test_an_unpinned_encoder_refuses_rather_than_running_against_whatever_is_there`
     is the other half.
     """
-    monkeypatch.setitem(
-        arms.ENCODERS,
-        encoder,
-        replace(
-            arms.ENCODERS[encoder],
-            checkpoint_md5=hashlib.md5(Path(path).read_bytes()).hexdigest(),
-        ),
-    )
+    _pin(monkeypatch, encoder, hashlib.md5(Path(path).read_bytes()).hexdigest())
     return path
+
+
+def _unpublish(monkeypatch, encoder=ENCODER):
+    """Strip an encoder's pin — :func:`_publish`'s inverse, and the state §7.1 refuses.
+
+    Since #164 **no** registry entry is unpinned (`demae-vits` was the last one, and pinning it
+    is what made A4-S runnable at all), so a test about the unpinned state has to establish it.
+    That is the better shape anyway: these tests were borrowing whichever encoder happened to
+    lack a pin, which made them silently depend on a fact about a *different* ticket's arm, and
+    they went red when that fact changed rather than when their own subject did.
+    """
+    _pin(monkeypatch, encoder, None)
 
 
 @pytest.fixture
@@ -293,9 +340,10 @@ def test_the_committed_contract_in_this_repository_is_what_this_code_writes():
     # A6's was pinned by #159 — it is the published mmselfsup file, and the encoder could not
     # load at all while it was null.
     assert spec.encoders["imagenet-mae"].checkpoint_md5 == arms.IMAGENET_MAE_MD5
-    # §2.3's ViT-S run has not been released, so there is no file to pin — and an unpinned entry
-    # refuses at extraction rather than running against whatever sits at the path.
-    assert spec.encoders["demae-vits"].checkpoint_md5 is None
+    # A4-S's was pinned by #164, for #159's reason at a different provenance: the file is an
+    # `export-R1-vits/` bundle rather than a §14 release, and an unpinned entry refuses at
+    # extraction rather than running against whatever sits at the path.
+    assert spec.encoders["demae-vits"].checkpoint_md5 == arms.DEMAE_VITS_MD5
 
 
 def test_the_specs_md5_is_not_in_phase_ones_frozen_four_field_fingerprint():
@@ -629,7 +677,7 @@ def test_recomputed_statistics_reproduce_the_manifest_within_the_measured_bound(
 
 
 @pytest.fixture(scope="module")
-def features(tmp_path_factory, vits_checkpoint):
+def features(tmp_path_factory, _vits_file):
     """One forward pass at the fp32 reference, shared by the claims Decision 4 enumerates.
 
     Module-scoped, so it publishes the md5 through its own ``MonkeyPatch`` context rather than
@@ -644,8 +692,8 @@ def features(tmp_path_factory, vits_checkpoint):
     raw = raw.astype(np.int16)
     valid = land_mask(raw)
     with pytest.MonkeyPatch.context() as mp:
-        _publish(mp, vits_checkpoint)
-        extractor = _extractor(tmp_path_factory.mktemp("features"), vits_checkpoint)
+        _publish(mp, _vits_file)
+        extractor = _extractor(tmp_path_factory.mktemp("features"), _vits_file)
         out = extractor.extract(raw, valid, arm=ARM)
     return extractor, raw, valid, out
 
@@ -734,7 +782,7 @@ def test_the_canonical_layout_is_patch_tokens_with_cls_as_a_side_field(features)
     assert out.output.shape[1] == 196
 
 
-def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_checkpoint, tile, publish):
+def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_checkpoint, tile):
     """ADR-0012 §6: the compute dtype is a declared field; what comes back is the reference.
 
     A task moving its compute dtype re-checks it under #134's 0.99 materiality bar rather than
@@ -743,25 +791,25 @@ def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_
     import torch
 
     raw, valid = tile
-    cfg = _config(tmp_path, publish(vits_checkpoint))
+    cfg = _config(tmp_path, vits_checkpoint)
     cfg = cfg.replace(extract=cfg.extract.replace(compute_dtype="bf16"))
     out = Extractor(build_spec(cfg), cfg).extract(raw, valid, arm=ARM)
     assert out.output.dtype == torch.float32
     assert all(block.dtype == torch.float32 for block in out.intermediates)
 
 
-def test_a_single_tile_and_a_batch_are_the_same_call(tmp_path, vits_checkpoint, tile, publish):
+def test_a_single_tile_and_a_batch_are_the_same_call(tmp_path, vits_checkpoint, tile):
     import torch
 
     raw, valid = tile
-    extractor = _extractor(tmp_path, publish(vits_checkpoint))
+    extractor = _extractor(tmp_path, vits_checkpoint)
     one = extractor.extract(raw, valid, arm=ARM)
     batched = extractor.extract(raw[None], valid[None], arm=ARM)
     assert one.output.shape == batched.output.shape == (1, 196, WIDTH)
     assert torch.allclose(one.output, batched.output)
 
 
-def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoint, tile, publish):
+def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoint, tile):
     """The composition, pinned bit-identical to the library call it replaces.
 
     Unrolled rather than routed through ``get_intermediate_layers`` so that ``output`` is the
@@ -774,7 +822,7 @@ def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoi
     from benchmark.extract import _forward_blocks
 
     raw, valid = tile
-    extractor = _extractor(tmp_path, publish(vits_checkpoint))
+    extractor = _extractor(tmp_path, vits_checkpoint)
     model = extractor.encoder(ARM)
     x = normalize(raw[None], valid[None], normalization="per_tile")
     tensor = torch.from_numpy(x).unsqueeze(1)
@@ -785,13 +833,13 @@ def test_the_unrolled_pass_is_timms_own_forward_features(tmp_path, vits_checkpoi
 # --- ADR-0012 §7.1: encoder identity, checked against the model actually loaded -
 
 
-def test_a_wrong_checkpoint_md5_is_refused(tmp_path, vits_checkpoint, publish):
+def test_a_wrong_checkpoint_md5_is_refused(tmp_path, vits_checkpoint):
     """An encoder handed the wrong checkpoint returns a plausible tensor and raises nothing.
 
     So the md5 the spec was frozen against is checked before the file is read at all — which is
     also why a 340 MB swap costs a hash rather than a forward pass to detect.
     """
-    cfg = _config(tmp_path, publish(vits_checkpoint))
+    cfg = _config(tmp_path, vits_checkpoint)
     spec = build_spec(cfg)
     swapped = tmp_path / "swapped.pt"
     swapped.write_bytes(vits_checkpoint.read_bytes() + b"\n")
@@ -859,21 +907,24 @@ def test_a_checkpoint_with_no_pos_embed_is_refused(tmp_path, publish):
 
 
 def test_an_unmounted_encoder_names_the_path_knob(tmp_path, vits_checkpoint, publish):
-    cfg = _config(tmp_path, publish(vits_checkpoint))
+    cfg = _config(tmp_path, vits_checkpoint)
     spec = build_spec(cfg)
     with pytest.raises(FileNotFoundError, match="paths.demae_vits_checkpoint"):
         Extractor(spec, _config(tmp_path, None)).encoder(ARM)
 
 
 def test_an_unpinned_encoder_refuses_rather_than_running_against_whatever_is_there(
-    tmp_path, vits_checkpoint
+    tmp_path, vits_checkpoint, monkeypatch
 ):
-    """This plan publishes no ViT-S md5, so nothing distinguishes the file at the path.
+    """An encoder with no published md5 has nothing distinguishing the file at its path.
 
     That is the exact condition §7.1 exists to make impossible, and the answer is to *publish*
     one — a reviewed line in the registry — not to let a box certify its own weights by having
-    mounted them.
+    mounted them. The state is built here rather than borrowed: since #164 the registry has no
+    unpinned entry left, which is the point of that ticket and would otherwise silently delete
+    this test's subject.
     """
+    _unpublish(monkeypatch)
     with pytest.raises(ValueError, match="publishes no md5 for demae-vits"):
         _extractor(tmp_path, vits_checkpoint).encoder(ARM)
 
@@ -889,11 +940,22 @@ def test_the_committed_bytes_do_not_move_with_what_a_box_has_mounted(tmp_path, v
     mounted = build_spec(_config(tmp_path, vits_checkpoint))
     unmounted = build_spec(_config(tmp_path, None))
     assert mounted == unmounted
-    assert mounted.encoders[ENCODER].checkpoint_md5 is None  # unpinned either way
-    assert mounted.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5  # published either way
+    # Published either way, which is the stronger half of the claim: the md5 in the file comes
+    # from the registry, so it is there whether or not this box ever had the weights. Both
+    # encoders say it — one mounted by the fixture, one that never is.
+    assert mounted.encoders[ENCODER].checkpoint_md5 == arms.ENCODERS[ENCODER].checkpoint_md5
+    assert mounted.encoders["demae-r5"].checkpoint_md5 == arms.DEMAE_R5_MD5
 
 
-def test_a_spec_pinning_an_md5_the_registry_does_not_publish_is_refused(tmp_path, vits_checkpoint):
+def test_a_spec_pinning_an_md5_the_registry_does_not_publish_is_refused(
+    tmp_path, vits_checkpoint, monkeypatch
+):
+    """A committed spec may not carry an md5 the reviewed registry does not (ADR-0012 §7.1).
+
+    `_unpublish` for `test_an_unpinned_encoder_refuses...`' reason: the drift this refuses is
+    spec-says-a-hash / registry-says-None, so the registry has to say None.
+    """
+    _unpublish(monkeypatch)
     cfg = _config(tmp_path, vits_checkpoint)
     body = build_spec(cfg).to_dict()
     body["encoders"][ENCODER]["checkpoint_md5"] = hashlib.md5(
@@ -979,16 +1041,18 @@ def test_every_encoder_a_registered_arm_reads_publishes_an_md5():
     """An unpinned encoder is one `Extractor._checked_path` refuses to load — so it is not a
     state an arm this benchmark scores may be left in.
 
-    `demae-vits` is the exception and stays one: §2.3's ViT-S run has not been released, so there
-    is no file to pin, and its arm (`A4-S`) is the single appendix cell (`printed=False`) that no
-    §0 claim rests on.
+    There is **no exception left**. `demae-vits` was the standing one, on the reasoning that
+    §2.3's ViT-S run had not been released and there was therefore no file to pin — which was
+    true and was also the reason A4-S could not run at all. #164 exported R1's encoder and
+    pinned it, so this assertion tightened from "one exception" to "none", which is the form
+    that actually matches the refusal it describes.
     """
     unpinned = sorted(
         name
         for name, encoder in arms.ENCODERS.items()
         if encoder.checkpoint_md5 is None
     )
-    assert unpinned == ["demae-vits"]
+    assert unpinned == []
     assert not arms.ARMS["A4-S"].printed
 
 
@@ -1564,7 +1628,7 @@ def test_the_timm_path_refuses_a_derivation_it_cannot_apply(tmp_path, vits_check
     """The other side of the same clause. The timm path loads the checkpoint's own tensor
     unchanged, so a declared derivation it does not apply would run silently as the identity —
     right today, wrong the moment an encoder declares otherwise."""
-    cfg = _config(tmp_path, publish(vits_checkpoint))
+    cfg = _config(tmp_path, vits_checkpoint)
     spec = build_spec(cfg)
     entry = spec.encoders[ENCODER]
     moved = EncoderSpec(

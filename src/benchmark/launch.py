@@ -85,7 +85,12 @@ from . import (
     zeroshot,
 )
 from .artifacts import Resolution
-from .config import LABEL_EFFICIENCY_SIZES, add_config_arguments, config_from_args
+from .config import (
+    LABEL_EFFICIENCY_SIZES,
+    BenchmarkConfig,
+    add_config_arguments,
+    config_from_args,
+)
 
 
 def resolve(args: argparse.Namespace) -> Resolution:
@@ -120,7 +125,61 @@ def resolve(args: argparse.Namespace) -> Resolution:
             # that resolves a record/config disagreement, so refusing it would make that state
             # unrecoverable. See `tune.assert_frozen`.
             tune.assert_frozen(cfg, tuning=getattr(args, "tune", False))
+        _checked_cell(cfg, arm)
     return artifacts.resolve(cfg, arm)
+
+
+def _checked_cell(cfg: BenchmarkConfig, arm: arms.Arm) -> None:
+    """§2.3's shape for the appendix cell — one seed, at 20k — refused beside the recipe ones.
+
+    Two axes and one function (#164), because they are two readings of a single sentence: §2.3
+    cut the ViT-S row to *one observation at the headline size*. §7's table prices the
+    label-efficiency sweep at three cells by two seeds and annotates it *"R4 and ViT-S are both
+    out of the sweep (§2.3)"*, and §4.5's order of operations says the same — the appendix cell
+    runs with the 20k block, and the 1k/5k sweep that follows is three arms and not four. So a
+    cell arriving at 1k is exactly as much a row the plan does not have as a second seed is.
+
+    :attr:`benchmark.arms.Arm.single_observation` says *that* this cell is one observation and
+    :attr:`benchmark.config.Head.appendix_seeds` says how many that is, so this reads both rather
+    than comparing against a literal `1`. That is the split the registry keeps everywhere — the
+    arm declares the fact, the recipe declares the number — and it is also what finally makes
+    `appendix_seeds` load-bearing: it has been in `TUNED_FIELDS`, and therefore in the config
+    hash, since §4.1 was written, with nothing reading it. `config.Head` makes that complaint
+    about `early_stop_metric` in its own words — *a frozen knob nothing reads is one a reader is
+    entitled to think does something* — and this field was the other instance of it.
+
+    Here rather than in :func:`_run` for §4.1's two refusals' reason, stated in :func:`resolve`:
+    ``--dry-run`` returns before the verb runs, so a check inside `run` would let
+    ``--dry-run --arm A4-S --seed 1`` exit 0 with the resolution line printing a second
+    observation as though the plan had asked for one.
+
+    The refusal is what makes the missing ± structural instead of conventional. Nothing
+    downstream computes a per-cell ± today — :func:`benchmark.report.seed_spread` walks
+    :data:`benchmark.arms.PRINTED_ROWS` and this cell is not in it — but "no ± is stored" is a
+    claim about the *parquet*, and the parquet is one row per instance per seed. A second seed
+    landing there is a bracket any reader could take, whatever the report chose to print.
+    """
+    if not arm.single_observation:
+        return
+    headline = LABEL_EFFICIENCY_SIZES[-1]
+    if cfg.size != headline:
+        raise ValueError(
+            f"arm {arm.name} is out of the label-efficiency sweep, so {cfg.size} is not a cell "
+            f"this plan has — §2.3 demoted ViT-S to one appendix observation at {headline} and "
+            f"§7 prices the 1k/5k sweep at three cells with ViT-S and R4 both named as outside "
+            f"it. A fourth arm arriving there is a row nothing budgeted and no §0 claim reads."
+        )
+    allowed = cfg.head.appendix_seeds
+    if cfg.seed < allowed:
+        return
+    raise ValueError(
+        f"arm {arm.name} is a single observation — §2.3 cut this cell to "
+        f"{allowed} seed and reports it without a ±, so seed {cfg.seed} is not a cell this "
+        f"plan has. ViT-B is the primary capacity on both sides and R1's ViT-S rides along as "
+        f"a cheap extra row; a second observation here would put a ± in the appendix that reads "
+        f"as the capacity bracket §2.3's rewrite removed. If the plan really has changed, "
+        f"`head.appendix_seeds` is the number and amending §2.3 is the decision."
+    )
 
 
 def format_resolution(resolution: Resolution, *, verb: str) -> str:

@@ -298,6 +298,36 @@ class Encoder:
 DEMAE_R5_MD5: Final = "3ec5ebc72fa28c43fe88f67692d9b41a"
 DEMAE_R4_MD5: Final = "59e8346c4b08e1ab4fedd44f0802e12b"
 
+#: The ViT-S encoder A4-S reads, exported from **R1** — Phase 1's ViT-S/16 scratch baseline
+#: (#164). Pinned on :attr:`Encoder.checkpoint_md5`'s own rule, and the pin is what makes the
+#: arm runnable at all: `benchmark.extract.Extractor._checked_path` refuses an unpinned encoder
+#: outright, so this line read `None` and A4-S could not load. That is the same state #159 found
+#: A6 in, and it is worth naming twice — an encoder registered without its md5 looks configured
+#: and is not.
+#:
+#: **Exported here rather than quoted from a release**, which is the one thing that makes this
+#: entry unlike its four siblings. §14 released the two ViT-B arms and nothing else: the
+#: pretraining plan's §14 is explicit that R1, R2 and R3 are ablation arms whose value is their
+#: curves rather than their weights, and that `python -m pretrain.release` packages any of them
+#: "in minutes if a consumer ever appears". §2.3's appendix cell is that consumer. So the file
+#: this names is an `export-R1-vits/` bundle and not a `release-R1/` one — no `curves.csv`
+#: reached it, so it is a §14-incomplete bundle and must not be published as a release.
+#:
+#: The provenance is a two-link chain, and both links are checkable rather than certified by
+#: whoever ran the export. `s3://demae-checkpoints/r1/checkpoint_e0400_s000092400_milestone.pt`
+#: has md5 `a1be572edb001ed9f871197b1d8edddf` — R1's final annealed state, and a *milestone*,
+#: which is why it survived the 2026-09-15 retention prune at all. `pretrain.release`'s export
+#: is a pure function of it: 150 tensors, 21,469,056 timm parameters, the fixed sin-cos
+#: `pos_embed` materialized and strict-load verified against `vit_small_patch16_224`. The
+#: manifest beside `encoder.pt` records the source and its md5, so the chain is re-derivable
+#: from the bucket without this comment.
+#:
+#: The 21,469,056 above and :attr:`Encoder.params`' 21,393,408 differ by 197x384 = 75,648, and
+#: that is the `pos_embed` rather than a disagreement: DEMAE's own encoder holds it as a fixed
+#: buffer where the timm export materializes it as a parameter. `demae-r5` carries exactly the
+#: same gap at ViT-B's width (197x768 = 151,296), so the two entries count the same thing.
+DEMAE_VITS_MD5: Final = "a1e50e5c67b9b3c3b75dbd24dd35b99b"
+
 #: `mae_vit-base-p16_8xb512-fp16-coslr-1600e_in1k_20220825-f7569ca2.pth` — the published
 #: mmselfsup ImageNet-1k MAE that A6 reads and that R4 warm-started from.
 #:
@@ -376,9 +406,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
         checkpoint_field="demae_vits_checkpoint",
         params=21_393_408,
         timm_model="vit_small_patch16_224",
-        # No §2.3 ViT-S run has been released, so there is no file to pin. `freeze` records the
-        # md5 of whatever a box mounts, stating that it did — see `benchmark.extract`.
-        checkpoint_md5=None,
+        checkpoint_md5=DEMAE_VITS_MD5,
     ),
     "terramind": Encoder(
         name="terramind",
@@ -547,6 +575,28 @@ class Arm:
     #: :attr:`Encoder.pretraining_epochs`' rule: ADR-0012's committed contract governs what comes
     #: out of a frozen *encoder*, and the sampler changes nothing in it.
     sampler_thresholding: bool = True
+    #: Whether §2.3 cut this cell to **one seed, reported without a ±** (#164).
+    #:
+    #: The absence of the ± is the whole point of the cell, so it is declared here rather than
+    #: remembered by whoever types the `run` line: §2.3's rewrite demoted ViT-S explicitly —
+    #: ViT-B is the primary capacity on both sides and R1's ViT-S rides along as a cheap extra
+    #: row — and a ± over two seeds would read as exactly the capacity bracket that rewrite
+    #: removed. One observation cannot be given an interval by anyone downstream if the second
+    #: observation is refused at the point it would be produced.
+    #:
+    #: **Not a reading of** :attr:`printed`, and the two sibling appendix cells are why.
+    #: `A5-BICUBIC` is `printed=False` and carries three seeds like any primary cell, because
+    #: ADR-0011 D4 registered it as an ablation *against* A5 and a one-seed ablation could not
+    #: separate its effect from seed noise. `A9` and `A9-NOTHRESH` train nothing, so they have
+    #: no seed structure for §2.3 to have cut — their single pass is determinism, not a demotion.
+    #: `printed` says whether a row is in R5's pre-registered table; this says how many
+    #: observations the cell is, and those are two questions with two answers.
+    #:
+    #: **How many** is not here either: :attr:`benchmark.config.Head.appendix_seeds` holds the
+    #: count, and :func:`benchmark.launch._checked_seed` reads both. That split is the registry's
+    #: standing one — the arm declares the *fact*, the recipe declares the *number* — and it is
+    #: what stops this field from becoming a second home for a figure the recipe already hashes.
+    single_observation: bool = False
 
     def __post_init__(self) -> None:
         if self.encoder is not None and self.encoder not in ENCODERS:
@@ -562,6 +612,19 @@ class Arm:
                 f"arm {self.name}: `sampler_thresholding` is the tokenizer's diffusion sampler "
                 f"and only {'a1_fill_through_tokenizer'!r} runs one. An arm that moved it "
                 f"without running a sampler would print a knob that changed nothing"
+            )
+        if self.single_observation and self.printed:
+            raise ValueError(
+                f"arm {self.name}: a single-observation cell is an appendix cell. R5's eleven "
+                f"printed rows are pre-registered at three seeds, and cutting one to a single "
+                f"observation would narrow what the printed table claims without amending the "
+                f"register that fixed its shape (§2.3, ADR-0013 R5)"
+            )
+        if self.single_observation and self.is_inference_only:
+            raise ValueError(
+                f"arm {self.name}: this arm trains nothing, so there is no seed structure for "
+                f"§2.3 to have cut. An inference-only arm's single pass is determinism rather "
+                f"than a demotion, and marking it would claim a decision nobody took"
             )
         if (self.encoder is None) != (self.normalization == "none"):
             raise ValueError(
@@ -784,6 +847,7 @@ ARMS: Final[dict[str, Arm]] = dict(
             normalization="per_tile",
             what="DEMAE ViT-S frozen + head — §2.3 appendix, one seed, no ±",
             printed=False,
+            single_observation=True,
         ),
     ]
 )
