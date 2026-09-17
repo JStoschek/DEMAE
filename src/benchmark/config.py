@@ -474,6 +474,13 @@ class Finetune(_Frozen):
     crossfade_px: int = 16
     shift_offsets: tuple[int, ...] = (0, 112)
 
+    #: §4.2 declares no batch size, so A3 trains at §4.1's — the one frozen batch this
+    #: benchmark has. Not a field here on purpose: :attr:`BenchmarkConfig.finetune` is inside
+    #: :attr:`BenchmarkConfig.config_hash`, so a knob added to this group moves the recipe hash
+    #: of **every** arm, including the cells already in the parquet. A batch size is a
+    #: throughput choice rather than one of §4.2's four stated recipe decisions, and borrowing
+    #: the declared one costs nothing that inventing a second would not cost twice.
+
     def __post_init__(self) -> None:
         if self.epochs < 1:
             raise ValueError(f"epochs {self.epochs} must be >= 1")
@@ -493,6 +500,20 @@ class Finetune(_Frozen):
             raise ValueError(f"crossfade_px {self.crossfade_px} must be >= 0")
         if any(offset < 0 or offset >= dataset_config.TILE_PX for offset in self.shift_offsets):
             raise ValueError(f"shift_offsets {self.shift_offsets} must lie in [0, tile width)")
+
+
+#: **The** fine-tune recipe — §4.2's, stated rather than searched (#166).
+#:
+#: A module-level singleton on :data:`TUNED_HEAD`'s rule, and for a sharper version of its
+#: reason. §4.1's recipe is frozen because it was *tuned once and must not be tuned again*;
+#: §4.2's was never tuned at all — every number in it is stated in the plan, with an argument, and
+#: none of them is something a val RMSE may move. So "has this drifted?" is a question with a
+#: definite answer, and :func:`benchmark.finetune.assert_declared` is where it is asked.
+#:
+#: The identity matters the way it does for the head: :attr:`BenchmarkConfig.finetune` defaults to
+#: *this object*, so A3-R5 and A3-R4 do not merely agree about the learning rate, they load the
+#: same one.
+DECLARED_FINETUNE: Final = Finetune()
 
 
 # --- §4.4 The from-scratch baseline -------------------------------------------
@@ -857,7 +878,7 @@ class BenchmarkConfig(_Frozen):
     #: config that does not override a head knob holds :data:`TUNED_HEAD` itself, so the frozen
     #: recipe is one object rather than eleven equal copies. See that constant.
     head: Head = field(default=TUNED_HEAD)
-    finetune: Finetune = field(default_factory=Finetune)
+    finetune: Finetune = field(default=DECLARED_FINETUNE)
     unet: Unet = field(default_factory=Unet)
     tokenizer: Tokenizer = field(default_factory=Tokenizer)
     extract: Extract = field(default_factory=Extract)

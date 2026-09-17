@@ -691,6 +691,27 @@ class Arm:
         """
         return self.input_convention == "token_drop" and self.is_inference_only
 
+    @property
+    def reads_mae_checkpoint(self) -> bool:
+        """Does this arm need the **pretraining** checkpoint — encoder *and* decoder? A2 and A3.
+
+        :attr:`runs_pretrained_decoder`'s wider sibling, and the two are separate because they
+        answer different questions about the same file. That one asks whether the decoder runs
+        *as pretrained*, which is what decides whether :mod:`benchmark.zeroshot`'s per-patch-scale
+        refusal applies. This one asks whether the file is needed **at all** — and A3 needs it
+        just as much, because §14 exports encoder-only weights (:func:`pretrain.model.
+        is_decoder_parameter` is that boundary) and §4.2 continues MAE training, which there is
+        no doing without a decoder to continue it with.
+
+        The distinction is worth a second property because collapsing it cost #166 three gates.
+        Each of them was written against `runs_pretrained_decoder` while A3 was unbuilt, and each
+        was *right then*: A3 answers ``False`` there, so the resolution line would not have named
+        the file, `run` would not have refused a box without it, and ADR-0012's contract would
+        have been demanded of an arm that consults no extractor. An arm that declares
+        ``token_drop`` reads this file, whatever it then does with it.
+        """
+        return self.input_convention == "token_drop"
+
 
 def _arm(name: str, **kwargs) -> tuple[str, Arm]:
     return name, Arm(name=name, **kwargs)
@@ -904,8 +925,14 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     A4 at (86.4M, 1.18M) is the sentence §4.4 rewrote its capacity anchor into — an order of
     magnitude more trained, at a fifth of the total. A column of totals alone reverses it.
 
-    What still waits on its own module is A3's fine-tuned decoder (#166), which reports ``None``
-    rather than a plausible number nothing measured.
+    **A3 still reports ``None`` here, and #166 is why it stays that way.** It trains the encoder
+    and the decoder together, so its trainable half is its total — but that total includes §2.2's
+    decoder, whose shape is the one part of the architecture no committed artifact in this plan
+    declares. This registry could only guess it. The pass that loads the checkpoint does not have
+    to: :func:`benchmark.finetune.train_finetune` reads
+    :meth:`~pretrain.model.MaskedAutoencoder.parameter_counts` off the model it actually built,
+    and `run` prints and records *that* pair. A measured number from the run beats a derived one
+    from a registry that has not seen the file.
     """
     # Deferred so that importing this registry stays free: it is a declarative module with no
     # dependencies at all, and `benchmark.head` pulls in numpy and `dataset.config`. Everything

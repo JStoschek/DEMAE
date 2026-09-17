@@ -67,7 +67,7 @@ import numpy as np
 from dataset.geometry import PixelSize, band_pixel_spacing_m
 from pretrain.artifact import read_tile_strata
 
-from . import arms, fill, masks, metrics, prereg, results, voids, zeroshot
+from . import arms, fill, finetune, masks, metrics, prereg, results, voids, zeroshot
 from .artifacts import EVAL_MASKS_NAME, TEST_TILES_NAME, file_md5
 from .config import BenchmarkConfig
 
@@ -274,9 +274,37 @@ def _token_drop(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
     the same reason: a refusal that costs an eval pass is one nobody consults until the bill
     arrives.
 
-    A3 shares this convention and is not this ticket's: it trains ``encoder+decoder``, so what it
-    needs from a checkpoint is #162's question. It reaches the branch below and is told so.
+    A3 shares this convention and #166 built it: it trains ``encoder+decoder``, so the decoder
+    it runs is the one the fine-tune produced and `launch` hands in, and §4.2's composite rather
+    than §4.3's straight composite is what turns it into metres (:mod:`benchmark.finetune`).
     """
+    if arm.trains == "encoder+decoder":
+        # A3 (#166). Same convention, different weights: the decoder this scores is the one
+        # `launch` just fine-tuned, not the one the checkpoint shipped. Handed in rather than
+        # loaded here on `_head_fill`'s rule — an arm scored against a second load of its own
+        # file is an arm scored against weights no val curve was measured on.
+        if trained is None or trained.kind != "finetune":
+            raise NotImplementedError(
+                f"{arm.name} scores §4.2's fine-tuned encoder and decoder and this pass was "
+                f"handed no fine-tune. `benchmark.launch` trains one before it scores (#166); a "
+                f"pass reached any other way would be scoring the pretrained decoder under A3's "
+                f"name, which is A2's row (§4.3)"
+            )
+        if trained.arm != arm.name:
+            raise ValueError(
+                f"this pass is scoring {arm.name} and was handed a fine-tune trained for "
+                f"{trained.arm}. §2.3 splits this arm by init, so R5's weights under R4's name "
+                f"is a row that names a checkpoint it was not produced from"
+            )
+        compositor = finetune.Compositor(
+            model=trained.stack.module, recipe=cfg.finetune, masks_cfg=cfg.masks
+        )
+
+        def fill_finetuned(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
+            return [compositor.infill(t.raw_i16, v) for t, v in zip(tiles, voids)]
+
+        return Fill(fill=fill_finetuned)
+
     if not arm.runs_pretrained_decoder:
         return _unbuilt(
             "token_drop",
