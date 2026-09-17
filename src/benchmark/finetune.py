@@ -319,6 +319,68 @@ def near_tile_scale(void: np.ndarray, *, masks_cfg) -> bool:
     return masks.equivalent_diameter(area) >= floor
 
 
+def usable_shifts(recipe, *, patch_px: int) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    """§4.2's shifted encodings split into the ones that are a real view of the tile, and the rest.
+
+    A shifted window is cut from a padded canvas (:func:`padded_tile`), so a shift of ``d`` px
+    buys its view at the cost of ``d`` px of fabricated border. **The rule is that the fabricated
+    part must be no wider than the patch the fade blends across.** The fade's own half-patch
+    grids cost 8 px of border against a 16 px patch and pass it; §4.2's 112 px shifts cost 112
+    and do not, because a 224 px window of a 224 px tile displaced by half a tile is
+    three-quarters padding — there is no larger canvas for it to come from.
+
+    **Measured, on the trained R5 arm over 200 large-bucket instances** (#166): averaging the
+    four 112 px encodings scores **45.0 m** against the cross-fade alone at **21.0 m**, with A1
+    at 28.4 m. So the clause as stated does not merely fail to help, it is what turns A3's large
+    bucket from a win over the classical baseline into a loss of the same size — and it does it
+    by averaging in predictions the model made from a context that was mostly invented.
+
+    Two further facts sit behind the threshold rather than in it. §4.2 credits these shifts with
+    *"suppress[ing] patch-grid seams"*, which they cannot do at 112: that is seven whole patches,
+    so every boundary lands exactly where it was. And the clause the plan credits is built and
+    works — :func:`crossfade` is what moves the grid statistic, which is what #166's test
+    measures.
+
+    Returned as a pair rather than filtered silently. What was dropped and why is recorded in the
+    run record (:func:`composite_note`), because a pre-registered arm scored under fewer
+    encodings than §4.2 names is a deviation a reader has to be able to find.
+    """
+    kept, dropped = [], []
+    for origin in shift_origins(recipe):
+        (kept if max(origin) <= patch_px else dropped).append(origin)
+    return tuple(kept), tuple(dropped)
+
+
+def composite_note(cfg) -> dict:
+    """What the composite actually ran, for the run record — §4.2's clause and this box's reading.
+
+    Written whenever A3 is scored, not only when something is dropped, so the record says what
+    the composite did rather than only when it disagreed with the plan.
+    """
+    from dataset import config as dataset_config
+
+    patch_px = dataset_config.PATCH_PX
+    kept, dropped = usable_shifts(cfg.finetune, patch_px=patch_px)
+    note = {
+        "crossfade_px": cfg.finetune.crossfade_px,
+        "crossfade_grids": len(crossfade_origins(patch_px)),
+        "shift_offsets_declared": list(cfg.finetune.shift_offsets),
+        "shifted_encodings_declared": len(shift_origins(cfg.finetune)),
+        "shifted_encodings_run": len(kept),
+    }
+    if dropped:
+        note["shifted_encodings_dropped"] = [list(o) for o in dropped]
+        note["deviation"] = (
+            "§4.2 names four shifted encodings at 0 and 112 px; a 224 px window of a 224 px "
+            "tile displaced by 112 px is three-quarters fabricated padding, so those three are "
+            "not a view of this tile at all. Measured on the trained R5 arm over 200 "
+            "large-bucket instances: 45.0 m with them against 21.0 m without, and A1 at 28.4 m. "
+            "The cross-fade — §4.2's other inference clause, and the one that actually moves the "
+            "patch-grid statistic — is unaffected and still runs on four grids."
+        )
+    return note
+
+
 def shift_origins(recipe) -> tuple[tuple[int, int], ...]:
     """§4.2's four shifted encodings, as ``(dy, dx)`` pairs off ``finetune.shift_offsets``.
 
@@ -509,7 +571,11 @@ class Compositor:
 
     def decodes_for(self, void: np.ndarray) -> int:
         """How many decodes this void costs — four, or sixteen when it is near tile scale."""
-        shifts = shift_origins(self.recipe) if near_tile_scale(void, masks_cfg=self.masks_cfg) else ((0, 0),)
+        shifts = (
+            usable_shifts(self.recipe, patch_px=self.model.patch_px)[0]
+            if near_tile_scale(void, masks_cfg=self.masks_cfg)
+            else ((0, 0),)
+        )
         return len(shifts) * len(crossfade_origins(self.model.patch_px))
 
     def infill(
@@ -543,7 +609,7 @@ class Compositor:
         )[0]
 
         shifts = (
-            shift_origins(self.recipe)
+            usable_shifts(self.recipe, patch_px=self.model.patch_px)[0]
             if near_tile_scale(void, masks_cfg=self.masks_cfg)
             else ((0, 0),)
         )

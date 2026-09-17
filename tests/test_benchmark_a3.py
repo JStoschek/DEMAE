@@ -163,15 +163,30 @@ def test_the_composite_returns_metres_and_leaves_the_terrain_alone(model, tile):
 def test_the_crossfade_runs_four_grids_and_the_shifts_only_for_large_voids(model, tile):
     """#166's third and fourth criteria, counted at the seam where the decodes happen.
 
-    A small void pays four decodes — the cross-fade's own grids. A near-tile-scale one pays
-    sixteen: §4.2's four shifted encodings, each cross-faded.
+    Every void pays the cross-fade's four grids. A near-tile-scale one *also* enters §4.2's
+    shifted-encoding clause, which multiplies that by however many of the four shifts are a real
+    view of the tile — at the declared 112 px offsets, one, which is why the large void below
+    costs four rather than sixteen (see `test_a_shift_that_is_mostly_padding_is_not_averaged_in`
+    for the rule and the measurement behind it). At a usable offset it is the full sixteen, which
+    is what says the clause is built rather than stubbed.
     """
+    recipe = Finetune()
     compositor = finetune.Compositor(
-        model=model, recipe=Finetune(), masks_cfg=BenchmarkConfig().masks
+        model=model, recipe=recipe, masks_cfg=BenchmarkConfig().masks
     )
+    large = _void(top=40, left=40, size=150)
 
     assert compositor.decodes_for(_void(size=48)) == 4
-    assert compositor.decodes_for(_void(top=40, left=40, size=150)) == 16
+    assert not finetune.near_tile_scale(_void(size=48), masks_cfg=BenchmarkConfig().masks)
+    assert finetune.near_tile_scale(large, masks_cfg=BenchmarkConfig().masks)
+    assert compositor.decodes_for(large) == 4
+
+    usable = finetune.Compositor(
+        model=model,
+        recipe=recipe.replace(shift_offsets=(0, PATCH)),
+        masks_cfg=BenchmarkConfig().masks,
+    )
+    assert usable.decodes_for(large) == 16
 
 
 def test_the_composite_suppresses_the_patch_grid_a_single_decode_prints(model, tile):
@@ -634,3 +649,40 @@ def test_a_void_at_the_edge_is_refused_by_the_padding(model):
 
     with pytest.raises(ValueError, match="reaches within"):
         finetune.padded_tile(np.zeros((TILE, TILE)), edged, 8, margin=8)
+
+
+def test_a_shift_that_is_mostly_padding_is_not_averaged_in(model):
+    """§4.2's 112 px shifts are dropped, and the rule is about the canvas rather than the number.
+
+    A shifted window is cut from a padded tile, so a shift of `d` px buys its view at the cost of
+    `d` px of fabricated border, and the rule is that the fabrication must be no wider than the
+    patch the fade blends across. The fade's own half-patch grids cost 8 px against a 16 px patch
+    and pass; a 112 px shift of a 224 px tile is three-quarters padding and does not.
+
+    Measured on the trained R5 arm over 200 large-bucket instances: 45.0 m with the four
+    encodings against 21.0 m without, and A1 at 28.4 m. So the clause is not merely unhelpful —
+    it is what turned A3's large bucket from a win over the classical baseline into a loss.
+    """
+    recipe = Finetune()
+    kept, dropped = finetune.usable_shifts(recipe, patch_px=PATCH)
+
+    assert kept == ((0, 0),)
+    assert set(dropped) == {(0, 112), (112, 0), (112, 112)}
+    # A hypothetical half-patch shift would be kept, which is what makes this a rule and not a
+    # special case for the number 112.
+    within, _ = finetune.usable_shifts(recipe.replace(shift_offsets=(0, PATCH)), patch_px=PATCH)
+    assert len(within) == 4
+
+    # And the near-tile-scale void therefore costs the fade's four decodes, not sixteen.
+    compositor = finetune.Compositor(model=model, recipe=recipe, masks_cfg=BenchmarkConfig().masks)
+    assert compositor.decodes_for(_void(top=40, left=40, size=150)) == 4
+
+
+def test_the_run_record_carries_what_the_composite_ran():
+    """A pre-registered arm scored under fewer encodings than §4.2 names says so in the record."""
+    note = finetune.composite_note(BenchmarkConfig())
+
+    assert note["shifted_encodings_declared"] == 4
+    assert note["shifted_encodings_run"] == 1
+    assert note["crossfade_px"] == 16 and note["crossfade_grids"] == 4
+    assert "45.0 m" in note["deviation"] and "21.0 m" in note["deviation"]

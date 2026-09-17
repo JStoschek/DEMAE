@@ -405,7 +405,7 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         seconds=scored.seconds,
         parameters=_parameter_counts(resolution.arm, trained),
         gates=scored.gates,
-        training=None if trained is None else trained.to_dict(),
+        training=_training_block(cfg, trained),
         register=register,
         precision=results.precision_block(resolution, _measured_agreement(resolution, trained)),
     )
@@ -414,6 +414,24 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     if register is not None:
         print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
+
+
+def _training_block(cfg: BenchmarkConfig, trained) -> dict | None:
+    """The training half of a run record, plus what A3's inference composite actually ran.
+
+    The composite is inference rather than training, so it has no block of its own — and it needs
+    one, because §4.2's four shifted encodings are not all runnable on a 224 px tile and an arm
+    scored under fewer than a pre-registered recipe names is a deviation a reader has to be able
+    to find (:func:`benchmark.finetune.composite_note`). A3's training block is where it goes,
+    for :func:`benchmark.zeroshot.disposition`'s reason one arm over: the record should carry the
+    reading, not leave it to be reconstructed from the numbers.
+    """
+    if trained is None:
+        return None
+    block = trained.to_dict()
+    if trained.kind == "finetune":
+        block["composite"] = finetune.composite_note(cfg)
+    return block
 
 
 def _parameter_counts(arm: arms.Arm, trained) -> dict:
