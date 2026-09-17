@@ -125,6 +125,27 @@ NEAR_TILE_SCALE_BUCKET: Final = "large"
 # --- The fade, as geometry ----------------------------------------------------
 
 
+def padded_tile(
+    normalized: np.ndarray, void: np.ndarray, pad: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The tile and its void, reflect-padded together — the canvas the shifted grids are cut from.
+
+    Reflection rather than a roll, because a roll wraps terrain from one edge to the other and
+    puts a cliff through the middle of the tile, which is exactly where a near-tile-scale void
+    is. Reflection only ever touches a ``pad``-wide border.
+
+    **Both arrays, by the same rule, and that is the whole reason this is a function.** Reflection
+    copies elevations, so a void within ``pad`` of the edge has its own true values copied into
+    the border. Pad the mask with ``False`` there and :func:`benchmark.zeroshot.keep_set` hands
+    those patches to the encoder as ordinary visible terrain — the arm reads the answer it is
+    being scored on filling, and the score still looks plausible. Measured on a void at §3.2's
+    minimum interior margin, a ``False`` pad put 65 true void pixels into 5 patches the encoder
+    could see; at ``pad = 112 + 8``, the near-tile-scale path's window, the reflected band is
+    120 px wide. The mask is a property of the pixels, so it travels with them.
+    """
+    return np.pad(normalized, pad, mode="reflect"), np.pad(void, pad, mode="reflect")
+
+
 def crossfade_origins(patch_px: int) -> tuple[tuple[int, int], ...]:
     """The four grid origins the cross-fade blends over: ``(0,0)``, ``(0,h)``, ``(h,0)``, ``(h,h)``.
 
@@ -329,6 +350,25 @@ def assert_declared(cfg) -> None:
         "registered for the arm §1's table names. If the plan really has changed, "
         "`config.DECLARED_FINETUNE` is the one committed line to move."
     )
+
+
+def format_declared(recipe) -> list[str]:
+    """§4.2's recipe as the resolution line prints it — :func:`benchmark.tune.format_frozen`'s twin.
+
+    Two lines rather than one because the arm has two halves that move independently: the
+    schedule the encoder and decoder are adapted under, and the objective they are adapted
+    against. ``norm_pix`` is on the second because it is the flag §4.2 inverts, and the one A2
+    has no way past (§4.3, #173) — a reader who finds it printed ``True`` here is looking at a
+    cell that is not A3.
+    """
+    return [
+        f"{'finetune':<16} {recipe.epochs} epochs, encoder lr {recipe.encoder_lr:.1e} with "
+        f"{recipe.layer_decay} layer-wise decay, decoder lr {recipe.decoder_lr:.1e}, "
+        f"{recipe.decay}, {recipe.precision}",
+        f"{'objective':<16} masked {recipe.loss.upper()} in per-tile-standardized space, "
+        f"norm_pix {'on' if recipe.norm_pix_loss else 'off'}; composite cross-fades "
+        f"{recipe.crossfade_px} px, shifts {recipe.shift_offsets} px for near-tile-scale voids",
+    ]
 
 
 # --- §4.2's mask sampler ------------------------------------------------------
@@ -559,16 +599,23 @@ class Compositor:
 
         The grids are windows of a **reflect-padded** tile rather than of a rolled one: a roll
         wraps terrain from one edge to the other and puts a cliff through the tile, while
-        reflection only ever touches the border strip §3.2 keeps every void out of. The void is
-        padded with ``False`` instead, so a reflected copy of it does not hide patches the real
-        one does not touch.
+        reflection only ever touches the border strip §3.2 keeps every void out of.
+
+        **The void is reflected with it, and that is a leak rather than a nicety.** Reflection
+        copies elevations, so a void within ``pad`` of the edge has its own true values copied
+        into the padded border — and if the mask were padded with ``False`` there, `keep_set`
+        would hand those patches to the encoder as ordinary visible terrain. The arm would then
+        read the answer it is being scored on filling, most at exactly the sizes §4.2 spends the
+        most decodes on: at ``pad = 112 + 8`` the reflected band is 120 px wide. Measured on a
+        void at §3.2's minimum interior margin, padding the mask with ``False`` put 65 true void
+        pixels into 5 patches the encoder could see. The mask is a property of the pixels, so it
+        is copied exactly the way they are.
         """
         import torch
 
         patch_px = self.model.patch_px
         tile_px = normalized.shape[-1]
-        padded = np.pad(normalized, pad, mode="reflect")
-        padded_void = np.pad(void, pad, mode="constant", constant_values=False)
+        padded, padded_void = padded_tile(normalized, void, pad)
 
         windows, keeps = [], []
         for dy, dx in origins:
@@ -635,9 +682,6 @@ class Adapted:
     module: Any
     arm: str
     device: str
-
-    def compositor(self, recipe, masks_cfg) -> "Compositor":
-        return Compositor(model=self.module, recipe=recipe, masks_cfg=masks_cfg)
 
 
 class VoidExamples:
@@ -909,6 +953,13 @@ def train_finetune(cfg, arm, *, epochs: int | None = None, on_epoch=None):
             optimizer.zero_grad(set_to_none=True)
             normalized, keep = batch_masking(batch, model=model, rng=sampler)
             land = land_mask(batch["raw_i16"])
+            # The denominator the loss will divide this whole batch by, known before the first
+            # forward — see `eligible_patches`. `clip` covers the batch in which the valid-pixel
+            # gate leaves nothing eligible at all, which `MaeLoss` itself answers with a zero
+            # gradient rather than a NaN.
+            batch_weight = float(
+                eligible_patches(keep, land, model=model).sum()
+            )
             for piece, piece_keep, piece_land in _pieces_with(
                 normalized, keep, land, cfg.runtime.micro_batch
             ):
@@ -927,7 +978,15 @@ def train_finetune(cfg, arm, *, epochs: int | None = None, on_epoch=None):
                     torch.from_numpy(piece_land).to(device), model.patchify
                 )
                 terms = objective(predicted, target, mask, pixel_weights=weights)
-                share = piece.shape[0] / normalized.shape[0]
+                # This piece's share of the *eligible patches*, not of the samples: the loss
+                # is a mean over those, so this is what makes the accumulated gradient the
+                # gradient of the unsplit batch exactly rather than approximately.
+                share = (
+                    float(eligible_patches(piece_keep, piece_land, model=model).sum())
+                    / batch_weight
+                    if batch_weight
+                    else piece.shape[0] / normalized.shape[0]
+                )
                 (terms.loss * share).backward()
                 total_loss += float(terms.loss.detach()) * share
             optimizer.step()
@@ -986,6 +1045,39 @@ def _apply(optimizer, curve, step: int) -> float:
     for group in optimizer.param_groups:
         group["lr"] = group["base_lr"] * factor
     return factor
+
+
+def eligible_patches(keep: np.ndarray, land: np.ndarray, *, model, recipe=None) -> np.ndarray:
+    """Per sample, how many patches :class:`pretrain.loss.MaeLoss` will actually average over.
+
+    The loss reduces as ``sum(per_patch * w) / sum(w)``, where ``w`` is 1 for a patch that is
+    **masked** and holds at least ``min_valid_patch_frac`` of a patch's pixels on land (§4's
+    gate, :func:`pretrain.loss._active_patches`). So ``sum(w)`` — not the sample count — is what
+    a micro-batch contributes to the batch's mean, and it is derivable here without a forward
+    pass: the mask is ``~keep`` and the valid count is the patchified land mask's row sums.
+
+    That is what makes the split exact. :func:`benchmark.train._fit` makes the same argument for
+    §4.1's loss in its own terms — *"a split whose pieces each contributed their own mean would
+    silently reweight a batch by how much void happened to fall in each piece"* — and the
+    quantity that does it here is ocean rather than void: a piece holding part-ocean tiles has
+    fewer eligible patches than a piece of pure land, and weighting both by their sample count
+    tilts the accumulated gradient toward whichever piece had less sea in it.
+    """
+    from pretrain.loss import MaeLoss
+
+    floor = (MaeLoss().min_valid_patch_frac if recipe is None else 0.25) * model.patch_dim
+    grid = model.grid_px
+    # The land mask cut into the decoder's own (N, n_patches, patch_dim) layout, by the same
+    # row-major reshape `patchify` uses — counted rather than patchified through torch, because
+    # this runs before the forward and only needs a sum.
+    counts = (
+        np.asarray(land, dtype=bool)
+        .reshape(land.shape[0], grid, model.patch_px, grid, model.patch_px)
+        .sum(axis=(2, 4))
+        .reshape(land.shape[0], -1)
+    )
+    active = (counts > 0) & (counts >= floor)
+    return (active & ~np.asarray(keep, dtype=bool)).sum(axis=1)
 
 
 def _pieces_with(normalized: np.ndarray, keep: np.ndarray, land: np.ndarray, size: int):

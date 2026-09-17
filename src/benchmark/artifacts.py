@@ -399,6 +399,16 @@ class Resolution:
 
             lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")
             lines.extend(tune.format_frozen(self.config.head))
+        if self.arm.trains == "encoder+decoder":
+            # §4.2's recipe, on the same rule as the two above and for the same reason: an arm
+            # fine-tuned at a moved learning rate converges normally and prints a row exactly as
+            # wide as a good one. A3 printed no recipe at all until #166 — the two branches above
+            # are keyed on `trains_head` and `trains_everything`, and this arm is neither, so the
+            # one pre-flight a build session reads before renting a box said nothing about the
+            # four numbers that define it.
+            from . import finetune
+
+            lines.extend(finetune.format_declared(self.config.finetune))
         return lines
 
     def input_lines(self) -> list[str]:

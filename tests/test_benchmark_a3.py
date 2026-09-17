@@ -517,3 +517,94 @@ def test_the_composite_runs_where_the_weights_are(model, tile):
 
     assert filled.dtype == np.float64
     assert np.isfinite(filled).all()
+
+
+# --- The two leaks the first GPU run found ------------------------------------
+
+
+def test_the_reflected_border_does_not_show_the_encoder_the_void(model):
+    """A void near the edge is reflected into the padding, mask and all.
+
+    Reflection copies elevations. A void within `pad` of the tile edge therefore has its own
+    true values copied into the border — and if the mask were padded with `False` there,
+    `keep_set` would hand those patches to the encoder as ordinary visible terrain and the arm
+    would read the answer it is being scored on filling. This is the same class of leak
+    `benchmark.zeroshot` refuses a `norm_pix` checkpoint over, arriving through the padding
+    instead of through the units.
+
+    Asserted on the keep-set rather than on a score, because a score would still look plausible.
+    """
+    void = _void(top=8, left=8, size=32)  # §3.2's minimum interior margin
+    marked = np.zeros((TILE, TILE), dtype=np.float64)
+    marked[void] = 999.0
+
+    for pad in (PATCH // 2, 120):  # the plain fade, and the near-tile-scale path's window
+        padded, padded_void = finetune.padded_tile(marked, void, pad)
+        top = left = pad - PATCH // 2
+        window = padded[top : top + TILE, left : left + TILE]
+        keep = zeroshot.keep_set(
+            padded_void[top : top + TILE, left : left + TILE], patch_px=PATCH
+        ).reshape(TILE // PATCH, TILE // PATCH)
+        carries = (window == 999.0).reshape(
+            TILE // PATCH, PATCH, TILE // PATCH, PATCH
+        ).any(axis=(1, 3))
+
+        assert not (carries & keep).any(), f"void values reach a visible patch at pad={pad}"
+
+
+def test_a_split_batch_accumulates_the_unsplit_batch_s_gradient(model):
+    """§4.2's loss is a mean over eligible patches, so a split has to weight by those.
+
+    `benchmark.train._fit` makes this argument for §4.1's loss in its own terms — a split whose
+    pieces each contributed their own mean silently reweights the batch. The quantity here is
+    ocean rather than void: a piece of part-ocean tiles has fewer eligible patches than a piece
+    of pure land, so weighting both by sample count tilts the gradient toward whichever piece
+    had less sea in it.
+
+    Checked as arithmetic against `pretrain.loss`'s own reduction rather than by comparing two
+    backward passes, because it is the *weights* that have to agree and a gradient comparison
+    would pass at any scale that happened to be uniform.
+    """
+    from pretrain.loss import MaeLoss, pixel_weights_from_land_mask
+
+    rng = np.random.default_rng(11)
+    keep = np.stack(
+        [
+            finetune.finetune_keep_set(
+                _void(size=size), patch_px=PATCH, n_visible=model.n_visible, rng=rng
+            )
+            for size in (32, 96)
+        ]
+    )
+    land = np.ones((2, TILE, TILE), dtype=bool)
+    land[1, :, :150] = False  # one part-ocean tile, one pure-land one
+
+    counted = finetune.eligible_patches(keep, land, model=model)
+
+    # The same number, off `MaeLoss`' own path: `weight` is what it divides by.
+    weights = pixel_weights_from_land_mask(torch.from_numpy(land), model.patchify)
+    pred = torch.zeros(2, model.n_patches, model.patch_dim)
+    terms = MaeLoss(norm_pix_loss=False)(
+        pred, pred.clone(), torch.from_numpy(~keep).float(), pixel_weights=weights
+    )
+
+    np.testing.assert_array_equal(counted, terms.weight.sum(dim=1).numpy().astype(int))
+    assert counted[0] != counted[1], "the two tiles must differ, or this asserts nothing"
+
+
+def test_the_resolution_line_prints_4_2_s_recipe():
+    """The pre-flight names the four numbers that define this arm, before a box is rented.
+
+    §4.1's recipe and §4.4's are both printed there, keyed on `trains_head` and
+    `trains_everything`. A3 is neither, so until #166 the one block a build session reads said
+    nothing about the learning rates it was about to spend twenty epochs at — and a fine-tune at
+    a moved rate converges normally and prints a row exactly as wide as a good one.
+    """
+    from benchmark import arms, artifacts
+
+    printed = "\n".join(artifacts.resolve(BenchmarkConfig(), arms.get("A3-R5")).lines(verb="run"))
+
+    assert "20 epochs" in printed
+    assert "0.75 layer-wise decay" in printed
+    assert "norm_pix off" in printed
+    assert "cross-fades 16 px" in printed

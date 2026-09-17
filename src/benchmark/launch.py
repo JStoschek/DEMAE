@@ -430,10 +430,9 @@ def _parameter_counts(arm: arms.Arm, trained) -> dict:
     situation and it reads the same way — the pair is what makes the printed table legible
     across arms, and an arm with a null in it is an arm a reader cannot place.
     """
-    counts = arms.parameter_counts(arm)
     if trained is not None and trained.kind == "finetune":
         return {"total": trained.parameters, "trainable": trained.parameters}
-    return counts
+    return arms.parameter_counts(arm)
 
 
 def _measured_agreement(resolution: Resolution, trained) -> dict | None:
