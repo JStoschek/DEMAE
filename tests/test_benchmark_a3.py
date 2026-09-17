@@ -539,7 +539,7 @@ def test_the_reflected_border_does_not_show_the_encoder_the_void(model):
     marked[void] = 999.0
 
     for pad in (PATCH // 2, 120):  # the plain fade, and the near-tile-scale path's window
-        padded, padded_void = finetune.padded_tile(marked, void, pad)
+        padded, padded_void = finetune.padded_tile(marked, void, pad, margin=8)
         top = left = pad - PATCH // 2
         window = padded[top : top + TILE, left : left + TILE]
         keep = zeroshot.keep_set(
@@ -608,3 +608,29 @@ def test_the_resolution_line_prints_4_2_s_recipe():
     assert "0.75 layer-wise decay" in printed
     assert "norm_pix off" in printed
     assert "cross-fades 16 px" in printed
+
+
+def test_the_padded_border_leaves_the_encoder_something_to_look_at(model):
+    """The other half of the padding's contract: it must not hide every token either.
+
+    Mirroring the void closes the leak and then overshoots — at `pad = 112 + 8` a near-tile-scale
+    void's reflections tile the window and `keep_masking` refuses, because a fully-masked encoder
+    returns the decoder's unconditional prior rather than a reconstruction. Edge replication
+    carries no void at all, so it hides nothing.
+    """
+    void = _void(top=40, left=40, size=150)  # near tile scale, the 16-decode path
+    normalized = np.zeros((TILE, TILE))
+
+    _, padded_void = finetune.padded_tile(normalized, void, 120, margin=8)
+    window = padded_void[0:TILE, 0:TILE]
+
+    assert int(zeroshot.keep_set(window, patch_px=PATCH).sum()) > 0
+
+
+def test_a_void_at_the_edge_is_refused_by_the_padding(model):
+    """§3.2's interior constraint is what makes edge replication provably void-free."""
+    edged = np.zeros((TILE, TILE), dtype=bool)
+    edged[0:20, 0:20] = True
+
+    with pytest.raises(ValueError, match="reaches within"):
+        finetune.padded_tile(np.zeros((TILE, TILE)), edged, 8, margin=8)

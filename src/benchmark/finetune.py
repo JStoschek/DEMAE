@@ -126,24 +126,52 @@ NEAR_TILE_SCALE_BUCKET: Final = "large"
 
 
 def padded_tile(
-    normalized: np.ndarray, void: np.ndarray, pad: int
+    normalized: np.ndarray, void: np.ndarray, pad: int, *, margin: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """The tile and its void, reflect-padded together — the canvas the shifted grids are cut from.
+    """The tile and its void, edge-padded together — the canvas the shifted grids are cut from.
 
-    Reflection rather than a roll, because a roll wraps terrain from one edge to the other and
-    puts a cliff through the middle of the tile, which is exactly where a near-tile-scale void
-    is. Reflection only ever touches a ``pad``-wide border.
+    A 224 px window of a 224 px tile that is shifted at all runs off the canvas by exactly as
+    much as it shifted, so the shifted grids need a border to be cut from. Three ways to make one
+    and only the third is both correct and non-degenerate; #166 found that by running the other
+    two.
 
-    **Both arrays, by the same rule, and that is the whole reason this is a function.** Reflection
-    copies elevations, so a void within ``pad`` of the edge has its own true values copied into
-    the border. Pad the mask with ``False`` there and :func:`benchmark.zeroshot.keep_set` hands
-    those patches to the encoder as ordinary visible terrain — the arm reads the answer it is
-    being scored on filling, and the score still looks plausible. Measured on a void at §3.2's
-    minimum interior margin, a ``False`` pad put 65 true void pixels into 5 patches the encoder
-    could see; at ``pad = 112 + 8``, the near-tile-scale path's window, the reflected band is
-    120 px wide. The mask is a property of the pixels, so it travels with them.
+    **Not a roll.** Wrapping brings terrain from one edge to the other and puts a cliff through
+    the middle of the tile — which is exactly where a near-tile-scale void is — and it moves the
+    void into the border strip the fade's grids cannot cover.
+
+    **Not a reflection.** Mirroring copies elevations, so a void within ``pad`` of the edge has
+    its own true values copied into the border. Pad the mask with ``False`` there and
+    :func:`benchmark.zeroshot.keep_set` hands those patches to the encoder as ordinary visible
+    terrain: the arm reads the answer it is being scored on filling, and the score still looks
+    plausible (measured at §3.2's minimum interior margin: 65 true void pixels in 5 visible
+    patches). Mirror the mask with it and the leak closes, but at ``pad = 112 + 8`` the void's
+    reflections tile the window and hide **every** token —
+    :func:`pretrain.model.keep_masking` refuses, correctly, because what comes back from a
+    fully-masked encoder is the decoder's unconditional prior.
+
+    **Edge replication, and §3.2 is what makes it exact.** The outermost row and column of a tile
+    are void-free — ``edge_margin_px`` keeps every draw at least 8 px inside — so replicating
+    them produces a border that provably carries no void pixel at all. The mask is then padded
+    ``False`` because that is *true* of the padding rather than convenient: nothing is hidden
+    that should be visible, and nothing is shown that should be hidden. The refusal below is what
+    turns "§3.2 guarantees it" into "this tile satisfies it", since a void that reached the edge
+    would silently make the padding a leak again.
     """
-    return np.pad(normalized, pad, mode="reflect"), np.pad(void, pad, mode="reflect")
+    void = np.asarray(void, dtype=bool)
+    if margin > 0 and (
+        void[:margin].any()
+        or void[-margin:].any()
+        or void[:, :margin].any()
+        or void[:, -margin:].any()
+    ):
+        raise ValueError(
+            f"this void reaches within {margin} px of the tile edge, so the edge-replicated "
+            f"border would carry void pixels into patches the keep-set leaves visible — the arm "
+            f"would read the terrain it is being scored on filling. §3.2 keeps every draw fully "
+            f"interior at {margin} px (`benchmark.masks.NotInterior`), so this is a void the "
+            f"generator should not have produced"
+        )
+    return np.pad(normalized, pad, mode="edge"), np.pad(void, pad, mode="constant")
 
 
 def crossfade_origins(patch_px: int) -> tuple[tuple[int, int], ...]:
@@ -615,7 +643,9 @@ class Compositor:
 
         patch_px = self.model.patch_px
         tile_px = normalized.shape[-1]
-        padded, padded_void = padded_tile(normalized, void, pad)
+        padded, padded_void = padded_tile(
+            normalized, void, pad, margin=self.masks_cfg.edge_margin_px
+        )
 
         windows, keeps = [], []
         for dy, dx in origins:
