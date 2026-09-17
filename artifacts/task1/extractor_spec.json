@@ -57,7 +57,7 @@
     },
     "demae-vits": {
       "checkpoint_format": "timm",
-      "checkpoint_md5": null,
+      "checkpoint_md5": "a1e50e5c67b9b3c3b75dbd24dd35b99b",
       "depth": 12,
       "family": "demae",
       "has_cls": true,

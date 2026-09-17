@@ -707,7 +707,7 @@ class Paths(_Frozen):
     #: secondary; ViT-S is §2.3's appendix backbone.
     demae_r5_checkpoint: str | None = ".release-work/release-R5-v2/encoder.pt"
     demae_r4_checkpoint: str | None = ".release-work/release-R4-v2/encoder.pt"
-    demae_vits_checkpoint: str | None = None
+    demae_vits_checkpoint: str | None = ".release-work/export-R1-vits/encoder.pt"
     #: The **pretraining** checkpoints those encoders were exported from — the only files in
     #: this benchmark that carry an MAE decoder. ``None`` until a box mounts one, and that is
     #: the honest default: §14's release is encoder-only, so the decoder A2 runs is not in the

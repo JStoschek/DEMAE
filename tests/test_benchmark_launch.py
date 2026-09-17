@@ -365,6 +365,41 @@ def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box,
     assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
 
 
+def test_a_second_seed_of_the_vit_s_cell_is_refused_before_the_box_is_touched(flags):
+    """§2.3 cut A4-S to one seed, and #164 makes that enforceable rather than remembered.
+
+    In `resolve` beside §4.1's two recipe refusals, and for their reason: `--dry-run` returns
+    before the verb runs, so a check inside `run` would let `--dry-run --arm A4-S --seed 1`
+    exit 0 while the resolution line printed a second observation as though it were planned.
+    """
+    with pytest.raises(ValueError, match="single observation"):
+        launch.resolve(
+            launch.build_parser().parse_args(
+                ["run", "--dry-run", "--arm", "A4-S", "--seed", "1", *flags]
+            )
+        )
+
+
+def test_the_vit_s_cells_own_seed_still_resolves(flags):
+    """The refusal is about the *second* observation, not about the cell."""
+    resolution = launch.resolve(
+        launch.build_parser().parse_args(
+            ["run", "--dry-run", "--arm", "A4-S", "--seed", "0", *flags]
+        )
+    )
+    assert resolution.config.seed == 0
+
+
+def test_a_second_seed_is_ordinary_for_every_arm_that_is_not_a_single_observation(flags):
+    """A5-BICUBIC is `printed=False` and carries three seeds — the field is not `printed`."""
+    resolution = launch.resolve(
+        launch.build_parser().parse_args(
+            ["run", "--dry-run", "--arm", "A5-BICUBIC", "--seed", "2", *flags]
+        )
+    )
+    assert resolution.config.seed == 2
+
+
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):
     # Before the stage tickets and after them, this is the refusal that comes first: there is
     # nothing to score against, and the message is the command that fixes it.
