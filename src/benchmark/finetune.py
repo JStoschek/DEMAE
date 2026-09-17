@@ -580,16 +580,22 @@ class Compositor:
                 )
             )
 
+        # Onto the model's own device, read off a parameter rather than carried as a field: a
+        # `Compositor` is built from a model that is already somewhere, and a device it was
+        # *told* about is one that can disagree with where the weights actually sit. The tiles
+        # come back to numpy at the end, because everything downstream of `infill` — the
+        # per-tile inversion, the composite, `benchmark.metrics` — is numpy in metres.
+        device = next(self.model.parameters()).device
         with torch.no_grad():
-            tiles = torch.from_numpy(np.stack(windows)).unsqueeze(1).float()
-            keep = torch.from_numpy(np.stack(keeps))
+            tiles = torch.from_numpy(np.stack(windows)).unsqueeze(1).float().to(device)
+            keep = torch.from_numpy(np.stack(keeps)).to(device)
             # One forward per grid rather than one batch of grids: a shift moves which patches
             # the void touches, so two grids keep different numbers of tokens and
             # `pretrain.model.keep_masking` has no single gather width for them.
             decoded = [
                 self.model.unpatchify(
                     self.model.forward_decoder(*self._encode(tiles[i : i + 1], keep[i : i + 1]))
-                )[0, 0].numpy()
+                )[0, 0].float().cpu().numpy()
                 for i in range(len(windows))
             ]
 
@@ -785,10 +791,15 @@ def val_rmse(instances, cfg, model, *, tiles, index=None) -> float:
     selected on — this pass keeps its last epoch, not its best. So this is the fine-tune's own
     progress, and the scored rows are the composite's.
     """
+    from .evaluate import TileStore
+
     compositor = Compositor(model=model, recipe=cfg.finetune, masks_cfg=cfg.masks)
+    # One store for the pass. Rebuilding it per tile re-opened the shard handle 2,000 times an
+    # epoch for no gain — `benchmark.train.Examples` holds one per worker for the same reason.
+    store = TileStore(cfg.paths.corpus_dir, index=index)
     squares, count = 0.0, 0
     for item in instances:
-        raw = _read_tile(cfg, tiles, item.tile_id, index)
+        raw = store.read(tiles.allow(item.tile_id)).raw_i16
         void = masks.decode_rle(item.mask_rle)
         filled = compositor.infill(raw, void, crossfade=False)
         error = filled[void] - raw.astype(np.float64)[void]
@@ -799,13 +810,6 @@ def val_rmse(instances, cfg, model, *, tiles, index=None) -> float:
 
         raise train.TrainError("§3.1's val draw produced no void pixels to score on")
     return math.sqrt(squares / count)
-
-
-def _read_tile(cfg, tiles, tile_id: str, index):
-    """One val tile, through the split guard that cannot reach a test tile."""
-    from .evaluate import TileStore
-
-    return TileStore(cfg.paths.corpus_dir, index=index).read(tiles.allow(tile_id)).raw_i16
 
 
 def train_finetune(cfg, arm, *, epochs: int | None = None, on_epoch=None):

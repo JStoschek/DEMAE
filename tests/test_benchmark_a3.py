@@ -489,3 +489,31 @@ def test_a3_trains_against_the_committed_bank(a3_scored):
 
     assert any("head_train" in source for source in record["training"]["read"])
     assert "mask bank" in out
+
+
+def test_the_composite_runs_where_the_weights_are(model, tile):
+    """The composite follows the model onto an accelerator, rather than assuming the CPU.
+
+    This is a regression test for a bug the CPU-only fixtures above could not see: the windows
+    were built with `torch.from_numpy` and handed straight to a model that, on a rented box, is
+    on cuda — so the first real run died in `patch_embed` on a float/cuda.float mismatch, after
+    loading 85M parameters and reading the bank. Skipped where there is no accelerator, and mps
+    is enough: it is a device-placement bug, so any non-CPU device reproduces it.
+    """
+    device = (
+        "mps"
+        if torch.backends.mps.is_available()
+        else "cuda"
+        if torch.cuda.is_available()
+        else None
+    )
+    if device is None:
+        pytest.skip("no accelerator on this box; the composite's CPU path is covered above")
+
+    moved = model.to(device)
+    filled = finetune.Compositor(
+        model=moved, recipe=Finetune(), masks_cfg=BenchmarkConfig().masks
+    ).infill(tile, _void())
+
+    assert filled.dtype == np.float64
+    assert np.isfinite(filled).all()
