@@ -445,6 +445,56 @@ def test_the_vit_s_cell_is_registered_as_appendix_rather_than_printed():
     assert "A4-S" in arms.ARMS and not arms.ARMS["A4-S"].printed
 
 
+def test_the_vit_s_cell_declares_itself_a_single_observation():
+    """§2.3's one-seed rule is a fact about the arm, so it is declared where the arm is named.
+
+    The absence of the ± is the point of the cell (#164). A ± on one observation would read as
+    a capacity bracket §2.3 explicitly demoted, so "one seed" has to be enforceable rather than
+    remembered by whoever types the `run` line.
+    """
+    assert arms.ARMS["A4-S"].single_observation
+
+
+def test_the_other_appendix_cells_are_not_single_observations():
+    """`printed=False` is not the predicate, and the two siblings are why.
+
+    A5-BICUBIC is an appendix cell that carries three seeds like any primary one, and A9's two
+    rows train nothing at all — an inference-only arm has no seed structure for §2.3 to have
+    cut. So this is its own declared field and not a reading of `printed`.
+    """
+    for name in ("A5-BICUBIC", "A9-NOTHRESH", "A9", "A4-R5", "A6"):
+        assert not arms.ARMS[name].single_observation, name
+
+
+def test_a_single_observation_arm_must_be_an_appendix_cell_that_trains():
+    """Two halves of one claim, checked where the arm is built.
+
+    A printed row is one of R5's pre-registered eleven and cannot be cut to one seed without
+    widening what the table claims; an inference-only arm has no seeds to cut.
+    """
+    with pytest.raises(ValueError, match="printed"):
+        arms.Arm(
+            name="X",
+            encoder="demae-vits",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="per_tile",
+            what="a printed row cut to one seed",
+            single_observation=True,
+        )
+    with pytest.raises(ValueError, match="trains nothing"):
+        arms.Arm(
+            name="X",
+            encoder="demae-vits",
+            trains="nothing",
+            input_convention="a1_fill_plus_mask",
+            normalization="per_tile",
+            what="an inference-only arm with no seed structure",
+            printed=False,
+            single_observation=True,
+        )
+
+
 def test_the_imagenet_mae_vit_s_cell_is_absent_rather_than_disabled():
     """A6-S was dropped in #147, on the checkpoint's provenance rather than its absence.
 

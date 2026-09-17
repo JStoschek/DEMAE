@@ -367,6 +367,41 @@ def test_freeze_refuses_a_plan_whose_sixth_section_lost_a_registered_phrase(box,
     assert not (box / "artifacts" / extract.SPEC_FILENAME).exists()
 
 
+def test_a_second_seed_of_the_vit_s_cell_is_refused_before_the_box_is_touched(flags):
+    """§2.3 cut A4-S to one seed, and #164 makes that enforceable rather than remembered.
+
+    In `resolve` beside §4.1's two recipe refusals, and for their reason: `--dry-run` returns
+    before the verb runs, so a check inside `run` would let `--dry-run --arm A4-S --seed 1`
+    exit 0 while the resolution line printed a second observation as though it were planned.
+    """
+    with pytest.raises(ValueError, match="single observation"):
+        launch.resolve(
+            launch.build_parser().parse_args(
+                ["run", "--dry-run", "--arm", "A4-S", "--seed", "1", *flags]
+            )
+        )
+
+
+def test_the_vit_s_cells_own_seed_still_resolves(flags):
+    """The refusal is about the *second* observation, not about the cell."""
+    resolution = launch.resolve(
+        launch.build_parser().parse_args(
+            ["run", "--dry-run", "--arm", "A4-S", "--seed", "0", *flags]
+        )
+    )
+    assert resolution.config.seed == 0
+
+
+def test_a_second_seed_is_ordinary_for_every_arm_that_is_not_a_single_observation(flags):
+    """A5-BICUBIC is `printed=False` and carries three seeds — the field is not `printed`."""
+    resolution = launch.resolve(
+        launch.build_parser().parse_args(
+            ["run", "--dry-run", "--arm", "A5-BICUBIC", "--seed", "2", *flags]
+        )
+    )
+    assert resolution.config.seed == 2
+
+
 def test_a_run_against_an_unfrozen_box_says_freeze_first(flags):
     # Before the stage tickets and after them, this is the refusal that comes first: there is
     # nothing to score against, and the message is the command that fixes it.
@@ -434,7 +469,11 @@ def test_r4_is_refused_at_a_sweep_rung_and_runs_at_the_headline(flags):
 
 
 def test_the_vit_s_appendix_cell_is_refused_at_a_sweep_rung(flags):
-    """§2.3 cut ViT-S from the sweep in the same sentence it cut it from A2/A3."""
+    """§2.3 cut ViT-S from the sweep in the same sentence it cut it from A2/A3.
+
+    *That* it is refused is asserted here; *which* of the two refusals arrives is pinned by
+    `test_a_rung_refusal_for_the_appendix_cell_is_the_specific_one`.
+    """
     with pytest.raises(ValueError, match="A4-S"):
         launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "1k", "--seed", "0", *flags])
 
@@ -483,8 +522,29 @@ def test_moving_the_sweep_seed_count_moves_the_config_hash(flags):
 
 
 def test_the_headline_size_is_left_alone_by_all_of_this(flags):
-    """The gate is about the rungs. Seed counts at 20k are §4.1's business and another ticket's."""
-    assert launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "20k", "--seed", "2", *flags]) == 0
+    """The gate is about the rungs. Seed counts at 20k are §4.1's business, not this one's.
+
+    A4-R5 rather than A4-S, and the swap is #164 landing: that ticket is the "another ticket"
+    this test used to defer to, and it now refuses A4-S past one seed anywhere. So the arm that
+    demonstrates *this* gate keeping its hands off the headline has to be one the plan really
+    gives three seeds to.
+    """
+    assert launch.main(
+        ["run", "--dry-run", "--arm", "A4-R5", "--size", "20k", "--seed", "2", *flags]
+    ) == 0
+
+
+def test_a_rung_refusal_for_the_appendix_cell_is_the_specific_one(flags):
+    """#164 and #165 both refuse A4-S at a rung, and this pins which message arrives.
+
+    Both landed independently on `resolve`. `_checked_cell` runs first so the reader gets §2.3's
+    sentence about ViT-S — one appendix observation at the headline — rather than #165's general
+    "not in the sweep list". Ordered the other way, `_checked_cell`'s size branch is unreachable
+    from `main`, and #164's own tests would not notice because they drive `_checked_cell`
+    directly. This one goes through `main`, which is where the shadowing would live.
+    """
+    with pytest.raises(ValueError, match="one appendix observation"):
+        launch.main(["run", "--dry-run", "--arm", "A4-S", "--size", "1k", "--seed", "0", *flags])
 
 
 def test_freeze_and_report_cannot_be_given_a_cell_at_all(flags):

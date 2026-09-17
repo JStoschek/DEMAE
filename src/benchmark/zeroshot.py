@@ -226,10 +226,11 @@ def load_inpainter(path: Path | str, *, expect: arms.Encoder | None = None) -> I
     the position-embedding axis order. The plan publishes **no md5 for a pretraining
     checkpoint** (it is not a released artifact; each release manifest names its own
     ``source_checkpoint`` and hash, but nothing in this plan reviews one), so the file's identity
-    is *recorded* rather than pinned — the same state ``demae-vits``' unpinned release
-    checkpoint is in, and :class:`benchmark.artifacts.Resolved` puts its md5 in the run record
-    either way. These three checks are what is available in place of a pin, and the axis order is
-    the one that matters most: the model rebuilds its sin-cos buffer from its own config, so a
+    is *recorded* rather than pinned, and :class:`benchmark.artifacts.Resolved` puts its md5 in the
+    run record either way. ``demae-vits`` was the standing example of that state until #164
+    pinned it; every *encoder* in the registry now carries a reviewed md5, and it is the
+    pretraining checkpoints alone that are recorded-not-pinned. These three checks are what is
+    available in place of a pin, and the axis order is the one that matters most: the model rebuilds its sin-cos buffer from its own config, so a
     checkpoint recording MAE's column-first order loaded for R4 — whose weights learned
     mmselfsup's row-first one (P102 §4) — would place every token at the transposed position and
     reconstruct plausible, wrong terrain.
