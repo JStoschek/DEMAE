@@ -1163,3 +1163,44 @@ def test_the_dry_run_names_both_transfers():
     )
     assert done.returncode == 0, done.stderr
     assert "task1-void-fill-plan.md" in done.stdout
+
+
+# --- The #165 sweep runner's cell list, held equal to the code's ----------------------------
+# Not arithmetic like the two above, but the same class of defect: a constant copied into a
+# second file, where the copy can go stale without anything failing. `RCLONE_MIN` is the
+# precedent — carried in two scripts and pinned equal here because neither can source the other
+# at the moment it needs the answer. This one is a shell array against a Python tuple.
+
+
+SWEEP = SCRIPTS / "p165_sweep.sh"
+
+
+def test_the_sweep_runner_runs_exactly_the_arms_the_code_registers():
+    """Otherwise the script is a fourth authority on §7's shape, beside §7, §4.5 and the code.
+
+    The script cannot import `benchmark.arms`, so its loop is a literal — which is how §4.5
+    drifted from §7 in the first place (#129). Pinned rather than refactored: a bash script that
+    shelled out to Python to learn which arms to run would fail in a way this test cannot see.
+    """
+    from benchmark import arms
+
+    body = SWEEP.read_text()
+    loop = next(line for line in body.splitlines() if line.strip().startswith("for arm in "))
+    named = loop.strip().removeprefix("for arm in ").removesuffix("; do").split()
+    assert tuple(named) == arms.LABEL_SWEEP_ARMS
+
+
+def test_the_sweep_runner_runs_exactly_the_rungs_and_seeds_the_code_registers():
+    """The other two axes of §7's `3 cells x 2 seeds x 2 sizes, plus A7`."""
+    from benchmark.config import LABEL_EFFICIENCY_SIZES, Head, SIZE_TILES
+
+    body = SWEEP.read_text()
+    sizes = next(line for line in body.splitlines() if line.strip().startswith("for size in "))
+    named = sizes.strip().removeprefix("for size in ").removesuffix("; do").split()
+    # Every rung but the headline — the sweep is the sub-headline half of the ladder.
+    assert tuple(named) == tuple(s for s in LABEL_EFFICIENCY_SIZES if s != "20k")
+    assert SIZE_TILES["20k"] == max(SIZE_TILES.values())  # which is what makes 20k the headline
+
+    seeds = next(line for line in body.splitlines() if line.strip().startswith("for seed in "))
+    named = seeds.strip().removeprefix("for seed in ").removesuffix("; do").split()
+    assert [int(s) for s in named] == list(range(Head().label_sweep_seeds))
