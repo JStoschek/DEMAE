@@ -3,10 +3,15 @@
 **Results memo, September 2026.** Answers C1, C2 and C3 in numbers and C4 in
 ranks, against the pre-registration committed in
 [`task1-void-fill-plan.md`](task1-void-fill-plan.md) and
-[ADR-0013](../adr/0013-task1-pre-registration-register.md). Every number here is
-printed by `python -m benchmark.launch report` from
-`data/task1/results.parquet`; none is transcribed by hand, and §6's fairness
-checklist ships below in the plan's own words.
+[ADR-0013](../adr/0013-task1-pre-registration-register.md). The printed table,
+the C4 rank block and the bootstrap intervals are exactly what `python -m
+benchmark.launch report` renders from `data/task1/results.parquet`, and
+`tests/test_p170_results_memo.py` re-derives every one of those cells to check
+it. The figures `report` does **not** print — the C3 sweep, the ViT-S cell, the
+A9-NOTHRESH and A5-BICUBIC tables, the per-cell seed spreads and the small-bucket
+numbers — are computed over the same parquet through `benchmark.report`'s own
+cell helpers, and carried here by hand. §6's fairness checklist ships below in
+the plan's own words.
 
 ## There is nothing external to stand this table beside
 
@@ -60,7 +65,8 @@ arms whose heads train at 20k; one seed on the arms that train nothing.
 | A1 | classical interpolation, the operational status quo | 36,411 | 1 |
 | A2-R5 / A2-R4 | DEMAE zero-shot, no trained head | **0** | — |
 | A3-R5 / A3-R4 | DEMAE native fine-tune | 36,411 each | 1 |
-| A4-R5 / A4-R4 | DEMAE-frozen + the shared head | 109,233 / 109,233 | 3 |
+| A4-R5 | DEMAE-frozen + the shared head, and C3's sweep | 254,877 | 3 at 20k, 2 each at 5k and 1k |
+| A4-R4 | the same, continual-init, 20k only | 109,233 | 3 |
 | A5 | TerraMind-tokenizer-frozen + the same head | 254,877 | 3 |
 | A6 | ImageNet-MAE-frozen + the same head | 254,877 | 3 |
 | A7 | UNet from scratch | 254,877 | 3 |
@@ -217,12 +223,21 @@ is ahead at blob R1 and real-small.
 
 R3 fixed before any number existed that an R4 win is reported prominently and
 **never becomes C1's number**, and it stays that way. On its own terms it would
-also be the wrong number to reach for. **Every one of those six gaps is smaller
-than the seed spread of the cell it sits in.** The largest, blob R4's 0.132 m, sits inside
-A4-R4's own three-seed spread of 0.235 m; blob R3's 0.003 m against spreads of
-0.041 and 0.043 is indistinguishable from zero. R4 neither beats nor loses to R5
-here. The two inits are tied at 20k, and the pre-registration is what stopped
-that tie being read in whichever direction the table happened to fall.
+also be the wrong number to reach for, and the seed spreads say why with a split
+worth stating exactly. **All four cells where R4 edges R5 are inside a seed
+spread; both cells where R5 is ahead are outside one.** The R4 side: blob R4's
+0.132 m inside A4-R4's own three-seed spread of 0.235 m, blob R3's 0.003 m
+against spreads of 0.041 and 0.043, blob R2's 0.016 m against 0.023 and 0.029,
+and real-medium+'s 0.041 m against 0.140 and 0.202. The R5 side: blob R1's
+0.024 m against spreads of 0.010 and 0.016, and real-small's 0.066 m against
+0.026 and 0.059, both larger than either arm's spread.
+
+So the honest reading is narrower than *tied*, and it runs the other way from the
+win the table appears to hand R4: **every cell that separates the two inits
+beyond seed noise is a cell R5 wins, and every cell R4 wins is inside the
+noise.** R3 did not anticipate that in either direction, which is the point of
+having fixed it first: what an R4 win is worth was settled before anyone could
+see which way the six cells fell.
 
 ## C2: the model is useful only in part, and the seam clause fails
 
@@ -298,9 +313,10 @@ anywhere below 20k. At 1k the gap is 1.27 m.
 the win, as R10 requires. At 20k the gap is 0.21 m, and the UNet is ahead on
 several readings: A4-R5 − A7 on `slope_rmse` excludes zero on the wrong side in
 all six cells (from [+0.054, +0.072] at blob R1 to [+0.887, +1.117] at
-real-medium+), and on `rmse` the UNet is ahead at real-small [+1.314, +1.491] and
-real-medium+ [+0.116, +1.056], tied at blob R1 and R3, with A4-R5 ahead only at
-blob R4 [-1.190, -0.659]. §6 item 7's worked example was "A7 ties A4 at 20k"; at
+real-medium+), and on `rmse` the UNet is ahead at **blob R2 [+0.008, +0.089]**,
+real-small [+1.314, +1.491] and real-medium+ [+0.116, +1.056], tied at blob R1
+and R3, with A4-R5 ahead only at blob R4 [-1.190, -0.659]. That is three of the
+six cells to the from-scratch baseline on metres, and all six on slope. §6 item 7's worked example was "A7 ties A4 at 20k"; at
 20k, on slope, A7 beats it.
 
 C1's ordering is unchanged at every rung: A4-R5 < A6 < A5 at 1k, 5k and 20k, in
@@ -346,8 +362,11 @@ do, over six swap instances:
 **What the failure does not reach is C1.** §0's reason for caring about a rank
 swap is that it would put C1 in question, since C1's comparison is made entirely
 on synthetic masks. C1's comparison is A4-R5 against A6 and A5, and that triple
-holds the ordering **A4-R5 < A6 < A5 — #2, #4, #5 — in all three instance sets on
-both metrics**, real geometry included. A7 is #1 and A9 #9 in all six rows.
+**holds the ordering A4-R5 < A6 < A5 in all three instance sets on both
+metrics**, real geometry included. A6 is #4 and A5 #5 in all six rows; A4-R5 is
+#2 in five of them and #3 at real-medium+/`rmse`, where A4-R4 takes #2 — which
+moves A4-R5's rank without touching its order against either arm C1 compares it
+to. A7 is #1 and A9 #9 in all six rows.
 Every swapping pair is either the two DEMAE inits, which R3 already refuses to
 let decide anything, or the fine-tuned arm against classical fill, which is C2's
 territory and is reported as C2's loss above. So both things are true: **C4 fails
@@ -416,7 +435,7 @@ pre-registration nobody can audit is a pre-registration nobody should believe.
 |---|---|---|
 | **R1** | six printed columns — five graded headline plus the derived seam gap — and four appendix, nothing else | **Held.** The table prints exactly `rmse`, `nmad`, `bias_abs`, `slope_rmse`, `aspect_error`, `seam_gap`. `benchmark.metrics.score` gates on the bar's roster, so an unregistered metric raises rather than being computed. No column was added after the numbers existed. |
 | **R2** | the pretraining-corpus caveat is symmetric | **Held, and it was owed in the direction that cost us.** TerraMind's ~3x ground-area advantage (63.4M km² against 21.4M km²) is recorded in §6 item 4 below, before any result. The comparison went DEMAE's way, so the caveat is owed here as a discount on **our own** win, and it is priced as one: TerraMind had ~3x the ground area and still lost every C1 cell, so A4-R5's margin over A5 is if anything understated by the corpus difference rather than explained by it. The caveat is not invoked anywhere to explain a DEMAE loss. |
-| **R3** | R5 is the headline unconditionally; an R4 win is reported prominently but never becomes C1's number | **Fired, and held.** A4-R4 edges A4-R5 on `rmse` in four of six printed cells. It is reported prominently above under its own heading, C1's number is A4-R5's, and the memo additionally states that all six gaps are inside seed spread. |
+| **R3** | R5 is the headline unconditionally; an R4 win is reported prominently but never becomes C1's number | **Fired, and held.** A4-R4 edges A4-R5 on `rmse` in four of six printed cells. It is reported prominently above under its own heading, and C1's number is A4-R5's. The memo also states the split the spreads show: all four cells R4 wins are inside a seed spread, and both cells R5 wins are outside one. |
 | **R4** | TerraMind's **20** DEM-tokenizer epochs carry their per-modality citation wherever stated, not the paper's 100 | **Held.** 20 appears in §6 item 4 below with its terratorch / model-card attribution; 100 appears nowhere as this tokenizer's epoch count. |
 | **R5** | the printed table's shape: buckets pool, blobs headline, 66 (row, band) cells × 6 columns = 396 printed numbers, the 66-cell C4 rank block | **Held.** 396 numbers and 66 rank cells, asserted by `report.assert_r5_shape` and `report.assert_rank_block_shape` rather than counted by hand. A2's twelve cells print as *not scored*, which keeps the shape whole rather than shrinking the table to the arms that ran. |
 | **R6** | exactly four arm pairs carry a bootstrap CI mark, named in advance, of 55 computed | **Held.** Four marked (A4-R5/A5 and A4-R5/A6 for C1, A3-R5/A1 for C2, A4-R5/A7 for C3), 36 of the 55 computable on this box, every other pair computed and left unmarked. R6 registers `A3`, which §2.3 splits by init; resolved to A3-R5 under R3 rather than by choosing after the numbers. |

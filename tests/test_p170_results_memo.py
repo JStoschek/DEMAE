@@ -26,12 +26,29 @@ memo that used it about the wrong claim.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Final
 
 import pytest
 
 from benchmark import arms, prereg
+
+#: The six printed (section, band) cells, as :func:`benchmark.report.printed_cells` orders them.
+_PRINTED_A4_CELLS: Final = (
+    ("blob", "R1"),
+    ("blob", "R2"),
+    ("blob", "R3"),
+    ("blob", "R4"),
+    ("real-small", "R4"),
+    ("real-medium+", "R4"),
+)
+
+
+def _seed_rows(frame, arm: str, section: str, band: str, seed: int):
+    """One seed's rows for a printed cell — `report.cell_rows` does not split by seed."""
+    family = {"family": "blob"} if section == "blob" else {"family": "real", "bucket": section}
+    return frame.select(arm=arm, size="20k", band=band, seed=seed, **family)
 
 #: Anchored at the repo root rather than at the working directory, on
 #: `test_benchmark_prereg`'s rule: a committed file is found from the test's own location, so a
@@ -332,6 +349,75 @@ def test_a2_is_reported_as_pending_rather_than_as_a_negative_result(flat: str):
             "the memo states R12's contingency as an outcome in its own voice. With no A2 rows "
             "it is pending — not computed yet is not 'does not beat A1' (#167, #173)."
         )
+
+
+# --- The narrative numbers, which are the ones a hand edit reaches -------------
+#
+# The table and the rank block are recomputed wholesale below. These two are the *prose* figures
+# that no such sweep covers, and both are places this memo was already wrong once: the "what ran"
+# counts, and the seed-spread split R3's reading rests on. A claim a reader would have to open the
+# parquet to falsify is exactly the claim worth a test.
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
+def test_the_what_ran_table_counts_the_rows_the_parquet_holds(memo: str):
+    """Every row count in the opening table is the arm's real row count.
+
+    A2's zero is the one that carries an argument — it is why R12 is pending — so it is checked
+    like any other number rather than read as an absence.
+    """
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(RESULTS, columns=["arm"])
+    actual = Counter(table.column("arm").to_pylist())
+
+    rows = re.findall(r"^\|\s*(A[0-9][\w-]*)\s*\|[^|]*\|\s*\*{0,2}([\d,]+|0)\*{0,2}\s*\|", memo, re.M)
+    assert rows, "no arm row counts found in the 'what ran' table"
+
+    for arm, printed in rows:
+        assert int(printed.replace(",", "")) == actual.get(arm, 0), (
+            f"{arm}: the memo says {printed} rows, the parquet holds {actual.get(arm, 0):,}"
+        )
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
+def test_the_r4_secondarys_seed_spread_split_is_the_measured_one(flat: str):
+    """R3's reading: which A4-R5-vs-A4-R4 cells separate beyond seed noise, and which way.
+
+    The memo claims all four cells R4 wins sit inside a seed spread and both cells R5 wins sit
+    outside one. That is the whole support for not treating the R4 win as meaningful, and it is
+    a claim about six subtractions and twelve spreads that nobody checks by eye — this memo
+    asserted the false universal ("all six are inside") on the first pass.
+    """
+    from benchmark import report
+
+    frame = report.read(RESULTS)
+    inside_r4_wins, outside_r5_wins = 0, 0
+    for section, band in _PRINTED_A4_CELLS:
+        means, spreads = {}, {}
+        for arm in ("A4-R5", "A4-R4"):
+            rows = report.cell_rows(frame, arm, section, band, size=report.HEADLINE_SIZE)
+            means[arm] = report.finite_mean(frame.columns["rmse"][rows])[0]
+            per_seed = [
+                report.finite_mean(frame.columns["rmse"][sel])[0]
+                for sel in (_seed_rows(frame, arm, section, band, seed) for seed in (0, 1, 2))
+            ]
+            spreads[arm] = max(per_seed) - min(per_seed)
+
+        gap = abs(means["A4-R4"] - means["A4-R5"])
+        if means["A4-R4"] < means["A4-R5"]:
+            assert gap < max(spreads.values()), f"{section}/{band}: an R4 win outside seed spread"
+            inside_r4_wins += 1
+        else:
+            assert gap > max(spreads.values()), f"{section}/{band}: an R5 win inside seed spread"
+            outside_r5_wins += 1
+
+    assert (inside_r4_wins, outside_r5_wins) == (4, 2), (
+        f"the split is {inside_r4_wins} R4 wins inside and {outside_r5_wins} R5 wins outside; "
+        f"the memo says four and two"
+    )
+    assert "four cells where R4 edges R5 are inside a seed spread" in flat
+    assert "both cells where R5 is ahead are outside one" in flat
 
 
 # --- The numbers are the report's numbers -------------------------------------
