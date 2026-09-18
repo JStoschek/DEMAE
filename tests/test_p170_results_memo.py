@@ -33,13 +33,27 @@ import pytest
 
 from benchmark import arms, prereg
 
-#: The deliverable, where §9 item 3 puts it — ``docs/research/``.
-MEMO: Final = Path("docs/research/task1-results-memo.md")
+#: Anchored at the repo root rather than at the working directory, on
+#: `test_benchmark_prereg`'s rule: a committed file is found from the test's own location, so a
+#: PYTHONPATH-isolated worktree resolves it the same way a working checkout does.
+REPO: Final = Path(__file__).resolve().parents[1]
 
-#: The canonical results file. Gitignored (``data/*``), so the one test that reads it skips in a
+#: The deliverable, where §9 item 3 puts it — ``docs/research/``.
+MEMO: Final = REPO / "docs" / "research" / "task1-results-memo.md"
+
+#: The plan §6 is compared against. `prereg.PLAN_PATH` is a repo-relative default, so it is
+#: anchored here too — `test_benchmark_prereg`'s `PLAN`. Every `prereg` entry point below takes
+#: this explicitly rather than letting the default resolve against the working directory.
+PLAN: Final = REPO / prereg.PLAN_PATH
+
+#: The committed bar, composed from `prereg.BAR_NAME` rather than retyped — the artifact and the
+#: code that refuses it cannot be renamed apart, and that property should reach the tests too.
+BAR: Final = REPO / "artifacts" / "task1" / prereg.BAR_NAME
+
+#: The canonical results file. Gitignored (``data/*``), so the tests that read it skip in a
 #: throwaway worktree rather than failing there — `test_benchmark_a9`'s rule for the release
 #: weights, applied to the rows.
-RESULTS: Final = Path("data/task1/results.parquet")
+RESULTS: Final = REPO / "data" / "task1" / "results.parquet"
 
 #: R12's struck clause, in #167's five wordings. Carried here rather than imported from
 #: `tests.test_benchmark_a2` because the two surfaces are independent: a test module is not an
@@ -53,7 +67,6 @@ STRUCK: Final = (
 )
 
 
-
 @pytest.fixture(scope="module")
 def memo() -> str:
     """The memo's raw text. Read once — every test below is a read."""
@@ -62,6 +75,19 @@ def memo() -> str:
         f"answering C1, C2 and C3 in numbers and C4 in ranks (#170)."
     )
     return MEMO.read_text()
+
+
+def _outside_section_6(text: str) -> str:
+    """The memo with §6 cut out, flattened — the part that speaks in the memo's own voice.
+
+    §6 is quoted, not written: it *states* the twelve rules, so its wording is evidence about
+    the pre-registration rather than about this run. A check on how the memo reports a result
+    has to exclude it, or the rule's own statement reads as the memo asserting the outcome.
+    """
+    start = text.index(prereg.SECTION)
+    end = text.find("\n## ", start + 1)
+    without = text[:start] + (text[end:] if end >= 0 else "")
+    return re.sub(r"\s+", " ", without.replace("*", ""))
 
 
 @pytest.fixture(scope="module")
@@ -135,7 +161,7 @@ def test_section_6_appears_verbatim(memo: str):
         f"the memo carries no {prereg.SECTION!r} heading. §6 is the section the plan marks "
         f"'goes in the writeup verbatim', and the bar is anchored in it ({prereg.ADR})."
     )
-    assert prereg.section_text(MEMO) == prereg.section_text(prereg.PLAN_PATH)
+    assert prereg.section_text(MEMO) == prereg.section_text(PLAN)
 
 
 def test_the_committed_bar_still_loads_against_the_memos_copy(tmp_path: Path):
@@ -146,7 +172,7 @@ def test_the_committed_bar_still_loads_against_the_memos_copy(tmp_path: Path):
     refusal — so the seven mechanised values are anchored in the document a reader holds, not
     only in the plan they may never open.
     """
-    written = prereg.write_bar(tmp_path / prereg.BAR_NAME, plan=prereg.PLAN_PATH)
+    written = prereg.write_bar(tmp_path / prereg.BAR_NAME, plan=PLAN)
     bar = prereg.read_bar(written, plan=MEMO)
 
     assert bar.rules == sum(1 for r in prereg.REGISTER if r.counted)
@@ -281,12 +307,30 @@ def test_a2_is_reported_as_pending_rather_than_as_a_negative_result(flat: str):
     assert "#173" in flat
     assert "norm_pix" in flat
 
+    #: Asserted positively first, so the check below cannot pass by the phrase simply being
+    #: absent. A memo that discussed R12's contingency nowhere at all would satisfy a
+    #: purely negative test while leaving the rule's disposition unstated.
+    row = _disposition_rows(MEMO.read_text())["R12"]
+    assert "Pending" in row or "pending" in row, (
+        f"R12's disposition does not say pending: {row!r}. With no A2 rows the contingency "
+        f"has no verdict (#167, #173)."
+    )
+
+    #: And every mention of the contingency's wording sits next to that reading — **outside §6**.
+    #: §6 is the pre-registration's own copy and *states* the rule ("reported as a negative
+    #: result if it does not beat A1 in a majority of the four bands"); it ships verbatim and
+    #: could not carry a disposition without ceasing to be verbatim. What this checks is every
+    #: place the memo speaks in its own voice. Every occurrence rather than the first, because
+    #: the rule is echoed where it is disposed of and it is that echo that could go wrong, and
+    #: `max(0, ...)` because a negative left bound would silently window the tail instead of the
+    #: head.
+    outside = _outside_section_6(MEMO.read_text())
     a1_majority = "does not beat A1"
-    if a1_majority in flat:
-        window = flat[flat.index(a1_majority) - 400 : flat.index(a1_majority) + 400]
-        assert "pending" in window or "not computable" in window or "would be" in window, (
-            "the memo states R12's contingency as an outcome. With no A2 rows it is pending — "
-            "not computed yet is not 'did not beat A1' (#167, #173)."
+    for match in re.finditer(re.escape(a1_majority), outside):
+        window = outside[max(0, match.start() - 400) : match.end() + 400]
+        assert "pending" in window.lower() or "not computable" in window, (
+            "the memo states R12's contingency as an outcome in its own voice. With no A2 rows "
+            "it is pending — not computed yet is not 'does not beat A1' (#167, #173)."
         )
 
 
@@ -329,8 +373,30 @@ def test_every_printed_cell_in_the_memo_is_the_cell_the_report_computes(flat: st
     )
 
 
+@pytest.fixture(scope="module")
+def ranks() -> dict[tuple[str, str, str], int]:
+    """C4's rank block as ``{(set, metric, arm): rank}``, computed once for both readers.
+
+    A fixture rather than a helper called twice, on `test_benchmark_prereg`'s `bar_path`/`bar`
+    pattern: the block costs a full read of the parquet, and the two tests below want the same
+    one. Module-scoped for the same reason :func:`memo` is.
+    """
+    from benchmark import report
+    from benchmark.config import BenchmarkConfig
+
+    if not RESULTS.exists():  # pragma: no cover - the skipif on each reader covers this
+        pytest.skip("results.parquet is gitignored (data/*)")
+
+    frame = report.read(RESULTS)
+    bar = prereg.read_bar(BAR, plan=PLAN)
+    return {
+        (cell.set_name, cell.metric, cell.arm): cell.rank
+        for cell in report.rank_block(frame, bar, BenchmarkConfig(arm="A1")).cells
+    }
+
+
 @pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
-def test_c4_is_answered_in_ranks_and_every_rank_is_the_computed_one(memo: str):
+def test_c4_is_answered_in_ranks_and_every_rank_is_the_computed_one(memo: str, ranks):
     """C4 in ranks, never in metres — §0 makes it an ordering claim for a stated reason.
 
     The real family is drawn at its natural size distribution and the synthetic families are
@@ -340,23 +406,13 @@ def test_c4_is_answered_in_ranks_and_every_rank_is_the_computed_one(memo: str):
     hand edit does the most damage for the least visibility — one transposed pair invents a
     swap, or hides one, and the swaps are the entire finding.
     """
-    from benchmark import prereg as _prereg
-    from benchmark import arms as _arms
-    from benchmark import report
-    from benchmark.config import BenchmarkConfig
+    computed = ranks
 
     c4 = memo[memo.index("## C4") :]
     assert re.search(r"#\d", c4), "C4 is answered without a rank token"
     assert "real-medium+" in c4 and "real-small" in c4
 
-    frame = report.read(RESULTS)
-    bar = _prereg.read_bar("artifacts/task1/task1-prereg-bar.json")
-    computed = {
-        (cell.set_name, cell.metric, cell.arm): cell.rank
-        for cell in report.rank_block(frame, bar, BenchmarkConfig(arm="A1")).cells
-    }
-
-    order = list(_arms.PRINTED_ROWS)
+    order = list(arms.PRINTED_ROWS)
     pattern = re.compile(
         r"^\|\s*(blob/small|real-small|real-medium\+)\s*/\s*(rmse|slope_rmse)\s*\|(.+?)\|\s*$"
     )
@@ -385,7 +441,9 @@ def test_c4_is_answered_in_ranks_and_every_rank_is_the_computed_one(memo: str):
 
 
 @pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
-def test_c4s_swapping_pairs_are_the_computed_ones_and_none_is_a_c1_pair(memo: str, flat: str):
+def test_c4s_swapping_pairs_are_the_computed_ones_and_none_is_a_c1_pair(
+    memo: str, flat: str, ranks
+):
     """C4's whole finding, recomputed: which pairs swap, how many, and whether C1 is among them.
 
     This is the assertion the prose is most likely to get wrong, because the swaps are counted by
@@ -401,18 +459,7 @@ def test_c4s_swapping_pairs_are_the_computed_ones_and_none_is_a_c1_pair(memo: st
     """
     from itertools import combinations
 
-    from benchmark import arms as _arms
-    from benchmark import prereg as _prereg
-    from benchmark import report
-    from benchmark.config import BenchmarkConfig
-
-    frame = report.read(RESULTS)
-    bar = _prereg.read_bar("artifacts/task1/task1-prereg-bar.json")
-    ranks = {
-        (c.set_name, c.metric, c.arm): c.rank
-        for c in report.rank_block(frame, bar, BenchmarkConfig(arm="A1")).cells
-    }
-    scored = [a for a in _arms.PRINTED_ROWS if ranks.get(("blob/small", "rmse", a)) is not None]
+    scored = [a for a in arms.PRINTED_ROWS if ranks.get(("blob/small", "rmse", a)) is not None]
     real_sets = ("real-small", "real-medium+")
 
     swaps = set()
