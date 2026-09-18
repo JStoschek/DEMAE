@@ -399,6 +399,16 @@ class Resolution:
 
             lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")
             lines.extend(tune.format_frozen(self.config.head))
+        if self.arm.trains == "encoder+decoder":
+            # §4.2's recipe, on the same rule as the two above and for the same reason: an arm
+            # fine-tuned at a moved learning rate converges normally and prints a row exactly as
+            # wide as a good one. A3 printed no recipe at all until #166 — the two branches above
+            # are keyed on `trains_head` and `trains_everything`, and this arm is neither, so the
+            # one pre-flight a build session reads before renting a box said nothing about the
+            # four numbers that define it.
+            from . import finetune
+
+            lines.extend(finetune.format_declared(self.config.finetune))
         return lines
 
     def input_lines(self) -> list[str]:
@@ -555,7 +565,7 @@ def _required_for(key: str, arm: arms.Arm) -> bool:
         # refuse an arm for a contract it never consults (#167). It still applies §2.1's declared
         # diet, and that arrives through `benchmark.extract`'s functions rather than through the
         # spec file.
-        return arm.encoder is not None and not arm.runs_pretrained_decoder
+        return arm.encoder is not None and not arm.reads_mae_checkpoint
     return True
 
 
@@ -584,7 +594,7 @@ def _checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
     # pretraining checkpoint instead of the release export of them. Resolved and printed either
     # way, because what is on this box is a fact about the box; what changes is that its absence
     # does not stop the run (#167, and `missing`'s own rule).
-    required = not arm.runs_pretrained_decoder
+    required = not arm.reads_mae_checkpoint
     path = getattr(cfg.paths, field)
     if path is None:
         return Resolved(
@@ -606,7 +616,7 @@ def _checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
 
 
 def _mae_checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
-    """The pretraining checkpoint A2 runs the decoder out of, resolved — or why there is none.
+    """The pretraining checkpoint A2 runs and A3 initializes from, resolved — or why there is none.
 
     Three states, and each is *said* rather than left to an absence, on
     :func:`_checkpoint_for`'s rule:
@@ -619,7 +629,7 @@ def _mae_checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
     The absent note points at the release manifest because that is where the answer is: each
     release records the ``source_checkpoint`` it was exported from, by path and by md5.
     """
-    if not arm.runs_pretrained_decoder:
+    if not arm.reads_mae_checkpoint:
         return None
     encoder = arms.ENCODERS[arm.encoder]
     field = encoder.mae_checkpoint_field

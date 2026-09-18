@@ -75,6 +75,7 @@ from . import (
     card,
     evaluate,
     extract,
+    finetune,
     masks,
     prereg,
     report,
@@ -227,6 +228,15 @@ def resolve(args: argparse.Namespace) -> Resolution:
             # that resolves a record/config disagreement, so refusing it would make that state
             # unrecoverable. See `tune.assert_frozen`.
             tune.assert_frozen(cfg, tuning=getattr(args, "tune", False))
+        if arm.trains == "encoder+decoder":
+            # A3 (#166), and it sits with the recipe refusals rather than with the two cell ones
+            # above because that is what it is: §4.2's numbers, which were *stated* rather than
+            # tuned, against the line that states them. A separate call rather than a third
+            # disjunct in the condition above, because `tune.assert_frozen` checks §4.1's recipe
+            # and this arm does not have one — it would be asking a different question of a
+            # different object and reporting it under the same name.
+            # See `benchmark.finetune.assert_declared`.
+            finetune.assert_declared(cfg)
     return artifacts.resolve(cfg, arm)
 
 
@@ -455,6 +465,16 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         )
         for line in train.format_trained(trained):
             print(line)
+    elif resolution.arm.trains == "encoder+decoder":
+        # A3 (#166). A third branch rather than a case inside either of the others: §4.2 gives
+        # this arm MAE's own objective over dropped tokens, two learning rates and a layer-wise
+        # ladder between them, so what it shares with §4.1's pass is the inputs and not the loop
+        # — see `benchmark.finetune.train_finetune`.
+        trained = finetune.train_finetune(
+            cfg, resolution.arm, on_epoch=lambda line: print(f"{'':<16} {line.line()}")
+        )
+        for line in train.format_trained(trained):
+            print(line)
     elif resolution.arm.trains_everything:
         # A7 (#162). A separate branch rather than a third case inside `train_head`, because the
         # two passes differ in what they build and share everything after it — see
@@ -488,9 +508,9 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         resolution,
         metrics=scored.bar.registered_metrics,
         seconds=scored.seconds,
-        parameters=arms.parameter_counts(resolution.arm),
+        parameters=_parameter_counts(resolution.arm, trained),
         gates=scored.gates,
-        training=None if trained is None else trained.to_dict(),
+        training=_training_block(cfg, trained),
         register=register,
         precision=results.precision_block(resolution, _measured_agreement(resolution, trained)),
     )
@@ -499,6 +519,43 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     if register is not None:
         print(f"{'register':<16} {zeroshot.format_disposition(register)}")
     return 0
+
+
+def _training_block(cfg: BenchmarkConfig, trained) -> dict | None:
+    """The training half of a run record, plus what A3's inference composite actually ran.
+
+    The composite is inference rather than training, so it has no block of its own — and it needs
+    one, because §4.2's four shifted encodings are not all runnable on a 224 px tile and an arm
+    scored under fewer than a pre-registered recipe names is a deviation a reader has to be able
+    to find (:func:`benchmark.finetune.composite_note`). A3's training block is where it goes,
+    for :func:`benchmark.zeroshot.disposition`'s reason one arm over: the record should carry the
+    reading, not leave it to be reconstructed from the numbers.
+    """
+    if trained is None:
+        return None
+    block = trained.to_dict()
+    if trained.kind == "finetune":
+        block["composite"] = finetune.composite_note(cfg)
+    return block
+
+
+def _parameter_counts(arm: arms.Arm, trained) -> dict:
+    """§6 item 4's pair for this arm — measured where the registry cannot derive it (#166).
+
+    :func:`benchmark.arms.parameter_counts` answers from declared fields alone, which is right
+    for every arm whose parts this plan states: A4's is a counted encoder plus §4.1's head over
+    its width, A7's is §4.4's UNet. A3's is not. It trains the encoder **and** §2.2's decoder,
+    and no committed artifact in this plan declares the decoder's shape — so the registry would
+    have to guess, and a guessed count prints exactly like a measured one.
+
+    The pass that loads the checkpoint has the real number, so it is used: both halves of A3's
+    pair are the model's own total, because the arm trains every parameter it has. That is A7's
+    situation and it reads the same way — the pair is what makes the printed table legible
+    across arms, and an arm with a null in it is an arm a reader cannot place.
+    """
+    if trained is not None and trained.kind == "finetune":
+        return {"total": trained.parameters, "trainable": trained.parameters}
+    return arms.parameter_counts(arm)
 
 
 def _measured_agreement(resolution: Resolution, trained) -> dict | None:

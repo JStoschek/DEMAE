@@ -1379,6 +1379,15 @@ def format_trained(trained: Trained) -> list[str]:
     """
     if trained.kind == "unet":
         first = f"{'unet':<16} {unet.format_counted(trained.parameters)}"
+    elif trained.kind == "finetune":
+        # A3 (#166). Counted off the loaded model rather than off the registry, because the
+        # registry declares an encoder's parameters and not a decoder's — §2.2's decoder shape is
+        # the one part of the architecture no committed artifact states, so the honest number is
+        # the one the file produced.
+        first = (
+            f"{'finetune':<16} {trained.parameters:,} parameters, encoder and decoder both "
+            f"trained (§4.2)"
+        )
     else:
         first = f"{'head':<16} {head.format_parameters(trained.width)}"
     return [

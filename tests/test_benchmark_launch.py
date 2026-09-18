@@ -267,17 +267,21 @@ def test_set_beats_the_cell_flag_it_duplicates(flags, capsys):
 def test_a_config_file_names_only_the_knobs_its_run_moves(box, flags, capsys):
     """A partial dict, and the rest filled from the plan — what an arm's config file looks like.
 
-    The knob moved is §4.2's, not §4.1's. This test used `head.epochs` until #159, which froze
-    §4.1's recipe for every arm and made a moved head hyperparameter a refusal rather than a
-    config; the property being asserted here is the *plumbing*, so it moved to a group that has
-    no such guard rather than to an arm that dodges one.
+    The knob moved is §2.4's, and it is the third group this test has used. It moved off
+    `head.epochs` at #159, which froze §4.1's recipe for every arm and made a moved head
+    hyperparameter a refusal rather than a config; it moved off `finetune.epochs` at #166, which
+    built A3 and gave §4.2's recipe the same kind of guard (`finetune.assert_declared`). The
+    property being asserted is the *plumbing*, so each time it moves to a group that has no such
+    guard rather than to an arm that dodges one — and A1's fill is the group left, because §2.4
+    is a recipe this benchmark deliberately lets a run vary: two variants are two different
+    baselines, and a results row says which one it was scored against.
     """
     path = box / "arm.json"
-    path.write_text(json.dumps({"arm": "A3-R5", "finetune": {"epochs": 5}}))
+    path.write_text(json.dumps({"arm": "A1", "fill": {"tps_control_points": 128}}))
     launch.main(["run", "--dry-run", "--config", str(path), *flags])
     out = capsys.readouterr().out
-    moved = BenchmarkConfig().finetune.replace(epochs=5)
-    assert BenchmarkConfig(arm="A3-R5", finetune=moved).config_hash in out
+    moved = BenchmarkConfig().fill.replace(tps_control_points=128)
+    assert BenchmarkConfig(arm="A1", fill=moved).config_hash in out
 
 
 # --- The far side of the seam -------------------------------------------------
