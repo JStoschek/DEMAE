@@ -350,7 +350,7 @@ from benchmark.config import Finetune as FinetuneRecipe
 from pretrain.artifact import write_tile_strata
 from tests.conftest import build_corpus
 from tests.test_benchmark_a1 import _slope_mean
-from tests.test_benchmark_a2 import _write_checkpoint
+from tests.test_benchmark_a2 import _link_checkpoint, pristine_checkpoint  # noqa: F401
 
 from pathlib import Path
 
@@ -384,7 +384,7 @@ def declared(monkeypatch):
 
 
 @pytest.fixture
-def e2e_box(tmp_path):
+def e2e_box(tmp_path, pristine_checkpoint):
     """A frozen box: a corpus, §3.1's lists, the eval masks, the bank, and a **pretraining** file."""
     corpus = build_corpus(
         tmp_path / "corpus", E2E_COGS, tiles_per_cog=E2E_TILES_PER_COG, metrics_fn=_slope_mean
@@ -427,7 +427,9 @@ def e2e_box(tmp_path):
     for name in ("task1-prereg-bar.json", metrics.GOLDEN_ARRAYS, metrics.GOLDEN_SIDECAR):
         shutil.copy(COMMITTED / name, directory / name)
 
-    _write_checkpoint(tmp_path / "r5-pretrain.pt")
+    # A2's checkpoint unchanged — `_write_checkpoint` fixes its fingerprint to A2's corpus, so
+    # this fixture was already writing those exact bytes. Linking makes that one file per worker.
+    _link_checkpoint(pristine_checkpoint, tmp_path / "r5-pretrain.pt")
     tmp_path.joinpath("splits.json").write_text(json.dumps(tiles))
     return tmp_path
 

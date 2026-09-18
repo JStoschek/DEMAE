@@ -103,6 +103,13 @@ testpaths = ["tests"]
 # readable traceback or `--pdb` — xdist disables the debugger.
 addopts = "-q -n auto"
 
+# Keep scratch only for tests that failed. pytest's default is to retain *three whole sessions*
+# of it, passing tests included; this suite writes ViT-B checkpoints, so that default is tens of
+# GB and it filled a 460 GB disk twice. A failing run still keeps its failures' directories,
+# which is the only part anyone opens. A run that is *killed* leaves its lock behind and the GC
+# then skips that root for good, so an orphan still has to be swept by hand.
+tmp_path_retention_policy = "failed"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

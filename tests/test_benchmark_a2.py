@@ -25,6 +25,7 @@ against A1 open, and a test that pinned it would close the question the register
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -65,6 +66,11 @@ def _write_checkpoint(
     from pretrain.fingerprint import DataFingerprint
     from pretrain.model import MaskedAutoencoder
 
+    # `box` hard-links its checkpoint to one shared file, so writing *through* the name would
+    # rewrite every other test's copy. `save_checkpoint` ends in `os.replace`, which moves the
+    # name and leaves the shared inode alone; the unlink says so out loud and keeps that true
+    # for a caller who reaches for a plainer writer later.
+    path.unlink(missing_ok=True)
     cfg = RunConfig().replace(
         architecture=Architecture(
             img_px=224,
@@ -107,8 +113,34 @@ def _write_checkpoint(
     return path
 
 
+@pytest.fixture(scope="session")
+def pristine_checkpoint(tmp_path_factory) -> Path:
+    """The unmodified checkpoint, written **once per worker** instead of once per test.
+
+    326 MB of ViT-B weights that most tests below only ever read. At function scope this one
+    file put ~8 GB of scratch on disk per suite run, which is what filled the box. It is the
+    same bytes either way: `from_config` seeds its init inside a `fork_rng`, so one config
+    builds one bit-identical model.
+    """
+    return _write_checkpoint(tmp_path_factory.mktemp("pristine") / "r5-pretrain.pt")
+
+
+def _link_checkpoint(src: Path, dst: Path) -> Path:
+    """Hard-link `src` to `dst`, falling back to a copy on a filesystem that will not.
+
+    A link rather than a copy because the tests read this file and do not write through it —
+    see `_write_checkpoint` for the one rule that keeps that safe. `dst` is a real path inside
+    the test's own `tmp_path`, so a retained failure directory still holds a whole checkpoint.
+    """
+    try:
+        os.link(src, dst)
+    except OSError:  # cross-device, or a filesystem with no hard links
+        shutil.copy(src, dst)
+    return dst
+
+
 @pytest.fixture
-def box(tmp_path):
+def box(tmp_path, pristine_checkpoint):
     """The A1 box, plus the one file A2 needs that no other arm reads."""
     corpus = build_corpus(
         tmp_path / "corpus", TEST_COGS, tiles_per_cog=TILES_PER_COG, metrics_fn=_slope_mean
@@ -128,7 +160,7 @@ def box(tmp_path):
     for name in ("task1-prereg-bar.json", metrics.GOLDEN_ARRAYS, metrics.GOLDEN_SIDECAR):
         shutil.copy(COMMITTED / name, directory / name)
 
-    _write_checkpoint(tmp_path / "r5-pretrain.pt")
+    _link_checkpoint(pristine_checkpoint, tmp_path / "r5-pretrain.pt")
     return tmp_path
 
 
@@ -343,6 +375,9 @@ def test_a_release_encoder_export_is_refused_for_having_no_decoder(box, flags, t
     from pretrain.model import is_decoder_parameter
 
     payload["model"] = {k: v for k, v in full.model.items() if not is_decoder_parameter(k)}
+    # `torch.save` truncates in place, unlike `save_checkpoint` — unlink to drop this test's
+    # link to the shared checkpoint before writing a private one over the name.
+    (box / "r5-pretrain.pt").unlink()
     torch.save(payload, box / "r5-pretrain.pt")
 
     with pytest.raises(ValueError, match="carries no decoder"):
