@@ -71,7 +71,7 @@ import numpy as np
 from dataset.metrics import land_mask
 from pretrain.artifact import read_tile_strata
 
-from . import arms, extract, fill, head, masks, unet
+from . import arms, extract, fill, head, masks, skiphead, unet
 from .artifacts import TILE_LIST_NAMES, VAL_TILES_NAME
 from .config import BenchmarkConfig
 
@@ -672,7 +672,43 @@ class ScratchStack:
         return out.float() * scale, void
 
 
-def residual_of(batch: Composed, stack: Stack | ScratchStack, *, precision: str):
+@dataclass(frozen=True)
+class SkipStack:
+    """:class:`Stack` for the arms whose head also reads the tile at full resolution (#182).
+
+    The frozen encoder and its contract are :class:`Stack`'s, unchanged: the tokens arrive through
+    :meth:`benchmark.extract.Extractor.extract` under the arm's declared diet. What is added is
+    :class:`ScratchStack`'s conditioning — the A1 fill standardized per tile over its valid pixels
+    (:func:`benchmark.unet.condition`) — handed to the head as a third input, and the std that
+    standardized it multiplying the residual back into metres on the way out.
+
+    A third sibling rather than a flag on :class:`Stack`, for the reason the second one exists:
+    the two mechanisms — a frozen-feature contract and a full-resolution conditioning — are
+    written down here once each, and an ``image is None`` branch would put the registered head's
+    forward and the variant's in one function where a mis-wired argument scores the wrong one.
+    """
+
+    extractor: Any
+    module: Any
+    arm: str
+    device: str
+
+    def residual(self, batch: Composed, *, precision: str):
+        """Tokens from the frozen encoder, the conditioned A1 fill, one residual in metres."""
+        import torch
+
+        features = self.extractor.extract(batch.a1_i16, batch.valid, arm=self.arm)
+        image, stds = unet.condition(batch.a1_fill, batch.a1_i16, batch.valid)
+        void = _void_channel(batch, self.device)
+        tokens = features.output.to(self.device)
+        tensor = torch.from_numpy(image).unsqueeze(1).to(self.device)
+        scale = torch.from_numpy(stds).view(-1, 1, 1, 1).to(self.device)
+        with _autocast(self.device, precision):
+            out = self.module(tokens, void, tensor)
+        return out.float() * scale, void
+
+
+def residual_of(batch: Composed, stack: Stack | ScratchStack | SkipStack, *, precision: str):
     """One batch's residual, from whichever stack the arm trains through.
 
     A free function over a method call so that the two stacks stay the *only* place an arm's
@@ -683,7 +719,7 @@ def residual_of(batch: Composed, stack: Stack | ScratchStack, *, precision: str)
 
 
 def predict_composed(
-    batch: Composed, stack: Stack | ScratchStack, *, precision: str
+    batch: Composed, stack: Stack | ScratchStack | SkipStack, *, precision: str
 ) -> list[np.ndarray]:
     """§2.4's fill for one already-composed batch: A1's fill plus the head's masked residual."""
     import torch
@@ -702,7 +738,7 @@ def predict(
     raw_i16: Sequence[np.ndarray],
     voids: Sequence[np.ndarray],
     cfg: BenchmarkConfig,
-    stack: Stack | ScratchStack,
+    stack: Stack | ScratchStack | SkipStack,
 ) -> list[np.ndarray]:
     """§2.4's fill for a trained arm: the A1 fill plus the head's residual, inside the void.
 
@@ -854,7 +890,7 @@ class Trained:
     #: The encoder, head, arm and device this was trained as. Held so that :meth:`predict` is
     #: the *same* composition the val pass used, over the *same* loaded encoder — the eval pass
     #: rebuilding either would be a second chance to get them different.
-    stack: Stack | ScratchStack | None = None
+    stack: Stack | ScratchStack | SkipStack | None = None
     #: §4.1's declared precision, and the one this box could honour. See :func:`_autocast`.
     precision_declared: str = "bf16"
     precision_used: str = "bf16"
@@ -909,7 +945,7 @@ class Trained:
 def val_rmse(
     instances: Sequence[ValInstance],
     cfg: BenchmarkConfig,
-    stack: Stack | ScratchStack,
+    stack: Stack | ScratchStack | SkipStack,
     *,
     tiles: TrainingTiles,
     index: dict | None = None,
@@ -1003,7 +1039,7 @@ def _fit(
     recipe,
     *,
     module,
-    stack: Stack | ScratchStack,
+    stack: Stack | ScratchStack | SkipStack,
     epochs: int,
     train_ids: Sequence[str],
     banked: BankedVoids,
@@ -1213,9 +1249,17 @@ def train_head(
         param.requires_grad_(False)
     before = encoder_checksums(model)
 
-    built = head.build(encoder.width, recipe, seed=cfg.seed)
-    module = built.module.to(device)
-    stack = Stack(extractor=extractor, module=module, arm=arm.name, device=device)
+    if arm.reads_full_res_tile:
+        # The skip variant (#182): the same recipe, the same seed consumption, the same frozen
+        # encoder, a head that also reads the conditioned tile. Which head an arm trains is the
+        # registry's declaration and is read off it here and nowhere else in this pass.
+        built = skiphead.build(encoder.width, recipe, seed=cfg.seed)
+        module = built.module.to(device)
+        stack = SkipStack(extractor=extractor, module=module, arm=arm.name, device=device)
+    else:
+        built = head.build(encoder.width, recipe, seed=cfg.seed)
+        module = built.module.to(device)
+        stack = Stack(extractor=extractor, module=module, arm=arm.name, device=device)
     fitted = _fit(
         cfg,
         recipe,
@@ -1248,6 +1292,7 @@ def train_head(
         stack=stack,
         precision_declared=recipe.precision,
         precision_used=precision_on(device, recipe.precision),
+        kind="skiphead" if arm.reads_full_res_tile else "head",
     )
 
 
@@ -1388,6 +1433,8 @@ def format_trained(trained: Trained) -> list[str]:
             f"{'finetune':<16} {trained.parameters:,} parameters, encoder and decoder both "
             f"trained (§4.2)"
         )
+    elif trained.kind == "skiphead":
+        first = f"{'skip head':<16} {skiphead.format_parameters(trained.width)}"
     else:
         first = f"{'head':<16} {head.format_parameters(trained.width)}"
     return [

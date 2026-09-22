@@ -462,6 +462,9 @@ def test_the_registry_holds_a1_to_a7_and_a9_and_neither_ruled_out_arm():
         # `A9-NOTHRESH` #168's sampler ablation: all three are registered, all three carry
         # `printed=False`, and none widens R5's table (#161, #168).
         "A5", "A5-BICUBIC", "A6", "A7", "A9", "A9-NOTHRESH", "A4-S",
+        # #182's skip-head variant of the three frozen-encoder arms, `printed=False` on the
+        # same precedent — a head registered after R5's rows were read is an appendix cell.
+        "A4-R5-SKIP", "A5-SKIP", "A6-SKIP",
     }
     assert not any(name.startswith(("A8", "A10")) for name in arms.ARMS)
 

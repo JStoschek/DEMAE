@@ -142,6 +142,10 @@ def pos_emb_citation(encoder: Encoder) -> str | None:
 #: ``sincos2d_terramind`` is terratorch's `build_2d_sincos_posemb`, which has its own oracle.
 POS_ENCODINGS: Final = ("sincos2d", "sincos2d_rowfirst", "sincos2d_terramind")
 
+#: What :attr:`Arm.head_variant` may name: §4.1's registered head, or the full-resolution skip
+#: variant of it (:mod:`benchmark.skiphead`, #182).
+HEAD_VARIANTS: Final = ("shared", "skip")
+
 
 @dataclass(frozen=True)
 class Encoder:
@@ -597,10 +601,40 @@ class Arm:
     #: standing one — the arm declares the *fact*, the recipe declares the *number* — and it is
     #: what stops this field from becoming a second home for a figure the recipe already hashes.
     single_observation: bool = False
+    #: Which head a ``trains="head"`` arm trains: §4.1's registered one (``"shared"``), or the
+    #: full-resolution skip variant :mod:`benchmark.skiphead` builds (``"skip"``, #182). One of
+    #: :data:`HEAD_VARIANTS`.
+    #:
+    #: A field on the arm rather than a knob on :class:`benchmark.config.Head`, on
+    #: :attr:`sampler_thresholding`'s rule and for a harder version of its reason: every one of
+    #: the 254,877 rows C1 was read from carries a ``config_hash`` over the ``head`` group, and a
+    #: field added to that group — even at a default naming the registered head — moves every one
+    #: of them. The arm's *name* is already in the hash, so a skip arm's cells are distinguishable
+    #: from the registered arm's the way A9-NOTHRESH's are from A9's, and the variant's own shape
+    #: is fixed in code rather than searched: §4.1's frozen recipe is what both heads train under,
+    #: and :func:`benchmark.tune.assert_frozen` guards it for both.
+    head_variant: str = "shared"
 
     def __post_init__(self) -> None:
         if self.encoder is not None and self.encoder not in ENCODERS:
             raise ValueError(f"arm {self.name}: unknown encoder {self.encoder!r}")
+        if self.head_variant not in HEAD_VARIANTS:
+            raise ValueError(
+                f"arm {self.name}: unknown head variant {self.head_variant!r} "
+                f"(registered: {list(HEAD_VARIANTS)})"
+            )
+        if self.head_variant != "shared" and self.trains != "head":
+            raise ValueError(
+                f"arm {self.name}: `head_variant` names which §4.1 head a head-training arm "
+                f"trains, and this arm trains {self.trains!r}. An arm that declared a head it "
+                f"never builds would print a knob that changed nothing"
+            )
+        if self.head_variant != "shared" and self.printed:
+            raise ValueError(
+                f"arm {self.name}: a head variant is an appendix cell. R5's eleven printed rows "
+                f"were pre-registered through §4.1's head, and a head registered after they were "
+                f"read cannot join them however it scores (ADR-0013 R5; A9-NOTHRESH's precedent)"
+            )
         if self.trains not in TRAINABLE:
             raise ValueError(f"arm {self.name}: unknown trainable part {self.trains!r}")
         if self.input_convention not in INPUT_CONVENTIONS:
@@ -649,6 +683,17 @@ class Arm:
         is still refused for want of a bank.
         """
         return self.trains == "nothing"
+
+    @property
+    def reads_full_res_tile(self) -> bool:
+        """Does this arm's head read the A1 fill at full resolution? The three skip arms do (#182).
+
+        A property rather than ``head_variant == "skip"`` at each site, on :attr:`trains_head`'s
+        rule: four questions are asked of it — which head `train_head` builds, which stack it
+        trains through, what §6 item 4's trainable count is, and what the resolution line prints
+        about the head — and a variant added later has to get the same answer to all four.
+        """
+        return self.head_variant == "skip"
 
     @property
     def trains_head(self) -> bool:
@@ -870,6 +915,45 @@ ARMS: Final[dict[str, Arm]] = dict(
             printed=False,
             single_observation=True,
         ),
+        # The skip-head variant (#182): §4.1's head plus a full-resolution skip path over the A1
+        # fill, testing whether A4's slope gap to A7 is a resolution gap. Three arms and not one,
+        # because the comparison is only fair if every frozen encoder is scored through the same
+        # head — C1 is read across A4-R5, A5 and A6 under one decoder, and a variant scored on
+        # DEMAE alone would be a decoder change confounded with the arm it was built for. They
+        # differ from the three registered arms in `head_variant` and nothing else: same encoder,
+        # same diet, same convention, same frozen recipe. `printed=False` on A9-NOTHRESH's
+        # precedent, and a registered refusal makes the alternative unexpressible.
+        _arm(
+            "A4-R5-SKIP",
+            encoder="demae-r5",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="per_tile",
+            head_variant="skip",
+            printed=False,
+            what="DEMAE frozen + §4.1's head with a full-resolution skip path over the A1 fill "
+            "(#182) — A4-R5's decoder ablation, not a printed row",
+        ),
+        _arm(
+            "A5-SKIP",
+            encoder="terramind",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="terramind_v1",
+            head_variant="skip",
+            printed=False,
+            what="TerraMind DEM tokenizer encoder, frozen + the identical skip head (#182)",
+        ),
+        _arm(
+            "A6-SKIP",
+            encoder="imagenet-mae",
+            trains="head",
+            input_convention="a1_fill_plus_mask",
+            normalization="per_tile",
+            head_variant="skip",
+            printed=False,
+            what="ImageNet-MAE frozen + the identical skip head (#182)",
+        ),
     ]
 )
 
@@ -974,7 +1058,7 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     # Deferred so that importing this registry stays free: it is a declarative module with no
     # dependencies at all, and `benchmark.head` pulls in numpy and `dataset.config`. Everything
     # that asks for a parameter count is already paying for both.
-    from . import head, unet
+    from . import head, skiphead, unet
 
     encoder = None if arm.encoder is None else ENCODERS[arm.encoder]
     trainable = 0 if arm.is_inference_only else None
@@ -984,8 +1068,10 @@ def parameter_counts(arm: Arm) -> dict[str, int | None]:
     if arm.trains_head and encoder is not None:
         # Torch-free arithmetic over §4.1's four stage dimensions — see `head.parameter_count`.
         # The width is the *only* thing that differs between A4, A5 and A6 here, which is the
-        # same sentence C1 rests on, arriving as a number.
-        trainable = head.parameter_count(encoder.width)
+        # same sentence C1 rests on, arriving as a number. The skip arms (#182) count their own
+        # head by the same rule, and differ from each other by the same projection.
+        counted = skiphead if arm.reads_full_res_tile else head
+        trainable = counted.parameter_count(encoder.width)
     if encoder is None:
         # A1 and A7. A1 trains nothing and runs no encoder, so both its counts are a true 0;
         # A7 runs no encoder either, so its total *is* the UNet it trains.
