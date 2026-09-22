@@ -692,9 +692,26 @@ class SkipStack:
     module: Any
     arm: str
     device: str
+    #: :attr:`benchmark.config.Runtime.micro_batch`, honoured at **inference** as well as in the
+    #: training step. The head runs 48 channels at the full 224 px on its last two layers, so a
+    #: val pass at §4.1's 128 is the one allocation in this pass that a 16 GB box pages out on
+    #: (measured: 555 s against 46 s for the registered head, per epoch). The pieces are the same
+    #: samples in the same order, every layer is per-sample, and the outputs are concatenated —
+    #: so this is the knob's documented meaning, *how many samples cross the GPU at once*, and not
+    #: a smaller batch. ``0`` is the whole batch, as everywhere else the knob is read.
+    micro_batch: int = 0
 
     def residual(self, batch: Composed, *, precision: str):
         """Tokens from the frozen encoder, the conditioned A1 fill, one residual in metres."""
+        import torch
+
+        pieces = micro_batches(batch, self.micro_batch)
+        if len(pieces) > 1:
+            outs, voids = zip(*(self._residual(piece, precision=precision) for piece in pieces))
+            return torch.cat(outs), torch.cat(voids)
+        return self._residual(batch, precision=precision)
+
+    def _residual(self, batch: Composed, *, precision: str):
         import torch
 
         features = self.extractor.extract(batch.a1_i16, batch.valid, arm=self.arm)
@@ -1255,7 +1272,10 @@ def train_head(
         # registry's declaration and is read off it here and nowhere else in this pass.
         built = skiphead.build(encoder.width, recipe, seed=cfg.seed)
         module = built.module.to(device)
-        stack = SkipStack(extractor=extractor, module=module, arm=arm.name, device=device)
+        stack = SkipStack(
+            extractor=extractor, module=module, arm=arm.name, device=device,
+            micro_batch=cfg.runtime.micro_batch,
+        )
     else:
         built = head.build(encoder.width, recipe, seed=cfg.seed)
         module = built.module.to(device)

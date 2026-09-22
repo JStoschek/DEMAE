@@ -265,6 +265,29 @@ def test_void_interior_truth_never_reaches_the_skip_head():
     )
 
 
+def test_the_skip_stack_honours_the_micro_batch_at_inference_and_it_moves_no_number():
+    """`runtime.micro_batch` is *how many samples cross the GPU at once*, and the skip head is
+    the one module in this pass whose val forward at 128 pages a 16 GB box out. Same samples,
+    same order, per-sample layers: the pieces concatenate to the unsplit forward."""
+    cfg = BenchmarkConfig(arm="A6-SKIP")
+    rng = np.random.default_rng(3)
+    batch = train.compose([_tile(rng) for _ in range(5)], [_blob()] * 5, cfg)
+    built = skiphead.build(WIDTH)
+    with torch.no_grad():
+        torch.nn.init.normal_(built.module.residual.weight, std=0.1)
+    whole = _skip_stack(built.module)
+    split = train.SkipStack(
+        extractor=whole.extractor, module=built.module, arm=whole.arm, device="cpu", micro_batch=2
+    )
+    with torch.no_grad():
+        a, va = train.residual_of(batch, whole, precision="fp32")
+        b, vb = train.residual_of(batch, split, precision="fp32")
+    assert a.shape == b.shape == (5, 1, 224, 224)
+    assert torch.equal(va, vb)
+    assert torch.allclose(a, b, atol=1e-3, rtol=1e-4)  # float32 kernels differ by batch
+    assert float(a.abs().max()) > 0
+
+
 def test_the_skip_head_refuses_a_tile_that_is_not_full_resolution():
     module = skiphead.build(WIDTH).module
     tokens = torch.zeros(1, 196, WIDTH)

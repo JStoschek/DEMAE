@@ -43,6 +43,10 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--micro-batch", type=int, default=0)
     parser.add_argument("--checkpoint-dir", default="data/task1/heads/p182")
     parser.add_argument("--out", default="data/task1/p182_val_check.json")
+    parser.add_argument(
+        "--reuse", action="store_true",
+        help="keep arms already in --out rather than training them again",
+    )
     return parser.parse_args(argv)
 
 
@@ -182,7 +186,14 @@ def main(argv: list[str] | None = None) -> int:
     results = []
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    kept = {}
+    if args.reuse and out.is_file():
+        kept = {r["arm"]: r for r in json.loads(out.read_text())["results"]}
     for name in names:
+        if name in kept:
+            print(f"\n=== {name}: reusing {out}")
+            results.append(kept[name])
+            continue
         results.append(run_arm(args, name))
         out.write_text(json.dumps({"args": vars(args), "results": results}, indent=1))
         print(f"wrote {out}")
