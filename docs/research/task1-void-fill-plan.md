@@ -1053,6 +1053,49 @@ One head spec, frozen across arms; only the input channel width differs
 No training. Mask = patches touching the void; the decoder reconstructs them
 and the non-void pixels are composited back.
 
+**How the decoder's output returns to metres is registered here too** *(amended
+2026-09-22 — [#173](https://github.com/JStoschek/DEMAE/issues/173))*. Both
+release checkpoints were pretrained with `norm_pix_loss` on, so the decoder
+predicts each patch standardized by *that patch's own* mean and standard
+deviation — and inside a void those two numbers are exactly the unknowns.
+Recovering them from the target, as §10.2's reconstruction grids correctly do,
+would leak the voided terrain's level and spread into the fill, so
+[#167](https://github.com/JStoschek/DEMAE/issues/167) refused a `norm_pix`
+checkpoint rather than let a loader pick an estimator: the choice sets this
+row's numbers and R12's verdict. The estimator is now fixed, **before any A2
+instance was scored**, and it reads nothing inside the void:
+
+- **Level** (μ̂ per voided patch): the mean over the patch of **A1's own fill**
+  (§2.4's `fillnodata` over the void, every visible pixel untouched), in the
+  per-tile standardized units the encoder saw. Level is what interpolation does
+  well, A1 is an arm the table already scores, and nothing new is fitted.
+- **Spread** (σ̂ per voided patch): the inverse-distance-weighted mean — power
+  2, patch-centre distance in patch units — of the per-patch standard deviation
+  over the patches the encoder **saw**, floored at the pretraining loss's own
+  variance floor. Roughness is spatially correlated. The interpolant's own
+  spread was rejected as the estimate because it is too flat: it would null the
+  decoder's texture wherever the terrain is flat and make R12's ordering a
+  property of the estimator rather than of the decoder.
+
+So the A2-vs-A1 ordering reads as a defined question — *does the pretrained
+decoder's within-patch shape beat the interpolant's, at the interpolant's
+level* — which is the honest reading of a zero-shot row whose level is
+borrowed. The alternatives considered were the visible patches' pooled
+statistics and the tile's own non-void statistics, which collapse to one
+constant level and spread across the void and discard exactly the per-patch
+scale §4.2 says void filling needs; and declining the arm at R5/R4, which would
+have made A2 a row about a `norm_pix`-off checkpoint nobody trained. Patches
+the encoder saw keep their own statistics, which the composite restores from
+the input anyway. **A2 does not share A3's cross-fade composite**: zero-shot
+means the decoder as published, and the seam the patch grid costs is what §5's
+seam-gap column measures on this row. The estimator is a recipe decision and
+not a register entry — [ADR-0013](../adr/0013-task1-pre-registration-register.md)'s
+tunability test excludes it as it excludes §4.2's composite, because it fixes
+how the arm produces a fill and not how a number is read — so it lives in
+`benchmark.config.Zeroshot` inside `config_hash`, is refused on drift at
+`resolve`, and is written into every A2 run record. R12 is unchanged, and is
+read **after** this registration, not before.
+
 **MAE was pretrained on *random* masks and this benchmark scores *contiguous
 block* masks, which is a distribution shift.** That is a statement about the
 mechanism and not a prediction. The sentence it replaces — "zero-shot numbers

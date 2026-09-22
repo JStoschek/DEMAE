@@ -237,6 +237,10 @@ def resolve(args: argparse.Namespace) -> Resolution:
             # different object and reporting it under the same name.
             # See `benchmark.finetune.assert_declared`.
             finetune.assert_declared(cfg)
+        if arm.runs_pretrained_decoder:
+            # A2 (#173): §4.3's per-patch scale estimator sets this arm's numbers and R12's
+            # verdict, so it is refused on drift for the reason §4.2's recipe is, one arm over.
+            zeroshot.assert_declared(cfg)
     return artifacts.resolve(cfg, arm)
 
 
@@ -510,7 +514,7 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
         seconds=scored.seconds,
         parameters=_parameter_counts(resolution.arm, trained),
         gates=scored.gates,
-        training=_training_block(cfg, trained),
+        training=_training_block(cfg, trained, arm=resolution.arm),
         register=register,
         precision=results.precision_block(resolution, _measured_agreement(resolution, trained)),
     )
@@ -521,17 +525,20 @@ def _run(resolution: Resolution, args: argparse.Namespace) -> int:
     return 0
 
 
-def _training_block(cfg: BenchmarkConfig, trained) -> dict | None:
-    """The training half of a run record, plus what A3's inference composite actually ran.
+def _training_block(cfg: BenchmarkConfig, trained, *, arm: arms.Arm | None = None) -> dict | None:
+    """The training half of a run record, plus what an arm's *inference* actually ran.
 
-    The composite is inference rather than training, so it has no block of its own — and it needs
-    one, because §4.2's four shifted encodings are not all runnable on a 224 px tile and an arm
-    scored under fewer than a pre-registered recipe names is a deviation a reader has to be able
-    to find (:func:`benchmark.finetune.composite_note`). A3's training block is where it goes,
-    for :func:`benchmark.zeroshot.disposition`'s reason one arm over: the record should carry the
+    Inference has no block of its own and two arms need one. A3's composite records what it ran
+    against §4.2 (:func:`benchmark.finetune.composite_note`), because an arm scored under fewer
+    encodings than a pre-registered recipe names is a deviation a reader has to be able to find.
+    A2 trains nothing, so its block is inference alone: which two numbers §4.3's estimator put
+    in place of the per-patch scale the void hides (:func:`benchmark.zeroshot.scale_note`, #173).
+    Both for :func:`benchmark.zeroshot.disposition`'s reason: the record should carry the
     reading, not leave it to be reconstructed from the numbers.
     """
     if trained is None:
+        if arm is not None and arm.runs_pretrained_decoder:
+            return {"kind": "zeroshot", "trains": arm.trains, "scale": zeroshot.scale_note(cfg)}
         return None
     block = trained.to_dict()
     if trained.kind == "finetune":

@@ -546,8 +546,8 @@ def test_the_reflected_border_does_not_show_the_encoder_the_void(model):
     true values copied into the border — and if the mask were padded with `False` there,
     `keep_set` would hand those patches to the encoder as ordinary visible terrain and the arm
     would read the answer it is being scored on filling. This is the same class of leak
-    `benchmark.zeroshot` refuses a `norm_pix` checkpoint over, arriving through the padding
-    instead of through the units.
+    `benchmark.zeroshot`'s registered estimator is built never to commit (#173), arriving
+    through the padding instead of through the units.
 
     Asserted on the keep-set rather than on a score, because a score would still look plausible.
     """
