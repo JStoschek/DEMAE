@@ -566,7 +566,9 @@ uv run python -m benchmark.launch report
 
 Reads `data/task1/results.parquet` and re-renders the printed table, the C4 rank
 block, the bootstrap intervals, the seed spread, the parameter counts and the
-three figures. It re-runs no arm. The committed inputs it checks itself against
+three figures. It re-runs no arm. The panel's arm columns come from
+`data/task1/panel/`, written by `scripts/panel_exhibits.py` from local weights;
+`report` itself never computes a fill. The committed inputs it checks itself against
 are listed in its header with their md5s; `artifacts/task1/task1-prereg-bar.json`
 refuses to load if any registered phrase has moved out of §6, in this file or in
 the plan.
@@ -577,16 +579,22 @@ whole of C2's "at every void size". `label-efficiency.png` is the whole of C3.
 `hillshade-panel.png` is the whole of the visual-quality evidence, since §5
 scores no perceptual metric.
 
-**The hillshade panel is empty of its evidence on this box, and that is a gap in
-the deliverable rather than a caption.** It renders the truth and voided columns
-for all three tiles, and its four arm columns (A1, A3-R5, A5, A7) each read *no
-fill exhibit in panel/*: no arm pass saved a filled raster, so `data/task1/panel/`
-does not exist. The figure the plan calls the whole of the visual-quality
-evidence therefore currently carries none of it. Nothing in this memo's readings
-rests on that figure, because §5's six columns are what every claim above is
-argued from, but C2's argument in particular would be easier to check with it and
-the panel should be regenerated before this memo is shown to anyone outside the
-project.
+**The hillshade panel carries two of its four arm columns on this box, and the
+other two are a labelled absence rather than a caption.** No arm pass saves a
+filled raster, so the memo first shipped with all four arm columns reading *no
+fill exhibit in panel/*. `scripts/panel_exhibits.py` now writes the three panel
+tiles' fills for the arms whose weights are on this machine — **A1** through
+`benchmark.fill.fill` on the arm's declared recipe, and **A7** through
+`benchmark.train.predict` over §4.4's UNet rebuilt from its seed-0 `best.pt`
+(md5 `77c962cd457253eda8f32d647048d058`, epoch 47, val 32.071 m) — with each
+exhibit's provenance in `data/task1/panel/exhibits.json`. **A3-R5 and A5 still
+read *no fill exhibit***: their fine-tune and head were trained on a rented box
+that was torn down, and nothing brought a `best.pt` home. Nothing in this memo's
+readings rests on the figure, because §5's six columns are what every claim
+above is argued from, but C2's seam argument is the one a reader would want to
+see, and it is the A3-R5 column that is missing. Regenerating those two columns
+means re-training both arms with `run` saving the panel tiles' fills, which is
+an arm ticket's work, not `report`'s.
 
 **Open at the time of writing:**
 [#173](https://github.com/JStoschek/DEMAE/issues/173) (A2's per-patch scale; the
