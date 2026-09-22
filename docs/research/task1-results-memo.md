@@ -63,7 +63,8 @@ arms whose heads train at 20k; one seed on the arms that train nothing.
 | row | what it is | rows | seeds |
 |---|---|---|---|
 | A1 | classical interpolation, the operational status quo | 36,411 | 1 |
-| A2-R5 / A2-R4 | DEMAE zero-shot, no trained head | **0** | — |
+| A2-R5 | DEMAE zero-shot, no trained head, through §4.3's registered inversion | 36,411 | 1 |
+| A2-R4 | the same, continual-init | 36,411 | 1 |
 | A3-R5 / A3-R4 | DEMAE native fine-tune | 36,411 each | 1 |
 | A4-R5 | DEMAE-frozen + the shared head, and C3's sweep | 254,877 | 3 at 20k, 2 each at 5k and 1k |
 | A4-R4 | the same, continual-init, 20k only | 109,233 | 3 |
@@ -72,20 +73,34 @@ arms whose heads train at 20k; one seed on the arms that train nothing.
 | A7 | UNet from scratch | 254,877 | 3 |
 | A9 | TerraMind tokenizer pass-through | 36,411 | 1 |
 
-There are two deviations from the pre-registered recipe, and both are recorded in
-the run records rather than only here.
+There are two amendments to the pre-registered recipe, both made before the rows
+they govern were scored, and both recorded in the run records rather than only
+here.
 
-**A2 has no numbers, and that is a refusal rather than a failure.** §14's release
-export is encoder-only, and both R5 and R4 were pretrained with `norm_pix_loss`
-on, so their decoder predicts each patch standardized by *that patch's own* mean
-and variance — the two numbers a void makes unknown. Recovering them from the
-truth would leak the voided terrain's own level and spread into the fill, and
-A2's row would beat every arm for a reason no printed column names. §4.3
-registers no estimator, so `benchmark.zeroshot` refuses before scoring an
-instance rather than picking one, because any choice sets a pre-registered row's
-value ([#173](https://github.com/JStoschek/DEMAE/issues/173)). The arm is built
-and tested; what is missing is a registered method and a decoder-bearing
-checkpoint.
+**A2 was scored through an estimator §4.3 did not originally carry, registered
+before its first instance was scored.** §14's release export is encoder-only,
+and both R5 and R4 were pretrained with `norm_pix_loss` on, so their decoder
+predicts each patch standardized by *that patch's own* mean and variance — the
+two numbers a void makes unknown. Recovering them from the truth would leak the
+voided terrain's own level and spread into the fill, and A2's row would beat
+every arm for a reason no printed column names; the memo first shipped with
+`benchmark.zeroshot` refusing rather than picking, because any choice sets a
+pre-registered row's value
+([#173](https://github.com/JStoschek/DEMAE/issues/173)). §4.3 now registers the
+choice, and it reads nothing inside the void: the **level** of each voided patch
+is the mean of A1's own `fillnodata` over that patch, and its **spread** is the
+inverse-distance-weighted (power 2) standard deviation of the patches the
+encoder saw, floored at the pretraining loss's own variance floor. So the
+A2-vs-A1 ordering below asks a defined question — *does the pretrained
+decoder's within-patch shape beat the interpolant's, at the interpolant's
+level* — and that is how every A2 number in this memo should be read. The
+estimator is a recipe decision outside the register (ADR-0013's #173 line), it
+sits in `config_hash`, `resolve` refuses it on drift, and each A2 run record
+carries it under `training.scale`. A2 does not share A3's cross-fade: zero-shot
+means the decoder as published, and its seam gap is the patch grid's own. R12
+is read after this registration, not before. The decoder-bearing R5 and R4
+checkpoints were copied from the project's R2 bucket and md5-match the release
+manifests' `source_checkpoint_md5`.
 
 **A3's inference composite ran one encoding of the four §4.2 named when these
 rows were scored, and §4.2 has since struck the other three.** The clause asked
@@ -132,8 +147,18 @@ pooled. Metres for `rmse`, `nmad`, `bias_abs`; degrees for `slope_rmse`,
 | A1 | blob | R4 | 38.496 | 29.274 | 14.552 | 10.397 | 57.929 | -0.232 |
 | A1 | real-small | R4 | 12.050 | 9.446 | 4.238 | 7.319 | 35.225 | -0.434 |
 | A1 | real-medium+ | R4 | 24.718 | 16.878 | 6.336 | 9.519 | 48.121 | -0.385 |
-| A2-R5 | all six cells | — | *not scored — see #173* | | | | | |
-| A2-R4 | all six cells | — | *not scored — see #173* | | | | | |
+| A2-R5 | blob | R1 | 2.061 | 1.608 | 0.701 | 1.317 | 64.567 | -0.010 |
+| A2-R5 | blob | R2 | 5.814 | 4.529 | 1.946 | 3.032 | 64.009 | +0.006 |
+| A2-R5 | blob | R3 | 14.153 | 11.002 | 4.844 | 6.146 | 63.499 | +0.032 |
+| A2-R5 | blob | R4 | 39.844 | 32.703 | 14.387 | 12.033 | 60.385 | +0.075 |
+| A2-R5 | real-small | R4 | 18.708 | 16.890 | 5.758 | 10.179 | 47.869 | +0.432 ! |
+| A2-R5 | real-medium+ | R4 | 29.585 | 24.818 | 6.512 | 12.183 | 58.364 | +0.179 ! |
+| A2-R4 | blob | R1 | 2.023 | 1.573 | 0.699 | 1.278 | 63.420 | -0.010 |
+| A2-R4 | blob | R2 | 5.688 | 4.410 | 1.935 | 2.924 | 62.096 | +0.000 |
+| A2-R4 | blob | R3 | 13.840 | 10.707 | 4.824 | 5.908 | 61.420 | +0.019 |
+| A2-R4 | blob | R4 | 38.809 | 31.628 | 14.393 | 11.544 | 57.854 | +0.047 |
+| A2-R4 | real-small | R4 | 17.220 | 15.664 | 5.109 | 9.657 | 45.523 | +0.369 ! |
+| A2-R4 | real-medium+ | R4 | 28.141 | 23.559 | 6.625 | 11.568 | 55.321 | +0.129 |
 | A3-R5 | blob | R1 | 1.508 | 1.147 | 0.485 | 1.130 | 60.758 | +0.000 |
 | A3-R5 | blob | R2 | 4.656 | 3.574 | 1.443 | 2.511 | 59.852 | +0.041 |
 | A3-R5 | blob | R3 | 11.341 | 8.756 | 3.511 | 4.868 | 58.479 | +0.098 |
@@ -332,7 +357,7 @@ therefore not in tension — the pretrained representation is worth about a
 five-fold label saving against from-scratch, and worth a consistent margin
 against the other two pretrained encoders at every budget.
 
-## C4: three pairs swap rank, and none of them is a C1 pair
+## C4: five pairs swap rank, and none of them is a C1 pair
 
 C4 is an **ordering** claim, deliberately not a metric-delta claim: the real-void
 family is drawn at its natural size distribution and the synthetic families are
@@ -343,18 +368,18 @@ real SRTM voids land 99.94% in the roughest quartile. The block is 66 rank cells
 
 | set / metric | A1 | A2-R5 | A2-R4 | A3-R5 | A3-R4 | A4-R5 | A4-R4 | A5 | A6 | A7 | A9 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| blob/small / rmse | #7 | — | — | #6 | #8 | #2 | #3 | #5 | #4 | #1 | #9 |
-| blob/small / slope_rmse | #7 | — | — | #6 | #8 | #2 | #3 | #5 | #4 | #1 | #9 |
-| real-small / rmse | #6 | — | — | #7 | #8 | #2 | #3 | #5 | #4 | #1 | #9 |
-| real-small / slope_rmse | #6 | — | — | #7 | #8 | #2 | #3 | #5 | #4 | #1 | #9 |
-| real-medium+ / rmse | #6 | — | — | #7 | #8 | #3 | #2 | #5 | #4 | #1 | #9 |
-| real-medium+ / slope_rmse | #6 | — | — | #8 | #7 | #2 | #3 | #5 | #4 | #1 | #9 |
+| blob/small / rmse | #7 | #10 | #8 | #6 | #9 | #2 | #3 | #5 | #4 | #1 | #11 |
+| blob/small / slope_rmse | #7 | #10 | #9 | #6 | #8 | #2 | #3 | #5 | #4 | #1 | #11 |
+| real-small / rmse | #6 | #9 | #8 | #7 | #10 | #2 | #3 | #5 | #4 | #1 | #11 |
+| real-small / slope_rmse | #6 | #10 | #9 | #7 | #8 | #2 | #3 | #5 | #4 | #1 | #11 |
+| real-medium+ / rmse | #6 | #10 | #7 | #8 | #9 | #3 | #2 | #5 | #4 | #1 | #11 |
+| real-medium+ / slope_rmse | #6 | #10 | #9 | #8 | #7 | #2 | #3 | #5 | #4 | #1 | #11 |
 
-`—` is an arm with no scored instances in that set.
+All eleven arms are scored in all three sets, so the block is full.
 
 **C4's failure condition is met.** That condition is an arm pair swapping rank
-between the synthetic and real-void rows within the same band, and three pairs
-do, over six swap instances:
+between the synthetic and real-void rows within the same band, and five pairs
+do, over eight swap instances:
 
 - **A1 and A3-R5**, on both metrics and against both real sets, which is four of
   the six instances. A3-R5 is #6 and A1 #7 on synthetic blob/small, and they
@@ -365,6 +390,13 @@ do, over six swap instances:
   crossing a rank boundary because a rank has no tolerance.
 - **A3-R5 and A3-R4**, on `slope_rmse`, between blob/small (#6/#8) and
   real-medium+ (#8/#7).
+- **A2-R4 and A3-R5**, on `rmse`, between blob/small (#8/#6) and real-medium+
+  (#7/#8): the continual-init zero-shot cell overtakes the fine-tuned R5 arm on
+  the largest real voids, which is C2's real-void loss again, seen from the
+  arm below it.
+- **A2-R5 and A3-R4**, on `rmse`, between blob/small (#10/#9) and real-small
+  (#9/#10), the two DEMAE decoders that sit at the bottom of the learned arms
+  exchanging places.
 
 **What the failure does not reach is C1.** §0's reason for caring about a rank
 swap is that it would put C1 in question, since C1's comparison is made entirely
@@ -373,12 +405,79 @@ on synthetic masks. C1's comparison is A4-R5 against A6 and A5, and that triple
 metrics**, real geometry included. A6 is #4 and A5 #5 in all six rows; A4-R5 is
 #2 in five of them and #3 at real-medium+/`rmse`, where A4-R4 takes #2 — which
 moves A4-R5's rank without touching its order against either arm C1 compares it
-to. A7 is #1 and A9 #9 in all six rows.
+to. A7 is #1 and A9 #11 in all six rows, and the two zero-shot cells sit
+between #7 and #10 in every row — below every trained arm, as R12's
+negative result says they should.
 Every swapping pair is either the two DEMAE inits, which R3 already refuses to
-let decide anything, or the fine-tuned arm against classical fill, which is C2's
-territory and is reported as C2's loss above. So both things are true: **C4 fails
+let decide anything, the fine-tuned arm against classical fill, which is C2's
+territory and is reported as C2's loss above, or a zero-shot cell against a
+fine-tuned one — two DEMAE decoders, read under R12 and C2 respectively, and
+neither an arm C1 compares. So both things are true: **C4 fails
 by its own criterion, and the pairs that broke it are not the pairs C1 rests on.**
 Both are stated because either one alone is the convenient half.
+
+## A2: zero-shot does not transfer to contiguous voids, and R12 says so
+
+**R12's contingency fired, and the row is a negative result: zero-shot MAE
+inpainting does not transfer from random-mask pretraining to contiguous voids.**
+A2-R5 beats A1 on `rmse` in **1 of §5's 4** ruggedness bands, over the 36,411
+instances both arms scored — and the one band it wins, R1, it wins by 0.012 m,
+inside any reading of noise. A2-R4 beats A1 in **2 of 4**. The trigger is
+an ordering and not a threshold in metres, for the reason §4.3 gives (A1 alone
+spans 0.87 m to 38.6 m across the quartiles), and ties lose. Both cells are one
+seed: the arm trains nothing, so there is no seed to vary.
+
+| band | A1 | A2-R5 | A2-R4 |
+|---|---|---|---|
+| R1 | 2.128 | 2.116 | 2.080 |
+| R2 | 5.805 | 5.924 | 5.804 |
+| R3 | 14.027 | 14.489 | 14.189 |
+| R4 | 24.057 | 28.329 | 27.043 |
+
+Band means of `rmse` in metres over every instance of both families, which is
+what R12's comparison is defined on; the printed table above pools differently
+(blob family, real sub-rows), so its cells and these differ.
+
+**How to read the row.** §4.3's registered inversion puts every voided patch at
+the *level* of A1's own fill, so what A2 adds to A1 is only the decoder's
+within-patch shape at a spread borrowed from the visible neighbourhood. That
+shape is worth nothing at R1 — the two arms are 2.061 against 2.061 on the
+printed blob cell — and costs more the rougher the terrain: +0.18 m at R2,
++0.60 m at R3, +1.35 m at blob R4, and **+6.66 m on real-small and +4.87 m on
+real-medium+**, where A2-R5 also trips R7's seam break (+0.432° and +0.179°
+against A1's -0.434° and -0.385°). The pattern is the mechanism §4.3 predicted
+rather than a surprise: the decoder was trained to reconstruct 75% random
+patches whose neighbours are mostly visible, and a contiguous void hands it a
+block of masked tokens with no visible neighbour inside it. Its slope error is
+the worst of any DEMAE arm in every printed cell (12.033° at blob R4 against
+A1's 10.397° and A3-R5's 9.705°), which is the texture being wrong, not the
+level.
+
+**What this is and is not evidence of.** R12's first clause holds as written:
+A2 carries no C-claim and is insulated from C1 in both directions. This is
+evidence that the *pretrained decoder* does not transfer to block masks; it is
+not evidence about the representation, which C1 scores through a trained head
+over frozen features and finds ahead of both baselines in every marked reading.
+The **A2→A3 difference** — A3-R5 is 30.388 m against A2-R5's 39.844 m at blob
+R4, and 1.508 against 2.061 at R1 — is a **joint** quantity, the cost of the
+distribution shift and the value of task adaptation summed, and is never
+attributed to task adaptation alone: the arm that would separate the two, DEMAE
+fine-tuned on random masks, does not exist and is not proposed.
+
+**The R4 secondary.** A2-R4 is the better zero-shot cell on `rmse` and
+`slope_rmse` in every printed cell — 38.809 m against 39.844 at blob R4, 17.220
+against 18.708 on real-small — and beats A1 in 2 of 4 bands, by 0.048 m at R1 and by 0.001 m at R2, which is still not a majority,
+so its row is the same negative result. Under R3 the R5 cell is the headline
+unconditionally and the R4 reading is reported here and nowhere else.
+
+**What the number depends on.** The estimator was fixed before the first A2
+instance was scored (§4.3, amended 2026-09-22; ADR-0013's #173 line), so the
+verdict is not one an estimator chosen after the fact could have moved. It
+could have been moved by a *different* registered estimator — that is the
+nature of a zero-shot row whose scale the decoder does not predict — and §4.3
+states the alternatives and why each was rejected. The run records carry the
+choice under `training.scale`, and the paragraph above is the whole of what the
+memo claims about it.
 
 ## A9: what the tokenizer bottleneck measures
 
@@ -434,8 +533,9 @@ is geometric rather than empirical.
 
 ## Registered rules: every disposition
 
-All twelve, plus R9b's refusal. R8 and R11 are the two that already fired against
-their own projections and held, and they are why this table is worth reading: a
+All twelve, plus R9b's refusal. R8 and R11 are the two that fired against their
+own projections and held; R12 fired in the direction it was written for, once
+its comparison became computable. They are why this table is worth reading: a
 pre-registration nobody can audit is a pre-registration nobody should believe.
 
 | rule | what it fixed | disposition |
@@ -446,13 +546,13 @@ pre-registration nobody can audit is a pre-registration nobody should believe.
 | **R4** | TerraMind's **20** DEM-tokenizer epochs carry their per-modality citation wherever stated, not the paper's 100 | **Held.** 20 appears in §6 item 4 below with its terratorch / model-card attribution; 100 appears nowhere as this tokenizer's epoch count. |
 | **R5** | the printed table's shape: buckets pool, blobs headline, 66 (row, band) cells × 6 columns = 396 printed numbers, the 66-cell C4 rank block | **Held.** 396 numbers and 66 rank cells, asserted by `report.assert_r5_shape` and `report.assert_rank_block_shape` rather than counted by hand. A2's twelve cells print as *not scored*, which keeps the shape whole rather than shrinking the table to the arms that ran. |
 | **R6** | exactly four arm pairs carry a bootstrap CI mark, named in advance, of 55 computed | **Held.** Four marked (A4-R5/A5 and A4-R5/A6 for C1, A3-R5/A1 for C2, A4-R5/A7 for C3), 36 of the 55 computable on this box, every other pair computed and left unmarked. R6 registers `A3`, which §2.3 splits by init; resolved to A3-R5 under R3 rather than by choosing after the numbers. |
-| **R7** | a seam gap above **+0.15°** is a seam break | **Fired.** Breaks in **13 of the 54 scored cells**: three A3-R5 (blob R4, real-small, real-medium+), four A3-R4 (blob R3 and R4, real-small, real-medium+) and all six A9. No A1, A4, A5, A6 or A7 cell breaks. The threshold was fixed long before either arm that trips it was trained, and the arms that trip it are the fine-tuned ones and the tokenizer pass-through. |
+| **R7** | a seam gap above **+0.15°** is a seam break | **Fired.** Breaks in **16 of the 66 scored cells**: three A3-R5 (blob R4, real-small, real-medium+), four A3-R4 (blob R3 and R4, real-small, real-medium+), two A2-R5 (real-small, real-medium+), one A2-R4 (real-small) and all six A9. No A1, A4, A5, A6 or A7 cell breaks. The threshold was fixed long before any arm that trips it was trained, and the arms that trip it are the fine-tuned ones, the zero-shot decoder on real voids, and the tokenizer pass-through. |
 | **R8** | real-medium+ is unstratified unless the realised histogram clears **100 per band** | **Fired against its own projection, and held.** The floor was fixed at ~96 projected instances and the realised count was **438** — 4.6x the projection — but they land 99.94% in R4, so no four-band histogram clears 100 per band and the row prints unstratified in R4 alone. A threshold nobody could move to the number produced the right report. |
 | **R9** | the GSD caveat is symmetric, and stated as a **bandwidth** shift rather than a resolution handicap | **Held.** §6 item 3 below states it as a bandwidth shift — TerraMind is fed *sharper* inputs than it ever saw, across 3x the ground span per patch — and it is measured on the tokenizer's own FSQ quantizer. The comparison went DEMAE's way, so the symmetry obligation binds in the direction that costs us, and the bandwidth shift is not offered as the explanation of A5's result. |
 | **R9b** | *a refusal:* the FSQ diagnostic carries **no threshold** | **Held as a refusal.** No threshold was added; the diagnostic is reported as a quantity and nothing in this memo reads a pass or a fail off it. The statistic has no natural scale, and a bar would imply it settles what the shift costs. |
 | **R10** | C3's low-label sweep is the pre-registered fallback claim; nulls reported with the prominence of wins | **Fired, in the direction it was written for.** C3 holds at 1k and closes to 0.21 m by 20k, where A7 beats A4-R5 on slope in all six cells. The closing and the UNet's slope win are stated in C3's own section at the same prominence as the 1k result, not relegated. |
 | **R11** | bicubic-vs-re-derived ablation row, A5 at 20k, dropped iff the materiality check returns **≥ 0.99** | **Fired against its own projection, and held.** #134 returned **0.9708** against the bar of **0.99**, so the row stayed and is published above as a null: **-0.061 m to +0.103 m** across the six printed cells, each inside a seed spread, and changing sign between them. A bar set after the numbers would have dropped it. |
-| **R12** | A2 carries no C-claim and is insulated from C1 both ways; the A2→A3 difference is joint; negative result if A2 does not beat A1 in a majority of the four bands | **Pending — the comparison is not computable.** A2 has no rows (#173), so 0 of the 4 registered bands hold rows from both arms and the contingency has no verdict. **Not computed yet is not "does not beat A1"**, and the negative result is therefore not claimed. The two clauses that do not need numbers are in force: A2 carries no C-claim, and nothing here attributes the A2→A3 difference to task adaptation — it is a joint quantity, the cost of the distribution shift and the value of task adaptation summed, and the arm that would separate them does not exist and is not proposed. |
+| **R12** | A2 carries no C-claim and is insulated from C1 both ways; the A2→A3 difference is joint; negative result if A2 does not beat A1 in a majority of the four bands | **Fired — negative result.** A2-R5 beats A1 on `rmse` in **1 of §5's 4** ruggedness bands over the 36,411 instances both arms scored (R1 2.116 against 2.128; R2 5.924 against 5.805; R3 14.489 against 14.027; R4 28.329 against 24.057), which is not a majority, so the row is reported in the register's words: zero-shot MAE inpainting does not transfer from random-mask pretraining to contiguous voids. A2-R4 beats A1 in **2 of 4** (R1 2.080, R2 5.804 against 5.805) and is the same negative result. The comparison was read *after* §4.3's estimator was registered (#173), not before. The other two clauses are in force: A2 carries no C-claim and is insulated from C1 both ways, and the A2→A3 difference is a joint quantity — the cost of the distribution shift and the value of task adaptation summed — never attributed to task adaptation alone. |
 
 ## 6. Fairness checklist (goes in the writeup verbatim)
 
@@ -596,10 +696,10 @@ see, and it is the A3-R5 column that is missing. Regenerating those two columns
 means re-training both arms with `run` saving the panel tiles' fills, which is
 an arm ticket's work, not `report`'s.
 
-**Open at the time of writing:**
-[#173](https://github.com/JStoschek/DEMAE/issues/173) (A2's per-patch scale; the
-decoder-bearing R5 and R4 checkpoints are now on disk, md5-matched to the
-release manifests, so the estimator is the whole of what is missing).
-[#177](https://github.com/JStoschek/DEMAE/issues/177) (whether §4.2 keeps the
-shifted-encoding clause at all) closed on 2026-09-22 with the clause struck, and
-the A3 paragraphs above are written to that resolution.
+**Nothing pre-registered is open at the time of writing.**
+[#173](https://github.com/JStoschek/DEMAE/issues/173) closed on 2026-09-22 with
+§4.3's per-patch scale estimator registered and both A2 cells scored through it,
+and [#177](https://github.com/JStoschek/DEMAE/issues/177) closed the same day
+with the shifted-encoding clause struck; the A2 and A3 paragraphs above are
+written to those resolutions. What remains is not a decision: the hillshade
+panel's A3-R5 and A5 columns want a re-training that saves its fills.
