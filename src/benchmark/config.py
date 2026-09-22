@@ -468,11 +468,20 @@ class Finetune(_Frozen):
     #: scale and norm-pix targets discard it. Eval always re-inverts to metres with non-void
     #: statistics regardless.
     norm_pix_loss: bool = False
-    #: §4.2's inference composite: a 16 px cross-fade at patch boundaries inside the void, and
-    #: four shifted encodings averaged for near-tile-scale voids, so the patch grid does not
-    #: print as a seam the seam-gap column then charges it for.
+    #: §4.2's inference composite: a 16 px cross-fade at patch boundaries inside the void, over
+    #: four half-patch-shifted grids, so the patch grid does not print as a seam the seam-gap
+    #: column then charges it for. ``shift_offsets`` is the set of further whole-tile shifts the
+    #: composite averages over for near-tile-scale voids. §4.2 declared ``(0, 112)`` until #177
+    #: struck the clause: a 112 px shift of a 224 px tile is three-quarters fabricated canvas,
+    #: lands every patch boundary where it was (seven whole patches), and measured **45.0 m
+    #: against 21.0 m without** on the trained R5 arm. So the recipe now declares the unshifted
+    #: encoding alone. The knob stays because the rule that dropped 112
+    #: (:func:`benchmark.finetune.usable_shifts`) is about the canvas an offset needs, and an
+    #: offset re-declared later should meet that rule rather than a deleted field. Moving this
+    #: default moved every arm's :attr:`BenchmarkConfig.config_hash`; rows already in the parquet
+    #: carry the hash they ran under, and their run record says what the composite ran.
     crossfade_px: int = 16
-    shift_offsets: tuple[int, ...] = (0, 112)
+    shift_offsets: tuple[int, ...] = (0,)
 
     #: §4.2 declares no batch size, so A3 trains at §4.1's — the one frozen batch this
     #: benchmark has. Not a field here on purpose: :attr:`BenchmarkConfig.finetune` is inside

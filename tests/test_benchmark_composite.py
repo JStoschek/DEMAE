@@ -196,9 +196,12 @@ def test_only_near_tile_scale_voids_take_the_shifted_encodings():
     assert finetune.near_tile_scale(large, masks_cfg=cfg.masks)
 
 
-def test_the_shift_offsets_are_the_four_the_plan_names():
-    """§4.2: *4 shifted encodings (0 and 112 px offsets in x/y)*, and the config already says so."""
+def test_the_shift_offsets_are_the_unshifted_encoding_alone():
+    """§4.2 as amended by #177: the fade's four half-patch grids are the composite, and no
+    further shifted encoding is declared. The clause that named 0 and 112 px is struck — 112 is
+    seven whole patches (identically phased grid) and three-quarters of a 224 px window
+    (fabricated canvas), and it measured 45.0 m against 21.0 m without."""
     cfg = BenchmarkConfig()
 
-    assert cfg.finetune.shift_offsets == (0, 112)
-    assert finetune.shift_origins(cfg.finetune) == ((0, 0), (0, 112), (112, 0), (112, 112))
+    assert cfg.finetune.shift_offsets == (0,)
+    assert finetune.shift_origins(cfg.finetune) == ((0, 0),)

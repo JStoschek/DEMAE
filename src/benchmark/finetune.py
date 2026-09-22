@@ -80,24 +80,28 @@ would be the arm marking its own homework. So the blend runs over the *predicted
 and the composite's last act is to put every non-void pixel back exactly as it arrived
 (:func:`composite`).
 
-## §4.2's other clause, implemented as stated and worth measuring
+## §4.2's struck clause, and the rule that struck it
 
-*"For voids near tile scale, 4 shifted encodings (0 and 112 px offsets in x/y) averaged, which
-suppresses patch-grid seams (standard test-time practice)."*
+§4.2 used to end *"For voids near tile scale, 4 shifted encodings (0 and 112 px offsets in x/y)
+averaged, which suppresses patch-grid seams (standard test-time practice)."* #166 built it
+literally, off :attr:`benchmark.config.Finetune.shift_offsets`, and measured it; #177 struck it
+from the plan on 2026-09-22, and :func:`usable_shifts` carries the reasons. Two are arithmetic
+rather than empirical: 112 is seven whole patches, so a 112 px shift moves the tile onto a
+**differently-indexed but identically-phased** grid — every patch boundary lands where it was,
+which is precisely what a shift aimed at patch-grid seams would have to move; and the model takes
+exactly one 224 px tile, so a 224 px window displaced by 112 px is three-quarters canvas that is
+not the tile. The third is the measurement: **45.0 m** with the four encodings against **21.0 m**
+without, on the trained R5 arm over 200 large-bucket instances. What such shifts *would* buy at a
+usable offset is real but different — each puts the void at a different place in the
+position-embedding grid, so the position-specific part of the error averages down — and the
+fade's own four half-patch grids already are that, at the largest offset that is still a view of
+the tile.
 
-Implemented literally, off :attr:`benchmark.config.Finetune.shift_offsets`, and flagged here
-because the stated mechanism does not follow from the stated offsets: 112 is seven whole
-patches, so a 112 px shift moves the tile onto a **differently-indexed but identically-phased**
-grid. The patch boundaries land in the same places, which is precisely what a shift aimed at
-patch-grid seams would have to move. What the four encodings do buy is real but different — each
-one puts the void at a different place in the position-embedding grid, so the position-specific
-part of the error averages down over four draws instead of being taken once.
-
-So the clause is built, and the phase argument is recorded rather than acted on: changing which
-offsets A3 runs is a change to a pre-registered arm, and this module is not the place to make
-one. :func:`grid_energy` is what would settle it on real tiles, and #166's own test is written
-against the cross-fade for that reason — the fade is the clause that does the work the plan
-attributes to both.
+The machinery stays, and so does the rule: ``shift_offsets`` now declares the unshifted encoding
+alone, and an offset re-declared later is judged on the canvas it needs rather than on the number
+112. :func:`grid_energy` is what settles the seam question on real tiles, and #166's own test is
+written against the cross-fade for that reason — the fade is the clause that does the work the
+plan used to attribute to both.
 """
 
 from __future__ import annotations
@@ -344,6 +348,10 @@ def usable_shifts(recipe, *, patch_px: int) -> tuple[tuple[tuple[int, int], ...]
     Returned as a pair rather than filtered silently. What was dropped and why is recorded in the
     run record (:func:`composite_note`), because a pre-registered arm scored under fewer
     encodings than §4.2 names is a deviation a reader has to be able to find.
+
+    #177 struck the 112 px clause from §4.2 on this rule's evidence (2026-09-22), so the declared
+    offsets are now ``(0,)`` and nothing is dropped by default. The rule stays as the refusal a
+    re-declared offset meets: it is about the canvas, and it was never about the number.
     """
     kept, dropped = [], []
     for origin in shift_origins(recipe):
@@ -370,13 +378,15 @@ def composite_note(cfg) -> dict:
     }
     if dropped:
         note["shifted_encodings_dropped"] = [list(o) for o in dropped]
+        widths = sorted({max(origin) for origin in dropped})
         note["deviation"] = (
-            "§4.2 names four shifted encodings at 0 and 112 px; a 224 px window of a 224 px "
-            "tile displaced by 112 px is three-quarters fabricated padding, so those three are "
-            "not a view of this tile at all. Measured on the trained R5 arm over 200 "
-            "large-bucket instances: 45.0 m with them against 21.0 m without, and A1 at 28.4 m. "
-            "The cross-fade — §4.2's other inference clause, and the one that actually moves the "
-            "patch-grid statistic — is unaffected and still runs on four grids."
+            f"the declared offsets include {widths} px, and a 224 px window of a 224 px tile "
+            f"displaced that far is more fabricated padding than the fade blends across, so "
+            f"those encodings are not a view of this tile at all. §4.2 declared 0 and 112 px "
+            f"until #177 struck the clause on this measurement (trained R5 arm, 200 "
+            f"large-bucket instances): 45.0 m with them against 21.0 m without, and A1 at "
+            f"28.4 m. The cross-fade — the clause that actually moves the patch-grid statistic "
+            f"— is unaffected and still runs on four grids."
         )
     return note
 
@@ -622,8 +632,8 @@ class Compositor:
         """§4.2's shifted encodings, each cross-faded, averaged where they are defined.
 
         **Averaged over the shifts that cover a pixel, not over all four unconditionally**, and
-        that qualification is forced rather than chosen. §4.2 asks for *"4 shifted encodings
-        (0 and 112 px offsets in x/y)"*, and a 112 px shift of a 224 px tile through a 224 px
+        that qualification is forced rather than chosen. §4.2 asked for *"4 shifted encodings
+        (0 and 112 px offsets in x/y)"* until #177 struck the clause, and a 112 px shift of a 224 px tile through a 224 px
         model cannot produce four encodings that each see the whole tile: the window runs off the
         canvas by exactly as much as it shifted. Implemented as a ``roll`` it does not run off at
         all — it wraps, which is worse, because a wrap puts a cliff of far-side terrain through
@@ -635,8 +645,8 @@ class Compositor:
         one contributes where it reaches. The unshifted encoding reaches everywhere, so every
         pixel is predicted by at least one and the average is never empty.
 
-        Two things about §4.2's clause are worth recording rather than acting on, because both
-        are changes to a pre-registered arm. The first is the coverage above. The second is that
+        Two things about §4.2's former clause were recorded here before #177 struck it, and they
+        are two of its three reasons. The first is the coverage above. The second is that
         the mechanism the plan attributes to these shifts — *"which suppresses patch-grid
         seams"* — does not follow from the offsets it names: 112 is seven whole patches, so a
         112 px shift lands on a differently-**indexed** but identically-**phased** grid and every

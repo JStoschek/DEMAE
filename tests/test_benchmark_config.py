@@ -136,7 +136,9 @@ def test_the_fine_tune_arm_carries_section_four_twos_recipe():
     # §4.2: void filling needs absolute per-patch scale, so norm_pix is off — the one place
     # this benchmark deliberately inverts Phase 1's own default.
     assert ft.norm_pix_loss is False
-    assert (ft.crossfade_px, ft.shift_offsets) == (16, (0, 112))
+    # §4.2 as amended by #177: the cross-fade's four half-patch grids are the composite, and
+    # the clause that declared 112 px shifts is struck — so the unshifted encoding alone.
+    assert (ft.crossfade_px, ft.shift_offsets) == (16, (0,))
 
 
 def test_the_tile_draws_are_section_three_ones():
