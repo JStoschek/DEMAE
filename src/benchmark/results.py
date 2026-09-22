@@ -224,15 +224,7 @@ def append_rows(
     path = Path(path)
     fresh = _table(rows, metrics)
     if path.is_file():
-        committed = pq.read_table(path)
-        if committed.schema != fresh.schema:
-            raise ValueError(
-                f"{path} was written with columns {committed.schema.names} and this run scores "
-                f"{fresh.schema.names}. The metric roster comes from the registered bar (R1), so "
-                f"a mismatch means this file and this run were scored under two different "
-                f"pre-registrations — which is not something to merge. Move the old file aside "
-                f"deliberately; every table already rendered from it quotes its own run records"
-            )
+        committed = _canonical(pq.read_table(path), fresh.schema, path)
         replaced = {row.cell() for row in rows}
         # A boolean filter rather than `take` on a list of indices: re-running the *only* cell a
         # file holds keeps nothing, and an empty Python list has no Arrow type for `take` to
@@ -253,6 +245,44 @@ def append_rows(
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(fresh, path, compression="zstd")
     return path, fresh.num_rows
+
+
+def _canonical(committed, schema, path: Path):
+    """The committed table under :func:`schema`'s types, or the refusal that it is another roster.
+
+    Two different things can make a file's schema differ from a fresh pass's, and they deserve
+    opposite treatment. **Different columns** mean the file and the run were scored under two
+    rosters — R1's is the registered bar's — and that is not something to merge; refused. **The
+    same columns under other Arrow types** mean the file passed through another writer: the
+    box-pull script (`scripts/pull_box_results.py`) went through pandas, which types every
+    string column ``large_string`` and stamps pandas metadata on the schema, and a strict
+    ``schema !=`` then refused every later `run` on this laptop with a message about
+    pre-registrations that had nothing to do with it (#173 lost a 22-minute A2 pass to it).
+    The values are the same values, so the file is cast back to the canonical types here — the
+    next write leaves it canonical — and only a cast that cannot be made is a refusal.
+    """
+    if committed.schema.names != schema.names:
+        raise ValueError(
+            f"{path} was written with columns {committed.schema.names} and this run scores "
+            f"{schema.names}. The metric roster comes from the registered bar (R1), so a "
+            f"mismatch means this file and this run were scored under two different "
+            f"pre-registrations — which is not something to merge. Move the old file aside "
+            f"deliberately; every table already rendered from it quotes its own run records"
+        )
+    if committed.schema == schema:
+        return committed
+    try:
+        return committed.cast(schema).replace_schema_metadata(None)
+    except Exception as error:  # pragma: no cover - a type Arrow cannot cast
+        differing = [
+            f"{a.name}: {a.type} -> {b.type}"
+            for a, b in zip(committed.schema, schema)
+            if a.type != b.type
+        ]
+        raise ValueError(
+            f"{path} carries this run's columns under types that do not cast to the results "
+            f"schema ({', '.join(differing)}): {error}"
+        ) from error
 
 
 def read_rows(path: Path | str):

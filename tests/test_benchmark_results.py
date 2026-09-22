@@ -113,6 +113,46 @@ def test_replacing_every_row_a_file_holds_is_not_a_typing_error(tmp_path):
     assert total == 1
 
 
+def test_a_file_that_passed_through_pandas_is_appended_to_and_comes_back_canonical(tmp_path):
+    """`scripts/pull_box_results.py` wrote the canonical parquet through pandas, which types every
+    string column `large_string` and stamps pandas metadata on the schema. Same columns, same
+    values, other Arrow types — and a strict `schema !=` refused every later laptop `run` with a
+    message about pre-registrations (#173 lost a full A2 pass to it). Cast back, not refused."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "results.parquet"
+    results.append_rows([row("a"), row("b", seed=1)], path, metrics=ROSTER)
+    table = pq.read_table(path)
+    wide = pa.schema(
+        [
+            (f.name, pa.large_string() if pa.types.is_string(f.type) else f.type)
+            for f in table.schema
+        ],
+        metadata={b"pandas": b"{}"},
+    )
+    pq.write_table(table.cast(wide), path)
+    assert pq.read_schema(path) != results.schema(ROSTER)
+
+    _, total = results.append_rows([row("c")], path, metrics=ROSTER)
+
+    assert total == 2  # seed 0's row replaced, seed 1's kept
+    assert pq.read_schema(path).remove_metadata() == results.schema(ROSTER)
+    assert sorted(results.read_rows(path).column("tile_id").to_pylist()) == ["b", "c"]
+
+
+def test_a_file_scored_under_another_roster_is_still_refused(tmp_path):
+    path = tmp_path / "results.parquet"
+    results.append_rows([row("a")], path, metrics=ROSTER)
+
+    with pytest.raises(ValueError, match="two different pre-registrations"):
+        results.append_rows(
+            [row("b", metrics={**{m: 1.0 for m in ROSTER}, "extra_metric": 1.0})],
+            path,
+            metrics=[*ROSTER, "extra_metric"],
+        )
+
+
 # --- The run record -----------------------------------------------------------
 
 

@@ -127,7 +127,20 @@ def main() -> int:
         backup = LOCAL_RESULTS.with_suffix(".parquet.before-pull")
         shutil.copy2(LOCAL_RESULTS, backup) if LOCAL_RESULTS.is_file() else None
         merged = pd.concat([local, *[r for _, r in new]], ignore_index=True)
-        merged.to_parquet(LOCAL_RESULTS, index=False)
+        # Through Arrow under the results schema, not `to_parquet`: pandas types every string
+        # column `large_string` and stamps its own metadata, and `benchmark.results.append_rows`
+        # compares schemas — a file written that way refused every later laptop `run` (#173).
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from benchmark import results as results_module
+
+        metrics = [c for c in merged.columns if c not in results_module.columns([])]
+        table = pa.Table.from_pandas(merged, preserve_index=False).cast(
+            results_module.schema(metrics)
+        ).replace_schema_metadata(None)
+        pq.write_table(table, LOCAL_RESULTS, compression="zstd")
         folded = sum(len(r) for _, r in new)
         print(f"\nwrote {len(merged)} rows to {LOCAL_RESULTS} (+{folded}); previous at {backup.name}")
 
