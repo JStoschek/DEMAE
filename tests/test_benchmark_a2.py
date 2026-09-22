@@ -13,7 +13,7 @@ shape would test the wiring around the refusals instead of the refusals. Its dec
 narrow block, because the decoder's shape is the only part of §2.2 the registry does not declare
 and 85M encoder parameters already dominate the second this costs.
 
-Its `norm_pix_loss` is **off**, which is §4.2's regime rather than R5's. That is the ticket's
+Its `norm_pix_loss` is **off** by default, which is §4.2's regime rather than R5's. That was the ticket's
 finding and it is asserted here as a refusal rather than papered over: R5 and R4 were both
 pretrained with it on, and a `norm_pix` decoder has no inversion to metres that does not read the
 answer out of the void. See `benchmark.zeroshot` and `test_a_norm_pix_checkpoint_is_refused`.
@@ -392,18 +392,136 @@ def test_a_checkpoint_from_a_differently_shaped_run_is_refused(box, flags):
         launch.main(["run", "--arm", ARM, *flags])
 
 
-def test_a_norm_pix_checkpoint_is_refused_before_a_single_instance_is_scored(box, flags):
-    """This ticket's finding, at the CLI altitude.
+def test_a_norm_pix_checkpoint_scores_through_the_registered_estimator(box, flags):
+    """#173's resolution, at the CLI altitude.
 
-    R5 and R4 were both pretrained with `norm_pix_loss` on, so this is the state a real box is
-    in. The refusal is what stands in place of an A2 number until §4.3 registers a way to recover
-    the per-patch scale inside a void — see `benchmark.zeroshot`.
+    R5 and R4 were both pretrained with `norm_pix_loss` on, so this is the state the real box is
+    in. #167 refused it for want of a registered inversion; §4.3 now registers one, and the run
+    record says which two numbers stood in for the per-patch scale the void hides.
     """
     _write_checkpoint(box / "r5-pretrain.pt", norm_pix=True)
 
-    with pytest.raises(zeroshot.ScaleUnavailable, match="norm_pix_loss"):
-        launch.main(["run", "--arm", ARM, *flags])
-    assert not (box / "results.parquet").exists(), "nothing was written"
+    assert launch.main(["run", "--arm", "A1", *flags]) == 0
+    assert launch.main(["run", "--arm", ARM, *flags]) == 0
+
+    record = a2_record(box)
+    assert record["training"]["kind"] == "zeroshot"
+    scale = record["training"]["scale"]
+    assert (scale["level"], scale["spread"], scale["spread_power"]) == ("a1_fill", "visible_idw", 2.0)
+    assert scale["reads_void"] is False and "#173" in scale["statement"]
+    table = a2_rows(box)
+    assert table.num_rows > 0 and np.isfinite(table.column("rmse").to_numpy()).all()
+
+
+def test_a_moved_estimator_is_refused_at_resolve(box, flags):
+    """§4.3's estimator sets A2's numbers, so a run may not move it — `finetune.assert_declared`'s
+    rule one arm over, and refused before `--dry-run` returns."""
+    with pytest.raises(ValueError, match="drifted from the declared line"):
+        launch.main(["run", "--arm", ARM, "--dry-run", *flags, "--set", "zeroshot.spread_power=3"])
+    with pytest.raises(ValueError, match="does not register"):
+        zeroshot.load_inpainter(
+            box / "r5-pretrain.pt", recipe=BenchmarkConfig().zeroshot.replace(level="truth")
+        ).check_ready()
+
+
+# --- §4.3's estimator, as arithmetic -------------------------------------------
+
+_TILE = 224
+
+
+def _plane_tile(*, slope_x: float = 2.0, slope_y: float = -1.0, level: float = 1200.0) -> np.ndarray:
+    y, x = np.mgrid[0:_TILE, 0:_TILE]
+    return np.round(level + slope_x * x + slope_y * y).astype(np.int16)
+
+
+def test_patch_view_is_patchify_and_unpatch_inverts_it():
+    """The numpy permutation is the model's, so a per-patch statistic lands on the patch the
+    decoder predicted — a transposed view would still be 196 x 256 and still score."""
+    import torch
+    from pretrain.model import MaskedAutoencoder
+    from pretrain.config import RunConfig
+
+    model = MaskedAutoencoder.from_config(RunConfig())
+    field = np.random.default_rng(0).standard_normal((_TILE, _TILE)).astype(np.float32)
+
+    ours = zeroshot.patch_view(field, patch_px=model.patch_px)
+    theirs = model.patchify(torch.from_numpy(field)[None, None])[0].numpy()
+    np.testing.assert_array_equal(ours, theirs)
+    np.testing.assert_array_equal(zeroshot.unpatch(ours, patch_px=model.patch_px), field)
+
+
+def test_idw_weights_sum_to_one_and_fall_with_distance():
+    grid = 14
+    weights = zeroshot.idw_weights(np.array([0]), np.array([1, 2, 15]), grid=grid, power=2.0)
+
+    np.testing.assert_allclose(weights.sum(axis=1), 1.0)
+    # (0,1) is one patch away, (0,2) two, (1,1) is sqrt(2): 1 : 1/4 : 1/2 before normalization.
+    np.testing.assert_allclose(weights[0] / weights[0, 0], [1.0, 0.25, 0.5])
+    with pytest.raises(ValueError, match="both a target and a source"):
+        zeroshot.idw_weights(np.array([3]), np.array([3, 4]), grid=grid, power=2.0)
+
+
+def test_the_registered_estimate_recovers_a_plane_without_reading_the_void():
+    """On a plane the thin-plate fill is the truth (its affine term reproduces a plane exactly,
+    where `fillnodata`'s inverse-distance average does not) and every patch has the same spread —
+    so the estimate equals the truth to numerical tolerance, and a perfect decoder inverted
+    through it returns the tile. The oracle `pretrain.recon` uses, with the void's own statistics
+    replaced by §4.3's estimates."""
+    from benchmark.config import BenchmarkConfig as Cfg
+    from dataset.metrics import land_mask
+    from benchmark import extract
+
+    raw = _plane_tile()
+    void = np.zeros((_TILE, _TILE), dtype=bool)
+    void[60:150, 70:160] = True
+    valid = land_mask(raw) & ~void
+    normalized = extract.normalize(raw[None], valid[None], normalization="per_tile")[0]
+    keep = zeroshot.keep_set(void, patch_px=16)
+    cfg = Cfg()
+
+    mean, std = zeroshot.estimate_scale(
+        normalized, raw_i16=raw, void=void, valid=valid, keep=keep, patch_px=16,
+        var_floor=1e-4, recipe=cfg.zeroshot, fill_recipe=cfg.fill.replace(variant="tps"),
+    )
+    truth = zeroshot.patch_view(normalized, patch_px=16).astype(np.float64)
+    touched = ~keep
+    assert touched.sum() > 0
+    np.testing.assert_allclose(mean[touched], truth[touched].mean(axis=1), atol=2e-3)
+    np.testing.assert_allclose(std[touched], truth[touched].std(axis=1, ddof=1), rtol=2e-3)
+
+    # A perfect decoder emits each patch in its own standardized units; the registered
+    # inversion returns the plane.
+    standardized = (truth - truth.mean(axis=1, keepdims=True)) / truth.std(axis=1, ddof=1, keepdims=True)
+    back = zeroshot.invert_patches(standardized, mean, std, patch_px=16)
+    np.testing.assert_allclose(back, normalized, atol=5e-3)
+
+
+def test_the_estimate_never_reads_the_void():
+    """Change every void pixel and the estimate does not move: the two numbers come from A1's
+    fill and the seen patches, which is the whole of what §4.3 registers."""
+    from benchmark.config import BenchmarkConfig as Cfg
+    from dataset.metrics import land_mask
+    from benchmark import extract
+
+    rng = np.random.default_rng(1)
+    raw = (_plane_tile() + rng.integers(-40, 40, (_TILE, _TILE))).astype(np.int16)
+    void = np.zeros((_TILE, _TILE), dtype=bool)
+    void[40:120, 100:170] = True
+    cfg = Cfg()
+
+    def estimate(tile):
+        valid = land_mask(tile) & ~void
+        normalized = extract.normalize(tile[None], valid[None], normalization="per_tile")[0]
+        return zeroshot.estimate_scale(
+            normalized, raw_i16=tile, void=void, valid=valid,
+            keep=zeroshot.keep_set(void, patch_px=16), patch_px=16,
+            var_floor=1e-4, recipe=cfg.zeroshot, fill_recipe=cfg.fill,
+        )
+
+    altered = raw.copy()
+    altered[void] = 5000
+    for ours, theirs in zip(estimate(raw), estimate(altered)):
+        np.testing.assert_array_equal(ours, theirs)
 
 
 def test_a2_does_not_wait_on_the_extractor_spec_it_never_consults(scored):

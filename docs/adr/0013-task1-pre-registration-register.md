@@ -50,6 +50,20 @@
   each run record and in the results memo rather than absorbed here, and the amendment moves every arm's
   `config_hash`, which rows already in the parquet do not follow. **No rule's content changes and no decision is
   re-opened.** The counts still read **twelve** rules.
+- **Amended by:** Task 1 build session, 2026-09-22 ([issue #173](https://github.com/JStoschek/DEMAE/issues/173)) —
+  **§4.3 registers how A2's per-patch scale is estimated inside a void, and it is not a register entry.** Both release
+  checkpoints were pretrained with `norm_pix_loss` on, so the pretrained decoder predicts each patch in that patch's
+  own standardized units, and inside a void the two numbers that undo it are unknown. #167 refused rather than pick;
+  #173 fixed the estimate **before any A2 instance was scored** — the level as the mean of A1's own fill over the
+  patch, the spread as the inverse-distance-weighted (power 2) standard deviation of the patches the encoder saw —
+  and §4.3 carries the reasoning and the alternatives. #173 asked this ADR whether that is a registered value or a
+  discursive rule; on the same terms as the #177 line above it is neither. Decision 5's tunability test excludes a
+  method that fixes how an arm *produces* a fill: its owner is `benchmark.config.Zeroshot` inside `config_hash`,
+  its guard `benchmark.zeroshot.assert_declared` at `resolve`, and its record the `training.scale` block of every A2
+  run. **R12's content is unchanged** — its contingency is now *computable*, and it is read after this registration
+  rather than before, which is the order R12's own tunability argument requires. Moving the declared recipe moves
+  every arm's `config_hash`; rows already in the parquet carry the hash they ran under. The counts still read
+  **twelve** rules.
 - **Context ticket:** "Decide whether the pre-registration gets its own ADR, now that it carries seven rules" ([issue #141](https://github.com/JStoschek/DEMAE/issues/141)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the twelve rules' own source tickets, cited per row in [The register](#the-register)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9 *(2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142) adds §4.3, R12's home, and §8's risk bullet as a marked site)*

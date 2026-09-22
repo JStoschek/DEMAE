@@ -525,6 +525,42 @@ class Finetune(_Frozen):
 DECLARED_FINETUNE: Final = Finetune()
 
 
+# --- §4.3 The zero-shot arm's inversion ---------------------------------------
+
+
+@dataclass(frozen=True)
+class Zeroshot(_Frozen):
+    """A2's inference: how the pretrained decoder's per-patch output returns to metres (§4.3, #173).
+
+    R5 and R4 were pretrained with ``norm_pix_loss`` on, so their decoder predicts each patch
+    standardized by *that patch's own* mean and standard deviation — and inside a void those two
+    numbers are the unknowns. §4.3 registers how each is estimated **without reading the void**,
+    and these knobs name the registered estimators. Moving one is a change to a pre-registered
+    arm, refused at ``resolve`` by :func:`benchmark.zeroshot.assert_declared` on
+    :func:`benchmark.finetune.assert_declared`'s rule.
+    """
+
+    #: The per-patch **level** μ̂: the mean over the patch of **A1's own fill** (§2.4's
+    #: `fillnodata` over the void, every visible pixel untouched), in the per-tile standardized
+    #: units the decoder saw. Level is what interpolation does well, and A1 is an arm the table
+    #: already scores, so nothing new is fitted and the A2-vs-A1 ordering reads as *does the
+    #: decoder's within-patch shape beat the interpolant's, at the interpolant's level*.
+    level: str = "a1_fill"
+    #: The per-patch **spread** σ̂: the inverse-distance-weighted mean of the per-patch standard
+    #: deviation over the patches the encoder **saw**. Roughness is spatially correlated, and an
+    #: interpolant's own spread is too flat — σ̂ read off A1's fill would null the decoder's
+    #: texture wherever the terrain is flat and make R12's ordering a property of the estimator
+    #: rather than of the decoder.
+    spread: str = "visible_idw"
+    #: The inverse-distance power, over patch-centre distance in patch units. Fixed here rather
+    #: than tuned on val, because the register is what keeps it from being tuned on test.
+    spread_power: float = 2.0
+
+
+#: §4.3's estimator, as one object every A2 cell loads — :data:`DECLARED_FINETUNE`'s reason.
+DECLARED_ZEROSHOT: Final = Zeroshot()
+
+
 # --- §4.4 The from-scratch baseline -------------------------------------------
 
 
@@ -840,6 +876,7 @@ _GROUPS: Final = {
     "fill": Fill,
     "head": Head,
     "finetune": Finetune,
+    "zeroshot": Zeroshot,
     "unet": Unet,
     "tokenizer": Tokenizer,
     "extract": Extract,
@@ -888,6 +925,7 @@ class BenchmarkConfig(_Frozen):
     #: recipe is one object rather than eleven equal copies. See that constant.
     head: Head = field(default=TUNED_HEAD)
     finetune: Finetune = field(default=DECLARED_FINETUNE)
+    zeroshot: Zeroshot = field(default=DECLARED_ZEROSHOT)
     unet: Unet = field(default_factory=Unet)
     tokenizer: Tokenizer = field(default_factory=Tokenizer)
     extract: Extract = field(default_factory=Extract)

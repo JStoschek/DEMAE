@@ -916,10 +916,11 @@ def load_model(cfg, arm, *, device: str):
     the file records. An encoder-only export reaches a named refusal here instead of a randomly
     initialized decoder and a plausible table.
 
-    The ``norm_pix`` refusal :meth:`~benchmark.zeroshot.Inpainter.check_ready` makes is
-    deliberately **not** asked. A2 cannot retrain and so has no way past a decoder that predicts
-    in per-patch units the void hides; A3's whole recipe is that it retrains with ``norm_pix``
-    off (§4.2), so R5 and R4 arriving with it on is the starting condition rather than a fault.
+    :meth:`~benchmark.zeroshot.Inpainter.check_ready` is deliberately **not** asked: it
+    validates §4.3's estimator, which is A2's inference and not this arm's. A3's whole recipe is
+    that it retrains with ``norm_pix`` off (§4.2), so R5 and R4 arriving with it on is the
+    starting condition rather than a fault, and no inversion of the pretrained decoder's units is
+    ever needed here.
     """
     from . import arms
 

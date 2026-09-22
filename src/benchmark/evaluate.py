@@ -321,8 +321,16 @@ def _token_drop(cfg: BenchmarkConfig, arm: arms.Arm, *, trained=None) -> Fill:
             f"§14 exports encoder-only weights, so the release `encoder.pt` cannot drive it — "
             f"see the resolution line's `mae checkpoint` row"
         )
-    inpainter = zeroshot.load_inpainter(path, expect=arms.ENCODERS[arm.encoder])
+    from . import train
+
+    inpainter = zeroshot.load_inpainter(
+        path, expect=arms.ENCODERS[arm.encoder], recipe=cfg.zeroshot, fill_recipe=cfg.fill
+    )
     inpainter.check_ready()
+    # Where the box computes (`runtime.device`, CUDA then MPS then CPU): 36,411 ViT-B
+    # encoder+decoder forwards a pass is an hour on this laptop's CPU and minutes on its GPU,
+    # and `Inpainter.infill` reads the device off the model rather than being told.
+    inpainter.model.to(train.resolve_device(cfg))
 
     def fill_batch(tiles: Sequence[Tile], voids: Sequence[np.ndarray]) -> list:
         # One at a time: #167's inpainter takes a tile. The batch axis is available to it the day

@@ -311,44 +311,50 @@ def test_no_claim_that_the_a2_to_a3_difference_measures_task_adaptation(flat: st
         assert struck not in flat, f"R12's struck clause reappears: {struck!r}"
 
 
-def test_a2_is_reported_as_pending_rather_than_as_a_negative_result(flat: str):
-    """The disposition R12 actually has on this box, which is not the one it projected.
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
+def test_r12s_verdict_in_the_memo_is_the_one_band_comparison_computes(memo: str, flat: str):
+    """R12's disposition, recomputed from the parquet rather than read off the prose.
 
-    A2 has no rows: the release encoders were pretrained with `norm_pix_loss` on and §4.3
-    registers no way to recover a masked patch's scale, so `benchmark.zeroshot` refuses rather
-    than picking one (#173). R12's contingency is an ordering against A1, so with zero bands
-    compared the verdict is *pending*, and `band_comparison`'s own rule applies to the memo too:
-    **not computed yet is not "did not beat A1"**. Reporting the negative result here would
-    claim a finding the run never produced.
+    #173 registered §4.3's per-patch scale estimator and A2 was scored through it, so the
+    contingency is computable: an ordering against A1 over §5's four ruggedness bands on RMSE,
+    ties losing, over the instances both arms scored. The memo's R12 row has to state *that*
+    verdict — the number of bands A2 won and the register's own word for the outcome — and the
+    memo must say in its own voice that the estimator was registered before the row was read,
+    because "chosen after seeing the ordering" is the tunability R12 exists to prevent.
     """
-    assert "#173" in flat
-    assert "norm_pix" in flat
+    from benchmark import results, zeroshot
 
-    #: Asserted positively first, so the check below cannot pass by the phrase simply being
-    #: absent. A memo that discussed R12's contingency nowhere at all would satisfy a
-    #: purely negative test while leaving the rule's disposition unstated.
-    row = _disposition_rows(MEMO.read_text())["R12"]
-    assert "Pending" in row or "pending" in row, (
-        f"R12's disposition does not say pending: {row!r}. With no A2 rows the contingency "
-        f"has no verdict (#167, #173)."
+    a1 = results.rows_for_cell(RESULTS, arm="A1", size="20k", seed=0, columns=zeroshot.COMPARISON_COLUMNS)
+    verdicts = {}
+    for arm in ("A2-R5", "A2-R4"):
+        a2 = results.rows_for_cell(RESULTS, arm=arm, size="20k", seed=0, columns=zeroshot.COMPARISON_COLUMNS)
+        assert a2, f"{arm} has no rows in the parquet; #173 scored it"
+        verdicts[arm] = zeroshot.band_comparison(a1_rows=a1, a2_rows=a2)
+
+    row = _disposition_rows(memo)["R12"]
+    headline = verdicts["A2-R5"]
+    assert headline["bands_compared"] == headline["bands_registered"] == 4
+    assert f"{headline['bands_won']} of" in row, (
+        f"R12's row does not state the computed bands won ({headline['bands_won']} of 4): {row!r}"
     )
+    if headline["negative_result"]:
+        assert "negative result" in row.lower()
+    else:
+        assert "ordering against A1" in row
+        assert "negative result" not in row.lower().replace("not a negative result", "")
+    # R4's secondary reading is stated too, at R3's prominence and never as the headline.
+    assert f"{verdicts['A2-R4']['bands_won']} of" in row or "A2-R4" in row
 
-    #: And every mention of the contingency's wording sits next to that reading — **outside §6**.
-    #: §6 is the pre-registration's own copy and *states* the rule ("reported as a negative
-    #: result if it does not beat A1 in a majority of the four bands"); it ships verbatim and
-    #: could not carry a disposition without ceasing to be verbatim. What this checks is every
-    #: place the memo speaks in its own voice. Every occurrence rather than the first, because
-    #: the rule is echoed where it is disposed of and it is that echo that could go wrong, and
-    #: `max(0, ...)` because a negative left bound would silently window the tail instead of the
-    #: head.
-    outside = _outside_section_6(MEMO.read_text())
-    a1_majority = "does not beat A1"
-    for match in re.finditer(re.escape(a1_majority), outside):
-        window = outside[max(0, match.start() - 400) : match.end() + 400]
-        assert "pending" in window.lower() or "not computable" in window, (
-            "the memo states R12's contingency as an outcome in its own voice. With no A2 rows "
-            "it is pending — not computed yet is not 'does not beat A1' (#167, #173)."
-        )
+    #: And every band mean the memo prints for the comparison is the computed one.
+    for arm, verdict in verdicts.items():
+        for band, entry in verdict["per_band"].items():
+            for value in (entry["a1"], entry["a2"]):
+                assert f"{value:.3f}" in flat or f"{value:.2f}" in flat, (
+                    f"{arm} {band}: the memo does not print {value:.3f}"
+                )
+
+    assert "#173" in flat and "norm_pix" in flat
+    assert "before" in _outside_section_6(memo).lower()  # registered before the row was read
 
 
 # --- The narrative numbers, which are the ones a hand edit reaches -------------
@@ -436,8 +442,9 @@ def test_every_printed_cell_in_the_memo_is_the_cell_the_report_computes(flat: st
     catch and no other test would either. Recomputed rather than re-derived, so a mean taken
     over a different row set fails here even when it looks plausible.
 
-    A2's twelve cells are skipped rather than special-cased — `cell_rows` returns nothing for
-    them, which is the same fact the table prints as *not scored*.
+    A cell with no rows is skipped rather than special-cased — `cell_rows` returns nothing for
+    it, which is the same fact the table would print as *not scored*. A2's twelve were that until
+    #173 scored them; now they are checked like every other cell.
     """
     from benchmark import report
 

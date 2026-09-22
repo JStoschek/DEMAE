@@ -197,41 +197,50 @@ def test_the_inpainter_takes_raw_int16_metres_not_a_normalized_tile(tiny):
         tiny.infill(_terrain().astype(np.float32), _void(slice(0, 16), slice(0, 16)))
 
 
-# --- norm_pix: the inversion that is not available -----------------------------
+# --- norm_pix: §4.3's registered inversion (#173) ------------------------------
 
 
-def test_a_norm_pix_checkpoint_is_refused_rather_than_inverted_with_the_truth():
-    """The finding this ticket surfaced, made structural.
+def test_a_norm_pix_checkpoint_is_inverted_through_the_estimate_and_never_the_truth():
+    """The finding #167 surfaced, resolved the way #173 registered it.
 
     With `norm_pix_loss` on, the decoder predicts each patch **standardized by that patch's own
     mean and variance** — and inside a void those two numbers are exactly what is unknown.
-    Recovering them from the truth is not an inversion, it is the answer: the fill would carry
-    the voided terrain's own level and spread, and A2's row would beat every arm in the table for
-    a reason no column names.
-
-    §4.2 states the underlying fact — "void filling needs absolute per-patch scale; norm-pix
-    targets discard it" — and turns `norm_pix` off for A3's fine-tune. §4.3 is silent, and R5 and
-    R4 were both pretrained with it **on**. So this refuses, naming what would have to be
-    registered before an A2 number exists.
+    Recovering them from the truth is not an inversion, it is the answer. §4.3 now registers the
+    level as the mean of A1's fill over the patch and the spread as the inverse-distance-weighted
+    spread of the patches the encoder saw, so the fill is a function of what the arm was handed.
+    Asserted the sharp way: rewrite every void pixel's truth and the fill inside the void does not
+    move by a single value.
     """
     inpainter = zeroshot.Inpainter(
         model=_tiny_model(), norm_pix=True, var_floor=1e-4, source="a fixture"
     )
-    with pytest.raises(zeroshot.ScaleUnavailable) as exc:
-        inpainter.infill(_terrain(), _void(slice(64, 96), slice(64, 96)))
+    void = _void(slice(64, 96), slice(64, 96))
+    raw = _terrain()
+    altered = raw.copy()
+    altered[void] = 3000
 
-    message = str(exc.value)
-    assert "norm_pix" in message
-    assert "§4.3" in message, "the refusal names the section that would have to register it"
-    assert "leak" in message.lower()
+    ours = inpainter.infill(raw, void)
+    theirs = inpainter.infill(altered, void)
+
+    assert np.isfinite(ours).all()
+    np.testing.assert_array_equal(ours[~void], raw[~void].astype(np.float64))
+    np.testing.assert_array_equal(ours[void], theirs[void])
+    # And it is a fill, not the input: the composite wrote something of the decoder's inside.
+    assert not np.array_equal(ours[void], raw[void].astype(np.float64))
 
 
-def test_the_norm_pix_refusal_is_raised_before_any_instance_is_scored():
+def test_an_unregistered_estimator_is_refused_before_any_instance_is_scored():
     """A refusal that costs an eval pass is one nobody consults until the bill arrives."""
+    from benchmark.config import Zeroshot
+
     inpainter = zeroshot.Inpainter(
-        model=_tiny_model(), norm_pix=True, var_floor=1e-4, source="a fixture"
+        model=_tiny_model(),
+        norm_pix=True,
+        var_floor=1e-4,
+        source="a fixture",
+        recipe=Zeroshot(level="truth"),
     )
-    with pytest.raises(zeroshot.ScaleUnavailable):
+    with pytest.raises(ValueError, match="§4.3 does not register"):
         inpainter.check_ready()
 
 
