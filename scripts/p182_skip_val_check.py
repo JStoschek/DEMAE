@@ -131,7 +131,7 @@ def _band_means(rows: list[dict]) -> dict[str, dict[str, float]]:
     for row in rows:
         by_band[row["band"]].append(row)
     return {
-        band: {m: float(np.mean([r[m] for r in items])) for m in REPORTED}
+        band: {m: float(np.nanmean([r[m] for r in items])) for m in REPORTED}
         for band, items in sorted(by_band.items())
     }
 
@@ -145,6 +145,9 @@ def _paired(a: list[dict], b: list[dict], metric: str, band: str | None, *, resa
         for r in a
         if (band is None or r["band"] == band) and key(r) in lookup
     ])
+    # An instance whose slope metric is undefined for either arm (a void too small for the
+    # eroded ring) is dropped from the pair rather than poisoning the mean; `report` says how many.
+    diffs = diffs[~np.isnan(diffs)]
     rng = np.random.default_rng(0)
     draws = rng.choice(diffs, size=(resamples, diffs.size), replace=True).mean(axis=1)
     lo, hi = np.percentile(draws, [2.5, 97.5])
@@ -164,7 +167,9 @@ def report(results: list[dict]) -> None:
     bands = sorted(means[base["arm"]])
     for metric in REPORTED:
         unit = "m" if metric == "rmse" else "deg"
-        print(f"\n{metric} ({unit}), val, band means over instances")
+        dropped = sum(1 for x in base["rows"] if np.isnan(x[metric]))
+        print(f"\n{metric} ({unit}), val, band means over instances"
+              + (f" — {dropped} instances undefined and dropped" if dropped else ""))
         print(f"{'band':<6} {'n':>5} " + "".join(f"{r['arm']:>13}" for r in results)
               + "".join(f"{'delta ' + o['arm'][:6]:>14} {'95% CI':>20}" for o in others))
         for band in [*bands, None]:
@@ -172,7 +177,7 @@ def report(results: list[dict]) -> None:
             cells = []
             for r in results:
                 rows = [x for x in r["rows"] if band is None or x["band"] == band]
-                cells.append(float(np.mean([x[metric] for x in rows])))
+                cells.append(float(np.nanmean([x[metric] for x in rows])))
             line = f"{band or 'all':<6} {n:>5} " + "".join(f"{c:>13.3f}" for c in cells)
             for o in others:
                 d, lo, hi, _ = _paired(base["rows"], o["rows"], metric, band)
