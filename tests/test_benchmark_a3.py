@@ -654,7 +654,7 @@ def test_a_void_at_the_edge_is_refused_by_the_padding(model):
 
 
 def test_a_shift_that_is_mostly_padding_is_not_averaged_in(model):
-    """§4.2's 112 px shifts are dropped, and the rule is about the canvas rather than the number.
+    """A re-declared 112 px shift is dropped, and the rule is about the canvas rather than the number.
 
     A shifted window is cut from a padded tile, so a shift of `d` px buys its view at the cost of
     `d` px of fabricated border, and the rule is that the fabrication must be no wider than the
@@ -662,29 +662,52 @@ def test_a_shift_that_is_mostly_padding_is_not_averaged_in(model):
     and pass; a 112 px shift of a 224 px tile is three-quarters padding and does not.
 
     Measured on the trained R5 arm over 200 large-bucket instances: 45.0 m with the four
-    encodings against 21.0 m without, and A1 at 28.4 m. So the clause is not merely unhelpful —
-    it is what turned A3's large bucket from a win over the classical baseline into a loss.
+    encodings against 21.0 m without, and A1 at 28.4 m. So the clause was not merely unhelpful —
+    it is what turned A3's large bucket from a win over the classical baseline into a loss, and
+    #177 struck it from §4.2 on this evidence. The rule stays as the refusal a re-declared offset
+    meets, which is what this test now exercises against the recipe §4.2 used to declare.
     """
-    recipe = Finetune()
-    kept, dropped = finetune.usable_shifts(recipe, patch_px=PATCH)
+    former = Finetune(shift_offsets=(0, 112))
+    kept, dropped = finetune.usable_shifts(former, patch_px=PATCH)
 
     assert kept == ((0, 0),)
     assert set(dropped) == {(0, 112), (112, 0), (112, 112)}
+    # The declared recipe drops nothing: §4.2 names the unshifted encoding alone since #177.
+    assert finetune.usable_shifts(Finetune(), patch_px=PATCH) == (((0, 0),), ())
     # A hypothetical half-patch shift would be kept, which is what makes this a rule and not a
     # special case for the number 112.
-    within, _ = finetune.usable_shifts(recipe.replace(shift_offsets=(0, PATCH)), patch_px=PATCH)
+    within, _ = finetune.usable_shifts(former.replace(shift_offsets=(0, PATCH)), patch_px=PATCH)
     assert len(within) == 4
 
-    # And the near-tile-scale void therefore costs the fade's four decodes, not sixteen.
-    compositor = finetune.Compositor(model=model, recipe=recipe, masks_cfg=BenchmarkConfig().masks)
-    assert compositor.decodes_for(_void(top=40, left=40, size=150)) == 4
+    # And the near-tile-scale void costs the fade's four decodes under either recipe.
+    for recipe in (former, Finetune()):
+        compositor = finetune.Compositor(
+            model=model, recipe=recipe, masks_cfg=BenchmarkConfig().masks
+        )
+        assert compositor.decodes_for(_void(top=40, left=40, size=150)) == 4
 
 
 def test_the_run_record_carries_what_the_composite_ran():
-    """A pre-registered arm scored under fewer encodings than §4.2 names says so in the record."""
-    note = finetune.composite_note(BenchmarkConfig())
+    """The record says what the composite ran, and names a deviation only when there is one.
 
-    assert note["shifted_encodings_declared"] == 4
-    assert note["shifted_encodings_run"] == 1
-    assert note["crossfade_px"] == 16 and note["crossfade_grids"] == 4
-    assert "45.0 m" in note["deviation"] and "21.0 m" in note["deviation"]
+    Under the declared recipe (§4.2 as amended by #177) there is none: one encoding declared, one
+    run. Under the recipe §4.2 used to declare, the three dropped encodings and the measurement
+    that struck them are in the record, because an arm scored under fewer encodings than its plan
+    names is a deviation a reader has to be able to find.
+    """
+    declared = finetune.composite_note(BenchmarkConfig())
+
+    assert declared["shifted_encodings_declared"] == 1
+    assert declared["shifted_encodings_run"] == 1
+    assert declared["crossfade_px"] == 16 and declared["crossfade_grids"] == 4
+    assert "deviation" not in declared and "shifted_encodings_dropped" not in declared
+
+    former = finetune.composite_note(
+        BenchmarkConfig().replace(finetune=Finetune(shift_offsets=(0, 112)))
+    )
+
+    assert former["shifted_encodings_declared"] == 4
+    assert former["shifted_encodings_run"] == 1
+    assert sorted(former["shifted_encodings_dropped"]) == [[0, 112], [112, 0], [112, 112]]
+    assert "45.0 m" in former["deviation"] and "21.0 m" in former["deviation"]
+    assert "#177" in former["deviation"]

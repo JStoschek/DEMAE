@@ -36,6 +36,20 @@
   only condition under which it was repairable. R12 stays **discursive**: it holds no value, and the only artifact
   touched is the `statement` line `task1-prereg-bar.json` carries for a reader who arrives at the file rather than at
   this ADR. The counts still read **twelve** rules.
+- **Amended by:** Task 1 build session, 2026-09-22 ([issue #177](https://github.com/JStoschek/DEMAE/issues/177)) —
+  **§4.2's shifted-encoding clause is struck, and it is not a register entry.** #177 asked this ADR to record whether
+  the answer is a registered value or a discursive rule, and it is neither: Decision 5's tunability test excludes it
+  the way it excludes the 224 px regime. The inference composite is a *recipe* decision — it fixes how the A3 arm
+  produces a fill, not how any number is read, reported or compared — so its owner is `Finetune` and
+  `BenchmarkConfig.config_hash`, and its guard is `benchmark.finetune.assert_declared`, not this register. The plan's
+  §4.2 carries the three reasons, each sufficient: 112 px is seven whole patches, so the shift leaves every patch
+  boundary where it was; a 224 px window of a 224 px tile displaced by 112 px is three-quarters fabricated canvas,
+  and [#166](https://github.com/JStoschek/DEMAE/issues/166) built and refused all three ways of filling it; and it
+  measured **45.0 m against 21.0 m** without, on the trained A3-R5 arm over 200 large-bucket instances. The deviation
+  that preceded the amendment — every A3 row scored under one encoding of the four then declared — is disclosed in
+  each run record and in the results memo rather than absorbed here, and the amendment moves every arm's
+  `config_hash`, which rows already in the parquet do not follow. **No rule's content changes and no decision is
+  re-opened.** The counts still read **twelve** rules.
 - **Context ticket:** "Decide whether the pre-registration gets its own ADR, now that it carries seven rules" ([issue #141](https://github.com/JStoschek/DEMAE/issues/141)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** the duplication and drift counts in [Context](#context) below, measured over [`task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) at `46d90ca`; Gate E's precedent in [ADR-0005 §5](0005-sampling-design.md) and `dataset.validate`; the twelve rules' own source tickets, cited per row in [The register](#the-register)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §6 item 8 (becomes the register's index), and marks the registered rule at each site in §0, §2.2, §2.3, §3.3, §5 and §9 *(2026-08-12 — [#142](https://github.com/JStoschek/DEMAE/issues/142) adds §4.3, R12's home, and §8's risk bullet as a marked site)*

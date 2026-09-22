@@ -1010,9 +1010,43 @@ One head spec, frozen across arms; only the input channel width differs
   0.75 layer-wise decay, 1.5e-3 (decoder), cosine, bf16; this is a short
   adaptation, not a new pretraining.
 - **Inference composite:** predicted patches only where voided, original pixels
-  elsewhere, then a 16 px cross-fade at patch boundaries inside the void.
-  For voids near tile scale, 4 shifted encodings (0 and 112 px offsets in x/y)
-  averaged, which suppresses patch-grid seams (standard test-time practice).
+  elsewhere, then a 16 px cross-fade at patch boundaries inside the void — four
+  half-patch-shifted grids, averaged, which is what suppresses the patch-grid
+  seam. **No further shifted encodings** *(amended 2026-09-22 —
+  [#177](https://github.com/JStoschek/DEMAE/issues/177))*. This bullet used to end
+  "For voids near tile scale, 4 shifted encodings (0 and 112 px offsets in x/y)
+  averaged, which suppresses patch-grid seams (standard test-time practice)",
+  and the clause is struck for three reasons, each sufficient on its own.
+  **It cannot do what it claims:** 112 px is seven whole patches, so a 112 px
+  shift lands every patch boundary exactly where it was — a differently
+  indexed, identically phased grid. **It cannot be implemented on this
+  benchmark's tiles:** the model takes one 224 px tile, and a 224 px window
+  displaced by 112 px is three-quarters canvas that is not the tile.
+  [#166](https://github.com/JStoschek/DEMAE/issues/166) built all three ways of
+  producing that canvas and each fails in its own direction — a roll puts a
+  far-edge cliff through the void, a reflection mirrors the void's own truth
+  into patches the encoder sees as visible terrain, and edge replication makes
+  the window a smear. **And it costs 24 m where it is tried:** on the trained
+  A3-R5 arm over 200 large-bucket instances, the four encodings averaged read
+  **45.0 m** against **21.0 m** for the cross-fade alone, with A1 at 28.4 m.
+  Every A3 row in the results parquet was scored without it, and each run
+  record says so under `training.composite`. The rule that dropped it stays —
+  a shifted encoding whose fabricated border is wider than the patch the fade
+  blends across is not a view of the tile
+  (`benchmark.finetune.usable_shifts`) — so an offset re-declared later is
+  refused on the canvas it would need, not on the number 112. What shifts at a
+  usable offset *would* buy is real but different (each puts the void at a
+  different place in the position-embedding grid), and the fade's own four
+  half-patch grids already are that, at the largest offset that is still a view
+  of the tile. Averaging over a larger canvas — a half-tile offset as a real
+  224 px window of neighbouring terrain — would be implementable, and it is a
+  different benchmark: the eval mask list, the tile store and the void geometry
+  are all per-tile. This is a recipe decision and not a register entry
+  ([ADR-0013](../adr/0013-task1-pre-registration-register.md)'s tunability
+  test excludes it: it fixes how A3 produces a fill, not how any number is
+  read), so its owner is `Finetune` and the config hash. Moving
+  `shift_offsets` moves every arm's `config_hash`; rows already in the parquet
+  carry the hash they ran under, and what they ran is in their run record.
 
 ### 4.3 Zero-shot (A2)
 

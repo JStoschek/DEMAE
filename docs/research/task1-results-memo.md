@@ -87,16 +87,22 @@ value ([#173](https://github.com/JStoschek/DEMAE/issues/173)). The arm is built
 and tested; what is missing is a registered method and a decoder-bearing
 checkpoint.
 
-**A3's inference composite ran one encoding of the four §4.2 names.** The clause
-asks for 4 shifted encodings at 0 and 112 px offsets, and a 224 px window of a
-224 px tile displaced by 112 px is three-quarters fabricated canvas — not a view
-of the tile. Measured on the trained R5 arm over 200 large-bucket instances: 45.0
-m with the shifts against 21.0 m without, with A1 at 28.4 m. The 16 px cross-fade
-— §4.2's other inference clause, and the one that actually moves the patch-grid
-statistic — is unaffected and still runs on four grids
-([#177](https://github.com/JStoschek/DEMAE/issues/177)). Every A3 row in the
-parquet was scored without the three dropped encodings, and each run record says
-so under `training.composite`.
+**A3's inference composite ran one encoding of the four §4.2 named when these
+rows were scored, and §4.2 has since struck the other three.** The clause asked
+for 4 shifted encodings at 0 and 112 px offsets, and a 224 px window of a 224 px
+tile displaced by 112 px is three-quarters fabricated canvas — not a view of the
+tile; 112 px is also seven whole patches, so the shift leaves every patch
+boundary exactly where it was. Measured on the trained R5 arm over 200
+large-bucket instances: 45.0 m with the shifts against 21.0 m without, with A1
+at 28.4 m. The 16 px cross-fade — §4.2's other inference clause, and the one
+that actually moves the patch-grid statistic — is unaffected and still runs on
+four grids. [#177](https://github.com/JStoschek/DEMAE/issues/177) amended §4.2
+on 2026-09-22: the clause is struck, the declared offsets name the unshifted
+encoding alone, and the canvas rule that dropped the three stays as the refusal
+a re-declared offset meets. Every A3 row in the parquet was scored without the
+three dropped encodings — which is now the recipe as declared — and each run
+record says so under `training.composite`; those rows carry the `config_hash`
+they ran under, which the amendment moved.
 
 ### We diverge from terratorch's default inference path
 
@@ -287,9 +293,10 @@ the fine-tuned one in five of the six printed cells — A4-R5's 29.291 against
 A3-R5's 30.388 at blob R4, and 20.858 against 28.573 at real-medium+, with 1.18M
 trainable parameters against 98.39M — and A4-R5's seam gaps are negative where
 A3-R5's are positive. A3-R5 is ahead at blob R1 alone (1.508 against 1.533).
-Part of that gap is #177's dropped encodings, which are already a deviation in
-A3's favour, since the composite that ran is the cheaper and better one. None of
-it is evidence about C1, which is scored entirely on the frozen arms.
+Part of that gap is the composite #177 settled on — the cross-fade alone, which
+was a deviation in A3's favour when these rows were scored and has been the
+declared recipe since, because it is the cheaper and better one. None of it is
+evidence about C1, which is scored entirely on the frozen arms.
 
 ## C3: label efficiency holds at the low-label end, and closes by 20k
 
@@ -582,7 +589,9 @@ the panel should be regenerated before this memo is shown to anyone outside the
 project.
 
 **Open at the time of writing:**
-[#173](https://github.com/JStoschek/DEMAE/issues/173) (A2's per-patch scale, and
-a decoder-bearing checkpoint) and
+[#173](https://github.com/JStoschek/DEMAE/issues/173) (A2's per-patch scale; the
+decoder-bearing R5 and R4 checkpoints are now on disk, md5-matched to the
+release manifests, so the estimator is the whole of what is missing).
 [#177](https://github.com/JStoschek/DEMAE/issues/177) (whether §4.2 keeps the
-shifted-encoding clause at all).
+shifted-encoding clause at all) closed on 2026-09-22 with the clause struck, and
+the A3 paragraphs above are written to that resolution.
