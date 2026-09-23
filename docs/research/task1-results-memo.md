@@ -357,6 +357,11 @@ therefore not in tension — the pretrained representation is worth about a
 five-fold label saving against from-scratch, and worth a consistent margin
 against the other two pretrained encoders at every budget.
 
+C3's 20k reading stands as registered. What it prompted — a head that sees the
+tile at full resolution, which takes the UNet's slope lead back — is a follow-up
+run after these rows existed, and is reported under its own heading below rather
+than as C3's number.
+
 ## C4: five pairs swap rank, and none of them is a C1 pair
 
 C4 is an **ordering** claim, deliberately not a metric-delta claim: the real-void
@@ -530,6 +535,93 @@ sign between cells is exactly the size that invites dropping. The ablation says
 the crop-versus-resize choice did not move A5's score materially. That is a
 finding about this benchmark and not a retraction of ADR-0011 D2, whose argument
 is geometric rather than empirical.
+
+## #182: a full-resolution skip head, as a follow-up and not a claim
+
+**This section is post hoc, and it is labelled that way on purpose.** Nothing in
+it was registered before C3's rows existed; it was designed *because* of them.
+It carries no C-claim, it moves none of the numbers above, and both of its arms
+are `printed=False` on A9-NOTHRESH's precedent. What keeps it from being a
+forking path is the order it was run in: one hypothesis, one architecture, a
+val-only check that could have stopped it, and then a single test run with no
+tuning after it ([#182](https://github.com/JStoschek/DEMAE/issues/182)).
+
+**The hypothesis.** §4.1's head sees the 14x14 token grid and the void mask,
+never the tile. Detail finer than a 16 px patch has to be rebuilt by bilinear
+upsampling, and slope is the metric that detail moves — which is where C3 found
+the UNet ahead in all six cells. `benchmark.skiphead` is §4.1's head plus a
+92,784-parameter skip path: a small encoder over the standardized A1 fill and
+the void at 224 px, one level concatenated at each upsampling stage, and a
+refinement stage at full resolution before the residual. **1,273,873** trainable
+parameters against A4-R5's 1,181,089 and the UNet's 17,465,377. §4.1's recipe
+is reused unchanged and `tune.assert_frozen` gates it.
+
+**The val check, first.** One seed at 1k tiles on the laptop, val split only:
+`slope_rmse` −0.220° (−4.6%) against the registered head, every band's interval
+excluding zero, and `rmse` −0.523 m. That was the whole case for spending the
+test split, and it undersold the result: the 20k test gain below is larger in
+every band.
+
+**Two arms, three seeds each, at 20k.** **A4-R5-SKIP** puts the skip head on
+DEMAE-R5. **A6-SKIP** puts the identical head on ImageNet-MAE, and it is the
+control the first arm needs: without it, "the skip head beats the UNet" cannot
+say whether DEMAE's pretraining or the skip path did the work.
+
+| cell | metric | A4-R5-SKIP | A6-SKIP | A7 (UNet) | A4-R5 | A6 |
+|---|---|---|---|---|---|---|
+| blob R1 | `rmse` | **1.397** | 1.457 | 1.524 | 1.533 | 1.638 |
+| blob R2 | `rmse` | **4.165** | 4.341 | 4.484 | 4.532 | 4.728 |
+| blob R3 | `rmse` | **10.044** | 10.482 | 10.866 | 10.890 | 11.545 |
+| blob R4 | `rmse` | **27.131** | 28.900 | 30.215 | 29.291 | 31.551 |
+| real-small R4 | `rmse` | **9.779** | 10.261 | 10.021 | 11.423 | 11.749 |
+| real-medium+ R4 | `rmse` | **18.486** | 19.734 | 20.265 | 20.858 | 22.175 |
+| blob R1 | `slope_rmse` | **1.077** | 1.081 | 1.078 | 1.141 | 1.148 |
+| blob R2 | `slope_rmse` | **2.328** | 2.341 | 2.336 | 2.491 | 2.507 |
+| blob R3 | `slope_rmse` | **4.448** | 4.484 | 4.482 | 4.825 | 4.873 |
+| blob R4 | `slope_rmse` | **8.877** | 9.008 | 9.015 | 9.813 | 9.989 |
+| real-small R4 | `slope_rmse` | **6.346** | 6.512 | 6.452 | 7.239 | 7.284 |
+| real-medium+ R4 | `slope_rmse` | **8.023** | 8.201 | 8.138 | 9.137 | 9.281 |
+
+Intervals are the table's own paired tile bootstrap, 10,000 resamples.
+
+**A4-R5-SKIP against the UNet: ahead in eleven of twelve readings, tied in
+one.** All six on `rmse`, from −0.127 m [−0.141, −0.115] at blob R1 to
+**−3.084 m [−3.340, −2.835]** at blob R4 and −1.779 m [−2.224, −1.372] at
+real-medium+. Five of six on `slope_rmse`, from −0.008° [−0.013, −0.004] at
+blob R2 to −0.138° [−0.160, −0.117] at blob R4. **Blob R1 slope is a tie**,
+−0.001° [−0.003, +0.001], and flat terrain is where there is least fine detail
+for a skip path to recover. Seeds agree: in eleven of the twelve readings the
+skip arm's *worst* seed beats the UNet's *best* one, but two of those slope
+margins — blob R2 and real-small — are 0.001° and 0.003°, so they are reported
+as real and narrow, not as large.
+
+**A6-SKIP against the UNet: ahead on metres, not on slope.** Five of six on
+`rmse` (behind at real-small, +0.240 m [+0.202, +0.278]), and on `slope_rmse`
+**behind in four cells and tied in two** — behind at blob R1 and R2 and on both
+real-void rows (+0.059° [+0.048, +0.071] at real-small), tied at blob R3 and R4.
+
+**So the attribution splits, and both halves are the finding.** The skip path
+alone is worth a great deal — A6-SKIP beats A6 in all twelve readings, by up to
+2.651 m at blob R4 — and with any pretrained encoder it is enough to beat a
+from-scratch UNet on elevation error in the blob family. **What beats the UNet on
+slope, and on real SRTM voids, is DEMAE's pretraining**: the same head on
+ImageNet-MAE loses there. A4-R5-SKIP is ahead of A6-SKIP in all twelve readings,
+and its worst seed beats A6-SKIP's best in all twelve, so C1's ordering survives
+the change of head. Its margin narrows — 1.769 m at blob R4 against the
+registered head's 2.260 — because part of what DEMAE's features used to supply is
+detail the skip path now hands every encoder.
+
+Seam gaps stay negative in every cell for both arms, so neither trips R7's seam
+break, and the fills join the terrain around them no worse than the registered
+head's.
+
+**What this does not license.** It is not C3's number, and C3 is not
+re-answered: the label sweep ran the registered head, and the skip arms are
+refused below 20k (`launch.assert_in_label_sweep`), so there is no skip-head
+label-efficiency curve. It is one follow-up hypothesis, tested once. Every trained
+head, every epoch, is in `data/task1/p182_pull/heads/`, and
+`tests/test_p170_results_memo.py` recomputes this section's table and every
+count in it from the parquet.
 
 ## Registered rules: every disposition
 
