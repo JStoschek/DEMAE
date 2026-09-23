@@ -30,6 +30,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pytest
 
 from benchmark import arms, prereg
@@ -584,3 +585,119 @@ def test_c4s_swapping_pairs_are_the_computed_ones_and_none_is_a_c1_pair(
             assert ordered == sorted(ordered), (
                 f"C1's ordering A4-R5 < A6 < A5 breaks at {group}/{metric}: {ordered}"
             )
+
+
+# --- #182's follow-up section --------------------------------------------------
+#
+# Post hoc, and the memo says so; that is exactly why its numbers get the same treatment as the
+# registered ones. A follow-up that beats the baseline is the section a hand edit is most tempted
+# to round in its own favour, and "eleven of twelve" is a count nobody re-derives by eye.
+
+#: The follow-up's arms, in the order its table prints them.
+_P182_ARMS: Final = ("A4-R5-SKIP", "A6-SKIP", "A7", "A4-R5", "A6")
+
+
+def _p182_section(memo: str) -> str:
+    start = memo.index("## #182")
+    return re.sub(r"\s+", " ", memo[start : memo.index("\n## ", start + 1)].replace("*", ""))
+
+
+def _p182_outcome(frame, first: str, second: str, section: str, band: str, metric: str) -> str:
+    """``win``/``tie``/``loss`` for ``first`` against ``second``, by the table's own bootstrap.
+
+    Through `report`'s private cell statistics and shared tile resample rather than
+    :func:`benchmark.report.paired_intervals`, because that enumerates the printed rows only and
+    both skip arms are ``printed=False``. The draw is seeded exactly as the printed pairs' are, so
+    an interval here is the interval `report` would print if the arm were a row.
+    """
+    from benchmark import report
+
+    stats = {
+        arm: report._cell_stats(frame, arm, section, band, size=report.HEADLINE_SIZE)
+        for arm in (first, second)
+    }
+    shared = (stats[first][0] > 0) & (stats[second][0] > 0)
+    _, means = report._draw_for(
+        stats, [first, second], shared, metric=metric,
+        resamples=report.BOOTSTRAP_RESAMPLES,
+        seed=report._draw_seed(section, band, metric, shared.tobytes()),
+    )
+    lo, hi = np.nanpercentile(means[0] - means[1], [2.5, 97.5])
+    return "win" if hi < 0 else ("loss" if lo > 0 else "tie")
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
+def test_the_182_tables_cells_are_the_computed_ones(memo: str):
+    """Every number in #182's table is the three-seed cell mean `report` would compute."""
+    from benchmark import report
+
+    frame = report.read(RESULTS)
+    section = _p182_section(memo)
+    missing = []
+    for arm in _P182_ARMS:
+        for cell, band in _PRINTED_A4_CELLS:
+            rows = report.cell_rows(frame, arm, cell, band, size=report.HEADLINE_SIZE)
+            assert rows.any(), f"{arm} has no 20k rows at {cell}/{band}; #182 scored it"
+            for metric in ("rmse", "slope_rmse"):
+                mean, _ = report.finite_mean(frame.columns[metric][rows])
+                if f"{mean:.3f}" not in section:
+                    missing.append(f"{arm} {cell}/{band} {metric} = {mean:.3f}")
+    assert not missing, "#182's table disagrees with the parquet:\n  " + "\n  ".join(missing)
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.parquet is gitignored (data/*)")
+def test_the_182_tallies_are_the_computed_ones(memo: str):
+    """The section's four counts: against the UNet for each skip arm, and the two arms head to head.
+
+    These are the sentences the section's reading rests on — "eleven of twelve", "behind in four
+    and tied in two" — and each is recomputed here from the intervals, with the seed-level claims
+    beside them.
+    """
+    from benchmark import report
+
+    frame = report.read(RESULTS)
+    section = _p182_section(memo)
+
+    def tally(first: str, second: str) -> dict[str, Counter]:
+        return {
+            metric: Counter(
+                _p182_outcome(frame, first, second, cell, band, metric)
+                for cell, band in _PRINTED_A4_CELLS
+            )
+            for metric in ("rmse", "slope_rmse")
+        }
+
+    demae = tally("A4-R5-SKIP", "A7")
+    assert demae["rmse"] == Counter(win=6), demae
+    assert demae["slope_rmse"] == Counter(win=5, tie=1), demae
+    assert "ahead in eleven of twelve readings, tied in one" in section
+
+    imagenet = tally("A6-SKIP", "A7")
+    assert imagenet["rmse"] == Counter(win=5, loss=1), imagenet
+    assert imagenet["slope_rmse"] == Counter(loss=4, tie=2), imagenet
+    assert "behind in four cells and tied in two" in section
+
+    head_to_head = tally("A4-R5-SKIP", "A6-SKIP")
+    assert head_to_head["rmse"] + head_to_head["slope_rmse"] == Counter(win=12), head_to_head
+    assert "A4-R5-SKIP is ahead of A6-SKIP in all twelve readings" in section
+
+    def worst_beats_best(first: str, second: str) -> int:
+        count = 0
+        for cell, band in _PRINTED_A4_CELLS:
+            for metric in ("rmse", "slope_rmse"):
+                per_seed = {
+                    arm: [
+                        report.finite_mean(frame.columns[metric][
+                            _seed_rows(frame, arm, cell, band, seed)
+                        ])[0]
+                        for seed in (0, 1, 2)
+                    ]
+                    for arm in (first, second)
+                }
+                count += max(per_seed[first]) < min(per_seed[second])
+        return count
+
+    assert worst_beats_best("A4-R5-SKIP", "A7") == 11
+    assert "in eleven of the twelve readings the skip arm's worst seed beats the UNet's best" in section
+    assert worst_beats_best("A4-R5-SKIP", "A6-SKIP") == 12
+    assert "its worst seed beats A6-SKIP's best in all twelve" in section

@@ -8,10 +8,13 @@
     "A3-R5": "demae-r5",
     "A4-R4": "demae-r4",
     "A4-R5": "demae-r5",
+    "A4-R5-SKIP": "demae-r5",
     "A4-S": "demae-vits",
     "A5": "terramind",
     "A5-BICUBIC": "terramind-bicubic",
+    "A5-SKIP": "terramind",
     "A6": "imagenet-mae",
+    "A6-SKIP": "imagenet-mae",
     "A7": null,
     "A9": "terramind-tokenizer",
     "A9-NOTHRESH": "terramind-tokenizer"

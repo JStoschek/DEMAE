@@ -395,9 +395,14 @@ class Resolution:
             # prints a row exactly as wide as a good one. The import is deferred because
             # `benchmark.tune` reaches `benchmark.train`, which reaches this module — a cycle,
             # not a dependency this module is avoiding.
-            from . import head, tune
+            from . import head, skiphead, tune
 
-            lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")
+            if self.arm.reads_full_res_tile:
+                # The skip variant (#182) prints its own count under its own label, so a
+                # pre-flight never reads 1.18M for a head that trains 1.27M.
+                lines.append(f"{'skip head':<16} {skiphead.format_parameters(encoder.width)}")
+            else:
+                lines.append(f"{'head':<16} {head.format_parameters(encoder.width)}")
             lines.extend(tune.format_frozen(self.config.head))
         if self.arm.trains == "encoder+decoder":
             # §4.2's recipe, on the same rule as the two above and for the same reason: an arm
