@@ -421,20 +421,87 @@ finding.
 
 ## 8. Compute budget
 
-| Item | 4090-hours | Notes |
-|---|---|---|
-| Label generation (buffered re-reads + WhiteboxTools + Iwahashi zonal) | CPU/network only | local or a cheap CPU box |
-| Linear-probe grid (arms x fractions x 3 seeds) | 1-2 | encoders inline, no cache (#184); re-priced by #191 |
-| UperNet grid (B2/B5/B6/B9 + B2-R4/B2-S x fractions x 3 seeds) | 6-9 | the main line item |
-| B7 UNet (fractions x 3 seeds) | 3-5 | |
-| B3 fine-tune | 2-4 | 100% labels only |
-| Ablations (B8, B4-ALT/B5-ALT at 100%, L- and flatness-sensitivity rescore) | 2-3 | no 10 m regime (#190) |
-| Representation suite (5.1 to 5.4 + concatenation probe) | 1-2 | mostly CPU |
-| B9 TerraMind backbone | 2-4 | a planned arm (#190); its linear and UperNet cells are in the grid lines above once re-priced |
-| **Total** | **19-32** | **~$6-11 at $0.34/hr**; every line re-priced by #191 |
+**Measured, 2026-10-15 ([#191](https://github.com/JStoschek/DEMAE/issues/191)).** This replaces
+a table of 19-32 "4090-hours" that was written the way Task 1's §7 was. Task 1's was high; this
+one was **low by about 3x**. Every line is a primitive times a count.
+[`p191-task2-primitives.json`](p191-task2-primitives.json) holds the primitives and
+`scripts/p191_price.py` holds the arithmetic, so a recipe change is re-priced by re-running it,
+not re-measuring.
 
-Combined with Task 1's 20-33 hours, the two-task program lands at roughly
-$13-22, inside the < $50 envelope with the mandated slack.
+**How the primitives were taken.** Each Task 2 step was timed on the laptop's MPS and carried to
+the rented **RTX 5080** at the ratio of one step that has been timed on both machines: Task 1's
+frozen-head step (R5 inline plus the 1.18M head). That step is 23.2 ms/tile on MPS and
+1.15 ms/tile in the 5080 logs of #159's nine 20k cells, a ratio of **20.1x**. The UNet's
+independently measured ratio, 21.7x on a 5090 (#175), agrees, so here one ratio covers both the
+transformer and the convnet. p120's 97x does not apply: it was anchored on compiled pretraining at
+batch 512, and the benchmark runs eagerly. B7 needs no transfer, because A7 was timed on the 5080
+(`scripts/p165_sweep.sh`).
+
+| Primitive (5080, per training tile) | ms | Kind |
+|---|---:|---|
+| Frozen ViT-B forward, inline (R5; B9 measures 0.90) | 0.92 | transferred. Agrees with the 0.93 ms "forward" phase the 5080 logged for Task 1, which also includes that head's forward |
+| Linear-probe step (§4.1) | 0.94 | transferred |
+| Seven depth-sweep probes off one forward (§5.3) | 1.13 | transferred |
+| UperNet-probe step (§4.2, 512 channels, 33.8M head) | **7.64** | transferred. The head is **7.3x the encoder it reads**. Forward only: 2.80 |
+| B3 step (ViT-B unfrozen plus UperNet) | 10.68 | transferred |
+| B7 UNet step | 5.66 | **measured** on the 5080 (A7 at 5k) |
+| Task 2 loader, 12 workers | 0.77 | transferred, see below |
+
+**The loader no longer binds.** Task 1's head epochs were loader-bound: 41.5 s per 20k on both the
+A4 head and the skip head, whose GPU halves differ by 11 s. Task 2's item drops the A1 fill, which
+was 3.9 of Task 1's 4.0 ms of per-tile CPU, and carries 0.15 MB per tile, not 0.5 MB. End to end
+through a 4-worker DataLoader it costs **0.37x** Task 1's, so ~0.77 ms/tile on the box. That is
+under every GPU step, though only 18% under the linear probe's, so a box with slower cores could
+make the linear grid loader-bound again. **Wall-clock is therefore GPU time.** (#184's "4.1x" was
+Task 1's projected *on-the-fly mask* loader, which the bank removed. It was never the measured
+loader.)
+
+Counts use fixed epochs per fraction (§4.1-§4.3), with a 1% draw of ~200 train tiles and a 10% draw
+of ~2,000. Every cell also scores the 4,523 test tiles. Two costs are **assumed rather than
+measured**: 2 s per epoch of DataLoader start-up for the train and val passes, and 60 s per cell
+for encoder load and scoring set-up.
+
+| Item | Count | 5080-min |
+|---|---|---:|
+| Head tuning on B6/val | 12 linear + 12 UperNet configs at 100% (Task 1's grid size, assumed) | 1,447 |
+| Linear-probe grid | 6 encoders x 3 fractions x 3 seeds = 54 | 351 |
+| **UperNet grid** | 6 encoders x 3 fractions x 3 seeds = 54 | **2,374** |
+| B7 UNet | 3 fractions x 3 seeds = 9 | 306 |
+| B3 fine-tune | 100%, 2 seeds | 371 |
+| B8 + B4-ALT | linear, 100%, 3 seeds each = 6 | 75 |
+| B5-ALT | UperNet, 100%, 3 seeds | 324 |
+| Depth sweep | 6 encoders, 7 probes trained off one forward, 100%, 1 seed | 87 |
+| Concatenation probe | 100%, 3 seeds (two forwards) | 68 |
+| §5 forward passes | 6 encoders x 4 analyses (ridge, kNN, CKA/MNN, Iwahashi pooled) x 27k | 10 |
+| L- and flatness-sensitivity rescore | 4 label variants x B1/B4 x 3 seeds over test | 2 |
+| **GPU total** | | **5,414 = 90.2 h, ~$36** |
+| Geomorphon labels (buffered re-read + WhiteboxTools) | all 27k tiles | ~1.5 h laptop, network-bound (#187) |
+| Iwahashi tile-label table | one GeoTIFF | ~1 min CPU (#193) |
+
+Dollars are at the project's 5090 rate of $0.4016/hr. No 5080 price is recorded, and a 5080
+rents for less, so $36 is an upper bound at these counts.
+
+**A full UperNet cell at 100% costs 108 minutes, against a linear cell's 12.** The UperNet cells
+(the grid, B5-ALT and the UperNet half of tuning, 69 cells) are **74%** of the GPU total. Three choices this
+section does not make move the total more than anything else. They belong to the head recipes (§4,
+and the map's head-recipe ticket):
+
+| Recipe choice | GPU total |
+|---|---:|
+| As priced: 512-channel UperNet, tuned at 100% | 90.2 h, $36 |
+| Tune on the 10% draw instead | 70.2 h, $28 |
+| 256-channel UperNet (15.2M head, 3.53 ms/tile) | 54.7 h, $22 |
+| Both | 44.5 h, $18 |
+| Steps matched across fractions instead of epochs | 160.5 h, $64 |
+
+The last row matters because §4 does not yet say whether a 1% cell trains for 30 epochs of 200
+tiles or for as many steps as a 100% cell. "Same recipe at every fraction" can be read either way.
+
+**A rented box is needed.** On this laptop the same program is ~1,800 hours at 20.1x, and even
+the linear grid alone is ~120. On one 5080 it is **3.8 days** of continuous running. The cells are
+independent, so a multi-GPU box divides that, and attention, not dollars, is still the real budget.
+Task 1's GPU program came to 9.83 h, $3.95 (its §7), so the two tasks come to ~$40 as priced. That
+is inside the < $50 envelope but no longer by the margin the old table claimed.
 
 ## 9. Risks
 

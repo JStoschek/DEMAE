@@ -1,0 +1,83 @@
+{
+ "measured": "2026-10-15, laptop MPS (16 GB, 9-14 GB swap in use), bf16 autocast, ms per tile",
+ "anchor": {
+  "what": "Task 1 frozen-head step (R5 inline + 1.18M head)",
+  "box_5080_fwd_plus_bwd_s_per_20k": 23.05,
+  "box_source": "data/task1/p159_pull/*.log, 9 cells x 50 epochs: forward 18.4-18.7 s, backward 4.5 s",
+  "box_ms_per_tile": 1.1525,
+  "mps_ms_per_tile": 23.194813374478446,
+  "ratio_mps_to_5080": 20.13,
+  "cross_check": "#175: UNet 5090/MPS ratio 21.7"
+ },
+ "gpu_steps_mps_batch16": {
+  "batch": 16,
+  "vitb_forward_ms": 18.4253311563225,
+  "anchor_task1_head_ms": 23.194813374478446,
+  "linear_probe_ms": 18.936308593765716,
+  "depth_sweep_7probes_one_forward_ms": 22.74401865603674,
+  "upernet_params": 33835786,
+  "upernet_probe_ms": 154.36846396914916,
+  "finetune_vitb_upernet_ms": 215.05892360437429,
+  "b9_forward_ms": 18.13002517701534,
+  "r5_raw_forward_ms": 18.4623320310493
+ },
+ "upernet_head_alone_mps": {
+  "ch512_b8_train_ms": 138.94,
+  "ch512_b8_fwd_ms": 38.11,
+  "ch512_params": 33835786,
+  "ch512_b16_train_ms": 135.4,
+  "ch512_b16_fwd_ms": 37.87,
+  "ch256_b8_train_ms": 52.91,
+  "ch256_b8_fwd_ms": 22.87,
+  "ch256_params": 15150346,
+  "ch256_b16_train_ms": 52.52,
+  "ch256_b16_fwd_ms": 22.88
+ },
+ "loader": {
+  "cpu_per_tile_single_process_ms": {
+   "tiles": 160,
+   "read_ms": 0.025112499861279503,
+   "task1_compose_ms": 3.9335658875643276,
+   "task2_label_dihedral_ms": 0.10549245016591158,
+   "task1_getitem_ms": 3.9586783874256075,
+   "task2_getitem_ms": 0.13060495002719108
+  },
+  "dataloader_4_workers_fit": {
+   "task1": {
+    "startup_s": 5.38,
+    "ms_per_tile": 1.29
+   },
+   "task2": {
+    "startup_s": 1.98,
+    "ms_per_tile": 0.475
+   },
+   "ratio": 0.37,
+   "raw": {
+    "1280": {
+     "task1_ms": 5.49,
+     "task2_ms": 2.02
+    },
+    "2560": {
+     "task1_ms": 3.09,
+     "task2_ms": 1.75
+    },
+    "7680": {
+     "task1_ms": 1.99,
+     "task2_ms": 0.73
+    }
+   },
+   "zero_workers_2560": {
+    "task1_ms": 4.5,
+    "task2_ms": 0.14
+   }
+  },
+  "box_task1_loader_ms_per_tile": 2.07,
+  "box_source": "A4 head: load 18.3 + gpu 23.1 = 41.4 s; skip head: load 7.8 + gpu 33.9 = 41.7 s over 20k -> loader-bound at ~41.5 s",
+  "task2_box_ms_per_tile_transferred": 0.766
+ },
+ "b7_unet_5080": {
+  "train_ms_per_tile": 5.66,
+  "val_s_per_epoch": 5.4,
+  "source": "scripts/p165_sweep.sh footer, A7 5k"
+ }
+}
