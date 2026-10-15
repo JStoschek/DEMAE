@@ -340,4 +340,12 @@ linear-probe lineage) · DINOv2 (arXiv 2304.07193, kNN protocol) · CKA
 (Kornblith et al., arXiv 1905.00414) · mutual-nearest-neighbor alignment
 (arXiv 2405.07987) · GEO-Bench (arXiv 2306.03831) · Self-Supervised Masked DEM
 Encoding (arXiv 2309.03367, the low-label DEM-segmentation template) ·
-GeomorPM (doi:10.1080/13658816.2024.2414409, task-level comparability).
+GeomorPM (doi:10.1080/13658816.2024.2414409; weights doi:10.6084/m9.figshare.25756806.v1,
+CC BY 4.0), cited as the nearest prior DEM-pretrained model and the source of a candidate
+frozen-encoder arm, **not** for comparability. *(Amended 2026-10-15,
+[#185](https://github.com/JStoschek/DEMAE/issues/185): this entry cited GeomorPM for
+"task-level comparability". There is none. No landform number of theirs is readable, and
+their task has five classes from what is very probably China's 1:1M geomorphological map,
+scored per tile after a full fine-tune. The released pretrained encoder could still be
+probed under our heads; whether it becomes an arm is #190's call. See
+[`p185-geomorpm-task2.md`](p185-geomorpm-task2.md).)*
