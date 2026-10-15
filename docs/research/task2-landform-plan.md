@@ -133,8 +133,11 @@ function": nothing in the Iwahashi map is a function of GLO-30.
 ### 3.3 Tiles, splits, fractions
 
 Same committed lists as Task 1 (20k train / 2k val / 5k test, geographic
-geocell splits, stratified over the k=20 strata), which means the frozen
-feature caches from Task 1 are reused directly for the clean tiles. Label
+geocell splits, stratified over the k=20 strata). No features carry over from Task 1:
+every Task 1 encoder input is an A1-filled voided tile, so no clean-tile
+feature was ever computed, and Task 1 runs its encoders inline with no cache
+(#121). What carries over is the ADR-0012 extractor, which Task 2 also runs
+inline (#184). Label
 fractions are drawn by **geocell, not by tile** (1% of geocells, 10% of
 geocells, nested), because a real low-label regime means whole regions
 unlabeled, not a thin uniform scatter; the nested draw is seeded and committed.
@@ -154,8 +157,12 @@ CC-BY 4.0).
 LayerNorm on frozen last-layer patch tokens, a single 1x1 conv (d -> 10
 classes), bilinear upsample to 224, weighted cross-entropy. No hidden layers,
 no augmentation beyond the pretraining-native dihedral group applied jointly to
-tile and label raster. AdamW, lr 1e-3, wd 0, cosine, 30 epochs, batch 256 over
-cached features; converges in minutes per cell. 3 seeds per cell. The linear
+tile and label raster. AdamW, lr 1e-3, wd 0, cosine, 30 epochs, batch 256,
+with the frozen encoder run inline through the ADR-0012 extractor and reading
+its `output`. Inline is what keeps the dihedral augmentation possible: the
+feature of a rotated tile is not the rotated feature of the tile, so a cache
+would have to hold all eight orientations or drop the augmentation. 3 seeds
+per cell. The linear
 probe is the headline instrument for C1 because no decoder capacity can mask
 representation differences.
 
@@ -164,8 +171,11 @@ representation differences.
 UperNet over 4 intermediate layers (indices 3, 6, 9, 12 of 12 for every
 encoder, stated explicitly since layer choice is a known sensitivity), frozen
 encoder, ~30M-param head, weighted CE, AdamW lr 6e-4, 40 epochs, batch 64.
-Intermediate-layer features are cached once per encoder (fp16, 4 layers,
-~25 GB per encoder for 27k tiles; NVMe-resident, deleted after the runs).
+The encoder runs inline and the head reads the extractor's `intermediates` at
+those indices; nothing is cached (#184). A cache would cost 32.5 GB per ViT-B
+encoder (27k tiles x 4 layers x 196 tokens x 768 x fp16), ~146 GB for the five
+frozen encoders, against roughly an hour of GPU forward for the whole UperNet
+and linear-probe grid run inline.
 Hyperparameters tuned once on B6 (the neutral encoder) on val, then frozen for
 all arms, same discipline as Task 1.
 
@@ -185,16 +195,23 @@ all arms, same discipline as Task 1.
    re-read, WhiteboxTools pass, sensitivity variants for test only.
 2. Build the Iwahashi tile-label table (one global GeoTIFF, zonal majority per
    tile footprint; CPU).
-3. Extend Task 1's feature caches with intermediate layers.
+3. Pin every frozen encoder in the ADR-0012 extractor registry (no feature
+   caching step: encoders run inline, #184).
 4. Tune both heads on B6/val; freeze the recipes.
 5. Core grid: B1/B2/B4/B5/B6 x {1%, 10%, 100%} x seeds; B7 x fractions.
 6. B3 fine-tune; B8 ablation; TerraMind normalization and 10 m ablations.
-7. Representation suite (§5), mostly CPU over cached features.
+7. Representation suite (§5): one inline pass per analysis over a fixed tile
+   set.
 8. B9 if budget remains.
 
 ## 5. The representation-comparison suite
 
-Runs over the same cached features; nearly free; this is the part of the
+Each analysis is one inline pass of the ADR-0012 extractor over a fixed tile
+set, holding in memory only what it needs and writing no features to disk
+(#184): ridge (§5.1) and CKA (§5.4) accumulate their covariances batch by
+batch; kNN (§5.2) and MNN hold mean-pooled embeddings (~83 MB per encoder at
+27k tiles x 768 fp32); the depth sweep (§5.3) and the concatenation row are
+linear probes run inline as in §4.1. Nearly free; this is the part of the
 project with no published precedent (nobody has probed the TerraMind DEM
 tokenizer encoder as a representation model).
 
@@ -211,8 +228,12 @@ geometry lives in the features."
 
 Mean-pooled, L2-normalized tile embeddings; cosine 20-NN classification on
 (a) the corpus's own k=20 stratum labels (ready-made, zero cost) and (b) the
-Iwahashi 15-group tile labels. No training at all; reuses the
-`pretrain.probe` machinery and its committed probe set.
+Iwahashi 15-group tile labels. No training at all. Runs on Task 2's own
+committed lists (train tiles as the neighbour bank, test tiles as queries),
+since the Iwahashi table is built over those and not over `pretrain.probe`'s
+5k corpus-val probe set. Reuses `pretrain.probe`'s `neighbour_bank` and
+`knn_classify` only; features come from the ADR-0012 extractor, not
+`pretrain.probe.extract_features`, which is DEMAE-only (#184).
 
 ### 5.3 Depth sweep
 
@@ -249,8 +270,8 @@ an interesting, honest finding.
   test tiles (10k resamples) for the key pairs (B1 vs B4, B1 vs B6, B2 vs B7)
   with 95% CIs; CI-excludes-zero marked in tables. Seed spread and bootstrap
   CI reported separately.
-- **Efficiency footnote:** params (frozen + trained) per arm; feature-cache
-  reuse noted so the compute story is honest.
+- **Efficiency footnote:** params (frozen + trained) per arm; inline
+  frozen-forward cost per arm stated so the compute story is honest.
 
 ## 7. Fairness checklist (verbatim into the writeup)
 
@@ -280,8 +301,7 @@ an interesting, honest finding.
 | Item | 4090-hours | Notes |
 |---|---|---|
 | Label generation (buffered re-reads + WhiteboxTools + Iwahashi zonal) | CPU/network only | local or a cheap CPU box |
-| Intermediate-layer feature caching (3 to 5 encoders) | 2-3 | extends Task 1 caches |
-| Linear-probe grid (arms x fractions x 3 seeds) | 1-2 | minutes per cell on cached features |
+| Linear-probe grid (arms x fractions x 3 seeds) | 1-2 | encoders inline, no cache (#184); re-priced by #191 |
 | UperNet grid (B2/B5/B6 x fractions x 3 seeds) | 6-9 | the main line item |
 | B7 UNet (fractions x 3 seeds) | 3-5 | |
 | B3 fine-tune | 2-4 | 100% labels only |
@@ -324,7 +344,7 @@ $13-22, inside the < $50 envelope with the mandated slack.
 3. A results memo in `docs/research/` answering C1, C2, C3 with numbers, the
    fairness checklist, and the CKA/MNN geometry findings including the
    concatenation row.
-4. Reusable frozen-feature caches and probe harness: this is also the
+4. The ADR-0012 extractor plus the probe harness: this is also the
    infrastructure any future task (bare-earth correction, Task 3) plugs into.
 
 ## 11. Key sources
