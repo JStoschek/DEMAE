@@ -1,0 +1,128 @@
+{
+  "repo_id": "ibm-esa-geospatial/TerraMind-1.0-base",
+  "filename": "TerraMind_v1_base.pt",
+  "revision": "fb96c70d0a5f68dcc44030b89cbfd8ec3fb0c67a",
+  "file": {
+    "bytes": 1518713958,
+    "md5": "690349bd1328e50b64979847d4f362e7",
+    "sha256": "83c3a0938067c83867a46e564443c2fa38383bf4f966d931b11cb025b847d7ec"
+  },
+  "file_tensors": 374,
+  "file_numel": 465032448,
+  "constants_by_name": {
+    "v1_pretraining_mean[untok_dem@224]": [
+      670.665
+    ],
+    "v1_pretraining_std[untok_dem@224]": [
+      951.272
+    ],
+    "v1_pretraining_mean[tok_dem@224]": [
+      670.665
+    ],
+    "v1_pretraining_std[tok_dem@224]": [
+      951.272
+    ]
+  },
+  "modalities": [
+    "DEM"
+  ],
+  "tokenizers_built": [],
+  "model_keys_missing_from_file": [],
+  "model_keys_shape_mismatch": [],
+  "all_model_tensors_from_file": true,
+  "params": 85151232,
+  "buffers": {
+    "encoder_embeddings.untok_dem@224.pos_emb": 150528,
+    "encoder.0.norm1.bias": 768,
+    "encoder.0.norm2.bias": 768,
+    "encoder.1.norm1.bias": 768,
+    "encoder.1.norm2.bias": 768,
+    "encoder.2.norm1.bias": 768,
+    "encoder.2.norm2.bias": 768,
+    "encoder.3.norm1.bias": 768,
+    "encoder.3.norm2.bias": 768,
+    "encoder.4.norm1.bias": 768,
+    "encoder.4.norm2.bias": 768,
+    "encoder.5.norm1.bias": 768,
+    "encoder.5.norm2.bias": 768,
+    "encoder.6.norm1.bias": 768,
+    "encoder.6.norm2.bias": 768,
+    "encoder.7.norm1.bias": 768,
+    "encoder.7.norm2.bias": 768,
+    "encoder.8.norm1.bias": 768,
+    "encoder.8.norm2.bias": 768,
+    "encoder.9.norm1.bias": 768,
+    "encoder.9.norm2.bias": 768,
+    "encoder.10.norm1.bias": 768,
+    "encoder.10.norm2.bias": 768,
+    "encoder.11.norm1.bias": 768,
+    "encoder.11.norm2.bias": 768,
+    "encoder_norm.bias": 768
+  },
+  "buffers_total": 169728,
+  "state_dict_numel": 85320960,
+  "params_by_group": {
+    "encoder_embeddings": 197376,
+    "encoder": 84953088,
+    "encoder_norm": 768
+  },
+  "layernorm_bias_buffers": {
+    "count": 25,
+    "max_abs": 0.0
+  },
+  "pos_emb_shape": [
+    1,
+    196,
+    768
+  ],
+  "pos_emb_is_buffer": true,
+  "embedding_image_size": [
+    224,
+    224
+  ],
+  "pos_emb_vs_sincos14_maxabs": 5.960464477539063e-08,
+  "proj_weight_std": 0.029672617092728615,
+  "xavier_uniform_init_std": 0.04419417382415922,
+  "encoder_depth": 12,
+  "num_register_tokens": 0,
+  "encoder_norm": "LayerNorm",
+  "tiles": 60,
+  "forward": {
+    "input": [
+      4,
+      1,
+      224,
+      224
+    ],
+    "returned_len": 12,
+    "returned_shapes": [
+      [
+        4,
+        196,
+        768
+      ]
+    ],
+    "hooked_len": 12,
+    "blocks_1_to_11_returned_equal_raw_hook": true,
+    "returned_12_minus_encoder_norm_raw12_maxabs": 0.0,
+    "cos_returned12_vs_raw_block12": {
+      "mean": 0.9575753211975098,
+      "p01": 0.9417881965637207,
+      "min": 0.6610264182090759
+    },
+    "rms_raw_block12": 8.08601557413737,
+    "rms_returned12": 1.220717453956604,
+    "cos_output_wrong_pair_vs_v1": {
+      "TerraMesh loader": {
+        "mean": 0.9976399540901184,
+        "p01": 0.9681700468063354,
+        "min": -0.32171425223350525
+      },
+      "v0.1 tok_dem@224": {
+        "mean": 0.8753102421760559,
+        "p01": 0.2583424150943756,
+        "min": -0.059030987322330475
+      }
+    }
+  }
+}
