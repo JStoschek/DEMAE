@@ -46,7 +46,7 @@ reads "to pin" is planned, not runnable, until its pin lands (#190).
 | B6 | ImageNet-MAE frozen (linear + UperNet) | `imagenet-mae`, mmselfsup MAE ViT-B, 1-channel patch embed collapsed (the `pretrain.init` recipe), `91ecc034…` | identical heads | 1/10/100% | core, C1 |
 | B7 | UNet from scratch | none | everything | 1/10/100% | C2, C3 |
 | B8 | TerraMind 5-d latent probe | new entry: post-`quant_proj`, pre-FSQ, same weights and md5 as `terramind` | linear probe | 100% | ablation |
-| B9 | TerraMind backbone, frozen (linear + UperNet) | new entry: `terramind_v1_base` with raw DEM input (`untok_dem@224`), to pin | identical heads | 1/10/100% | core, C1 |
+| B9 | TerraMind backbone, frozen (linear + UperNet) | `terramind-backbone`, `terramind_v1_base` (`TerraMind_v1_base.pt` at rev `fb96c70`) with raw DEM input, `690349bd…`; the tokenizer's diet, looked up under `untok_dem@224`; native 14x14 grid, no ADR-0011 derivation | identical heads; the linear probe reads the normed `output` | 1/10/100% | core, C1 |
 | B1-R4 / B2-R4 | DEMAE R4, frozen | `demae-r4`, ImageNet-warm-started release ViT-B, `59e8346c…` | identical heads | 1/10/100% | extra row, never C1's number |
 | B1-S / B2-S | DEMAE ViT-S, frozen | `demae-vits`, exported from R1, `a1e50e5c…` | identical heads | 1/10/100% | appendix, no bootstrap pair |
 | B4-ALT / B5-ALT | TerraMind fed per-tile-standardized input | new entry: same weights and md5 as `terramind`, DEMAE's diet | identical heads | 100% | altitude-passthrough control (§2.1) |
@@ -65,7 +65,12 @@ directly; it is a planned arm, not a budget-permitting one, and C1 is read
 against the stronger of B4/B5 and B9. The altitude-passthrough row and B8 are
 registry entries of their own rather than flags, on the `terramind-bicubic`
 precedent: results replace rows by arm, so a flag would let the control delete
-the row it sits beside.
+the row it sits beside. B9 enters ADR-0012 by its Amendment 2 (#195): no
+decision changes, but its `output` is `encoder_norm(block 12)`, so like
+DEMAE's its `intermediates[11]` is not its `output`, and it needs its own
+forward because terratorch's returned list never holds the raw block 12. Each
+extractor process pays one 1.5 GB read of the full any-to-any checkpoint; the
+pin is IBM's published file, not an encoder-only re-export.
 
 **Not arms.** The concatenation probe (R5 ⊕ TerraMind tokens) is a §5.4 result,
 not a row of this table. GeomorPM's pretrained encoder is not benchmarked; §2.3
@@ -117,12 +122,15 @@ table and the section's real subject is what is left.
 | DEMAE ViT-B R4, ImageNet warm start | B1-R4, B2-R4 | 85,254,144 | extra row |
 | ImageNet-MAE ViT-B | B6 | 85,405,440 | C1 comparator |
 | TerraMind DEM tokenizer ViT-B encoder | B4, B5, B4-ALT, B5-ALT, B8 | 90,172,416 | C1 comparator |
-| TerraMind backbone `terramind_v1_base` | B9 | counted when pinned | C1 comparator |
+| TerraMind backbone `terramind_v1_base` | B9 | 85,151,232 | C1 comparator |
 | DEMAE ViT-S, exported from R1 | B1-S, B2-S | 21,393,408 | appendix |
 
 Counts are `benchmark.arms.ENCODERS`' and are printed in every results table.
 The largest C1 gap is TerraMind's 5.8% over R5, at identical depth, patch size
-and token grid; B9's count joins the table with its pin. The live asymmetry is
+and token grid. B9 is 0.12% under R5 (#194: the whole gap is the biases
+TerraMind leaves out, and the gated MLP holds exactly as many weights as the
+plain one), so a C1 pair read against B9 is matched closer than any other. The
+live asymmetry is
 pretraining data, and Task 1's §2.3 already measured it for the two encoders
 both tasks share (matched optimization steps to 4.1%, TerraMind covering ~3x
 the ground area at 10 m); it is cited, not restated.
@@ -396,10 +404,13 @@ since the Iwahashi table is built over those and not over `pretrain.probe`'s
 ### 5.3 Depth sweep
 
 Linear probe (§4.1 recipe, 1 seed) at blocks 2, 4, 6, 8, 10, 12 of each
-encoder, read from the extractor's `intermediates`, plus DEMAE's `output` as
-its own point: ADR-0012 makes DEMAE's `intermediates[11]` and its `output`
-different tensors (the latter is post-norm), so block 12 of the sweep is not
-the tensor B1 reads, and the sweep has to show both. Its job, with capacity
+encoder, read from the extractor's `intermediates`, plus `output` as its own
+point for every encoder whose `output_is_normed` is true: DEMAE's, ImageNet-MAE's
+and B9's. ADR-0012 makes those encoders' `intermediates[11]` and `output`
+different tensors (the latter is post-norm; B9's sits at cosine 0.958 to its
+raw block 12), so block 12 of the sweep is not the tensor their linear probes
+read, and the sweep has to show both. The tokenizer gets no extra point: its
+`output` is its block 12 (#195). Its job, with capacity
 matched (§2, item 3), is to check that a C1 win is not a last-layer artifact;
 it also shows where each model's most linearly useful features live (MAE
 features typically peak before the final layer; tokenizer encoders may peak

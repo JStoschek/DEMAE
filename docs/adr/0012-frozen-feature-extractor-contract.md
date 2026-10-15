@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
-- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). No decision changes in either.
+- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). And 2026-10-15 ([issue #195](https://github.com/JStoschek/DEMAE/issues/195), on [#194](https://github.com/JStoschek/DEMAE/issues/194)'s measurements) — a second TerraMind encoder, the backbone, makes three sentences written for the tokenizer false for it; see the notes under Context fact 1 and Decisions 3, 5 and 7.2, and [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9). No decision changes in any of them.
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
@@ -27,6 +27,11 @@ Four facts framed the decision, three of them read out of the code and the corpu
 yields twelve tensors with **no separate post-norm entry**, its last one bit-identical to `encoder(x)`.
 `task2-landform-plan.md` §4.2 names indices "3, 6, 9, 12 of 12 **for every encoder**", so under a
 naive shared index, "layer 12" would mean a normed tensor on one side and an un-normed one on the other.
+
+> *(Amended 2026-10-15 — [#195](https://github.com/JStoschek/DEMAE/issues/195).* "TerraMind" here is
+> the DEM **tokenizer** encoder, the only TerraMind encoder in view when this was written. The
+> TerraMind **backbone** (B9) has a final `encoder_norm`, so it sits on DEMAE's side of this fact;
+> see [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9).*)
 
 **2. DEMAE has no intermediates path at all.** `return_intermediates`, `get_intermediate_layers` and
 `hidden_states` appear nowhere in `src/` or `tests/`. The only frozen-feature entry point is `encode`,
@@ -73,6 +78,13 @@ quietly fails. **The spec carries a field-level note that DEMAE's `intermediates
 Task 2's current {3, 6, 9, 12}: §4.2 calls layer choice a known sensitivity, and hard-coding four
 indices into Task 1's contract would foreclose Task 2's own sweep.
 
+> *(Amended 2026-10-15 — [#195](https://github.com/JStoschek/DEMAE/issues/195).* "Identical to block
+> 12 for TerraMind" is true of the tokenizer and false for the backbone, whose `output` is
+> `encoder_norm(block 12)` at mean cosine 0.958 to the raw block. Whether `output` is normed is the
+> per-encoder field `benchmark.arms.Encoder.output_is_normed`, not a per-family rule, and the
+> field-level note about `intermediates[11]` applies to every encoder for which it is true. See
+> [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9).*)
+
 **4. Task 1 owes the intermediates path a test even though no Task 1 arm reads it.** Shapes, ordering,
 count, and the layer-12/`output` relation on both sides. This repo has a named failure for exactly the
 shape of an untested seam — *the composition* — and an unexercised path shipped with a contract's
@@ -86,6 +98,11 @@ side: DEMAE tokenizes through timm's `PatchEmbed` (`flatten(2).transpose(1,2)` o
 and TerraMind's spatial tensor flattens identically against the same grid its `pos_emb` is built on.
 **CLS is DEMAE-family only and never enters a cross-encoder comparison** — TerraMind structurally has
 none, so any statistic pooled over it would compare one model's token to the other's absence.
+
+> *(Amended 2026-10-15 — [#195](https://github.com/JStoschek/DEMAE/issues/195).* "TerraMind emits
+> `[N, 768, 14, 14]` spatial" is the tokenizer. The backbone emits the canonical `(N, 196, D)`
+> row-major sequence natively, so there is nothing to unpack. It has no CLS, so the CLS clause holds
+> for it as written. See [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9).*)
 
 > *(Amended 2026-08-12 — [#156](https://github.com/JStoschek/DEMAE/issues/156).* This sentence was
 > written with two encoders in view, and the build had to resolve it against a three-family
@@ -123,6 +140,12 @@ different, and both tasks' C1 claims silently stop being about the same features
    to sit at that number. The *value* check is what catches a terratorch upgrade retuning the pair the
    name resolves to. §2.1's "by name rather than by value" is about **selection**, and does not mean the
    value goes unchecked.
+
+   > *(Amended 2026-10-15 — [#195](https://github.com/JStoschek/DEMAE/issues/195).* `tok_dem@224` is
+   > the tokenizer's key. The name to look up is **each checkpoint's own modality key**, declared per
+   > encoder: `untok_dem@224` for the backbone. Both resolve to `670.665 / 951.272` today, which is
+   > exactly why the name has to be the right one: a terratorch that retuned one key and not the
+   > other would pass a value check made under the wrong name. See [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9).*)
 3. **Shape and layer count** — twelve intermediates, `(N, 196, D)`, `D` matching the declared width.
 4. **The ADR-0011 `pos_emb` derivation** for the TerraMind arm, as a declared field rather than a
    convention living in extraction code.
@@ -210,3 +233,55 @@ other number instead.
 The 46,080 gap is `768 × (16² − 14²)` — ADR-0011's `pos_emb` crop, frozen position, nothing
 trainable — and p157 records the arithmetic as a checked field so the two counts are reconciled
 rather than left looking like a disagreement.
+
+### Amendment 2 (2026-10-15) — a second TerraMind encoder: the backbone (B9)
+
+**Source:** Task 2's map ([#183](https://github.com/JStoschek/DEMAE/issues/183)) made the TerraMind
+backbone a planned arm. [#194](https://github.com/JStoschek/DEMAE/issues/194) measured its extraction
+path in [`p194-b9-extraction.md`](https://github.com/JStoschek/DEMAE/blob/research/p194-b9-extraction/docs/research/p194-b9-extraction.md),
+and [#195](https://github.com/JStoschek/DEMAE/issues/195) decided how it enters this contract.
+**Supersedes:** nothing. The backbone fits every decision as taken. What this amendment corrects is
+four sentences that said "TerraMind" when they meant the tokenizer, which was the only TerraMind
+encoder this ADR had in view. They are annotated in place, under Context fact 1 and Decisions 3, 5
+and 7.2.
+
+**The encoder.** Registry name `terramind-backbone`: `ibm-esa-geospatial/TerraMind-1.0-base`, file
+`TerraMind_v1_base.pt`, revision `fb96c70d0a5f68dcc44030b89cbfd8ec3fb0c67a`, md5
+**`690349bd1328e50b64979847d4f362e7`** (computed from the file; HF publishes the sha256
+`83c3a093…b847d7ec`, which matches). Built with the DEM modality only, it has **85,151,232**
+parameters under the registry's `parameters()`-as-built rule, 0.12% under R5. The pin is ours to
+hold: terratorch's `pretrained=True` downloads with no revision and follows `main`.
+
+**How each decision reads for it:**
+
+| Decision | The backbone |
+|---|---|
+| D1, diet | `(metres − 670.665) / 951.272`, the tokenizer's pair. The affine is ours; the backbone standardizes nothing |
+| D3, `output` | `encoder_norm(raw block 12)`; `output_is_normed=True`. `intermediates[11]` is the **raw** block 12, so UperNet's blocks 3, 6, 9, 12 are all un-normed, as they are for DEMAE |
+| D5, layout | native `(N, 196, 768)`, row-major; `has_cls=False` |
+| D6, precision | **unmeasured** (below) |
+| D7.1, identity | md5 above, and the load rule below |
+| D7.2, constants | looked up under `untok_dem@224`, value-checked against `670.665 / 951.272` |
+| D7.3, shape | twelve intermediates, `D = 768` |
+| D7.4, `pos_emb` | `as_published`: the checkpoint's position table is the native 14×14 sin-cos buffer, so ADR-0011's derivation does not apply and there is nothing to ablate |
+
+**The `output` cannot come from terratorch's returned list.** `TerraMindViT.forward` overwrites the
+list's last entry with `encoder_norm(block 12)`, so the raw block 12 is never returned. Taking that list
+as `intermediates`, the way the tokenizer's forward does, would put a normed tensor at
+`intermediates[11]` for this encoder and a raw one for DEMAE: the learned-affine asymmetry this ADR's
+Consequences reject, raised by nothing. The backbone gets its own forward that keeps each block's raw
+output and applies `encoder_norm` only to make `output`.
+
+**Load rule, under D7.1.** The backbone is built with `pretrained=False` and the pinned file is loaded
+by our own `strict=True` load, as the tokenizer already is. terratorch's own loading path is not used:
+its `checkpoint_filter_fn` logs a warning and keeps the random init for a missing or misshapen key, and
+only then runs a strict load, which therefore always succeeds. A terratorch upgrade that renamed a key
+would give the backbone a random layer and raise nothing. This adds no refusal; it is what "against the
+model actually loaded" already requires. The build owes two tests beside it: every model tensor equal to
+its tensor in the file, and the unrolled forward bit-identical to terratorch's returned list for entries
+1–11, with `output` equal to its entry 12.
+
+**Precision is named, not inherited.** Amendment 1's 0.99888 is the tokenizer's. The backbone is a
+different network, and its bf16-against-fp32 agreement does not exist yet. The build measures it on
+first run against #134's 0.99 bar, as #157 did for the tokenizer. The backbone keeps the declared bf16
+compute dtype unless that measurement fails.
