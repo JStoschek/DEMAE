@@ -504,8 +504,8 @@ make the linear grid loader-bound again. **Wall-clock is therefore GPU time.** (
 Task 1's projected *on-the-fly mask* loader, which the bank removed. It was never the measured
 loader.)
 
-Counts use fixed epochs per fraction (§4.1-§4.3), with a 1% draw of ~200 train tiles and a 10% draw
-of ~2,000. Every cell also scores the 4,523 test tiles. Two costs are **assumed rather than
+Counts use fixed epochs per fraction (§4.1-§4.3) on §3.3's geocell ladder, whose rungs are exact
+budgets of 200, 2,000 and 20,000 train tiles (#189). Every cell also scores the 4,523 test tiles. Two costs are **assumed rather than
 measured**: 2 s per epoch of DataLoader start-up for the train and val passes, and 60 s per cell
 for encoder load and scoring set-up.
 
