@@ -22,6 +22,7 @@ existing ADR, surface it rather than silently overriding.
 | [0011](0011-terramind-posemb-rederived-at-14x14.md) | TerraMind's position embedding is re-derived at 14x14, not bicubically resized | Accepted |
 | [0012](0012-frozen-feature-extractor-contract.md) | The frozen-feature extractor contract: raw metres in, all twelve blocks out, committed as a file | Accepted |
 | [0013](0013-task1-pre-registration-register.md) | The Task-1 pre-registration register — twelve evidence-use rules, asserted here and anchored in plan §6 | Accepted |
+| [0014](0014-geomorphon-label-contract.md) | The geomorphon label contract: WBT v2.4.0 at L = 50 and 1.0°, ground spacing in the header, an anisotropic buffer, an ignore label | Accepted |
 
 ## Supersession
 

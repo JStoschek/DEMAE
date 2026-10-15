@@ -149,36 +149,42 @@ axis. Ruled out of Task 2's scope (#190), not deferred.
 
 ### 3.1 Primary labels: geomorphons
 
-Generated with WhiteboxTools `Geomorphons` (pin the binary version in the
-benchmark config; the algorithm is deterministic given parameters), 10 classes:
-flat, peak, ridge, shoulder, spur, slope, hollow, footslope, valley, pit.
+The label contract is [ADR-0014](../adr/0014-geomorphon-label-contract.md) (#188), and this section
+only summarizes it. WhiteboxTools v2.4.0 `Geomorphons`, pinned by binary sha256, produces 10
+classes: flat, peak, ridge, shoulder, spur, slope, hollow, footslope, valley, pit.
 
-- **Parameters, fixed and committed:** outer search radius **L = 50 cells**
-  (1.5 km at 30 m, the scale of hillslope-to-small-massif landforms), skip
-  radius 0, flatness threshold **1.0°**. These are the standard
-  literature-default settings; they go in the dataset card verbatim because
+- **Parameters, fixed and committed:** outer search radius **L = 50 cells** (1.5 km at 30 m),
+  skip 0, fdist 0, flatness threshold **1.0°**, all passed explicitly. These are **a measured
+  choice on GLO-30, not a literature default.** L = 50 is WBT's default and 1.0° is GRASS's.
+  #188's sweep found that thresholds under 0.5° erase flat, shoulder and footslope on GLO-30's
+  noise, and that 1.0° is the only tested value that keeps all ten classes while holding the
+  flattest ruggedness band under half flat. They go in the dataset card verbatim because
   geomorphon maps are parameter-sensitive.
-- **Parameter-sensitivity ablation (CPU-only, cheap):** regenerate test-set
-  labels at L = 25 and L = 100 and re-score the *already-trained* B1/B4 probes
-  against them. This shows whether the encoder ranking is an artifact of one
-  label scale; no GPU retraining needed for the check.
-- **The edge problem, solved at generation time:** a geomorphon at pixel p
-  needs terrain up to L cells away, so labels computed on a bare 224 px tile
-  are wrong in a 50 px ring (60% of the tile's area). Fix: re-read each
-  benchmark tile as a **324x324 buffered window** from the source COGs using
-  the existing `dataset.tiling` machinery (same window center, +50 px on each
-  side), compute geomorphons on the buffer, crop the center 224x224. Labels are
-  then valid everywhere. Cost: ~27k windowed COG reads, CPU + network, the
-  exact operation the corpus pipeline is built for; label rasters are uint8
-  (~50 KB/tile, ~1.4 GB total), stored like shards (gitignored, rebuildable,
-  fingerprinted). Fallback if the re-read is unwanted: compute on the 224 tile
-  and mask the 50 px ring out of loss and metrics, at the price of scoring only
-  the central 124x124.
-- **Class imbalance is structural:** slope and flat dominate globally; pit and
-  peak are rare. Handled in the loss (inverse-sqrt-frequency class weights)
-  and in the metrics (macro-F1 and mIoU as headline numbers, never overall
-  accuracy alone), and reported per ruggedness stratum, where the class mix
-  shifts drastically.
+- **Spacing:** WBT reads the unresampled tile array with a projected-CRS header carrying the
+  tile's WGS84 ground spacing (dx, dy). It never sees EPSG:4326, where it reads degrees as metres
+  and loses three classes (#187).
+- **Parameter-sensitivity ablation (CPU-only, cheap):** regenerate test-set labels at
+  **L = 25 and L = 100**, and at **flatness 0.75° and 1.25°**, one parameter at a time, and
+  re-score the *already-trained* B1/B4 probes against them. This shows whether the encoder ranking
+  is an artifact of one label setting; no GPU retraining is needed. Flatness is in the set because
+  the labels are more sensitive to it than to L.
+- **The edge problem, solved at generation time:** a geomorphon at pixel p needs terrain L·dy
+  metres away, so labels computed on a bare 224 px tile are wrong over half the tile (#187). Fix:
+  re-read each benchmark tile from the source COGs with **L rows and ⌈L·dy/dx⌉ columns** of buffer
+  on each side (the column buffer is 58 px at the median and 224 px at worst for L = 50), compute
+  geomorphons on the buffer, and crop the centre 224×224. A test tile is read once at the widest
+  variant's buffer. Cost: ~1.5 h of laptop wall-clock, network-bound (#187). Label rasters are
+  uint8, stored like shards (gitignored, rebuildable, fingerprinted). There is no ring-mask
+  fallback.
+- **Ignore label (255):** ocean pixels (exact-zero fill) and pixels whose search window reaches
+  data missing from the GLO-30 release are excluded from loss, metrics and class weights. Verified
+  ocean gaps read as 0 m, and the two polar tiles at E179 wrap across the antimeridian. The tile
+  lists stay identical to Task 1's.
+- **Class imbalance is structural:** slope and flat dominate globally; pit and peak are rare.
+  Handled in the loss (inverse-sqrt-frequency class weights, computed once over the full train
+  list's non-ignore pixels and used unchanged at every label fraction) and in the metrics (macro-F1
+  and mIoU as headline numbers, never overall accuracy alone), and reported per ruggedness stratum,
+  where the class mix shifts drastically. Steep bands contain no flat or footslope at all.
 
 ### 3.2 Secondary labels: Iwahashi & Pike 2018 (independence check)
 
@@ -208,8 +214,10 @@ unlabeled, not a thin uniform scatter; the nested draw is seeded and committed.
 
 ### 3.4 Committed artifacts
 
-`benchmark/` additions: geomorphon config (tool version, L, flatness, buffer),
-label fingerprints, the Iwahashi tile-label table with the majority-fraction
+`benchmark/` additions: geomorphon config (WBT binary sha256, L, flatness, skip, fdist, the
+buffer formula, the spacing rule, the ignore rule, and the frozen class weights), label
+fingerprints per ADR-0014 (per-tile label and input-window hashes, a set fingerprint per
+variant, a config hash), the Iwahashi tile-label table with the majority-fraction
 column, fraction draws, and the dataset card covering licenses (WhiteboxTools
 labels derived from GLO-30, attribution per Copernicus licence; Iwahashi
 CC-BY 4.0).
@@ -255,8 +263,10 @@ all arms, same discipline as Task 1.
 
 ### 4.4 Order of operations
 
-1. Generate and fingerprint geomorphon labels (CPU + network, no GPU): buffer
-   re-read, WhiteboxTools pass, sensitivity variants for test only.
+1. Generate and fingerprint geomorphon labels per ADR-0014 (CPU + network, no GPU):
+   anisotropic buffer re-read, WhiteboxTools pass, ignore mask, class weights from the train
+   list, sensitivity variants (L 25/100, flatness 0.75°/1.25°) for test only, and a
+   byte-identical rebuild check on a fixed sample.
 2. Build the Iwahashi tile-label table (one global GeoTIFF, zonal majority per
    tile footprint; CPU).
 3. Pin every frozen encoder in the ADR-0012 extractor registry (no feature
@@ -364,8 +374,8 @@ finding.
 6. Geomorphon circularity stated plainly: the primary label measures
    representation quality of the input's own geometry; Iwahashi is the
    independent check; both must point the same way for C1 to be claimed.
-7. Label-generation parameters committed; the L-sensitivity ablation shows the
-   encoder ranking is not an artifact of one geomorphon scale.
+7. Label-generation parameters committed (ADR-0014); the L- and flatness-sensitivity
+   ablations show whether the encoder ranking is an artifact of one geomorphon setting.
 8. Geographic geocell splits only; fraction draws by geocell; nested subsets.
 9. Pre-registration: this memo is committed before the first head trains;
    C1-C3 defined above any result.
@@ -379,7 +389,7 @@ finding.
 | UperNet grid (B2/B5/B6/B9 + B2-R4/B2-S x fractions x 3 seeds) | 6-9 | the main line item |
 | B7 UNet (fractions x 3 seeds) | 3-5 | |
 | B3 fine-tune | 2-4 | 100% labels only |
-| Ablations (B8, B4-ALT/B5-ALT at 100%, L-sensitivity rescore) | 2-3 | no 10 m regime (#190) |
+| Ablations (B8, B4-ALT/B5-ALT at 100%, L- and flatness-sensitivity rescore) | 2-3 | no 10 m regime (#190) |
 | Representation suite (5.1 to 5.4 + concatenation probe) | 1-2 | mostly CPU |
 | B9 TerraMind backbone | 2-4 | a planned arm (#190); its linear and UperNet cells are in the grid lines above once re-priced |
 | **Total** | **19-32** | **~$6-11 at $0.34/hr**; every line re-priced by #191 |
@@ -389,10 +399,9 @@ $13-22, inside the < $50 envelope with the mandated slack.
 
 ## 9. Risks
 
-- **Buffered re-read friction:** 27k windowed COG reads is a solved problem in
-  this repo, but transatlantic latency is not; the Dockerfile cloud-burst path
-  exists for exactly this. Fallback (ring masking) is specified and costs only
-  eval area, not correctness.
+- **Buffered re-read friction:** #187 measured it: ~1.5 h of laptop wall-clock over a home
+  network, at 16 threads. There is no ring-mask fallback (ADR-0014). The remaining risk is
+  upstream drift in the public GLO-30 bucket, which the per-tile input hash detects.
 - **Class collapse at 1% labels:** with few geocells some rare classes may
   vanish from training. Report which classes were present per fraction draw;
   do not silently re-draw until it looks nice (the draw is committed first).
