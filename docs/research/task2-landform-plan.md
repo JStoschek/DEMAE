@@ -196,7 +196,9 @@ split a/b by texture (#186). A 224 px GLO-30 tile spans ~30 label rows and
 ~30–60 label columns (more poleward, where a tile is wider in degrees), far too
 coarse for dense segmentation, so this is a **tile-level task**: majority group
 over the tile footprint = the tile's label, predicted from the pooled embedding
-(mean-pooled patch tokens, linear classifier; kNN variant in §5.2).
+(mean-pooled patch tokens, linear classifier; kNN variant in §5.2). It is
+trained **at 100% only** (#189): the 1% rung's 200 tiles leave about 90 that
+pass the 60% rule, under 6 per group across 15 groups.
 
 **The tile-label rule (#193), fixed before any probe is scored:**
 
@@ -233,10 +235,54 @@ geocell splits, stratified over the k=20 strata). No features carry over from Ta
 every Task 1 encoder input is an A1-filled voided tile, so no clean-tile
 feature was ever computed, and Task 1 runs its encoders inline with no cache
 (#121). What carries over is the ADR-0012 extractor, which Task 2 also runs
-inline (#184). Label
-fractions are drawn by **geocell, not by tile** (1% of geocells, 10% of
-geocells, nested), because a real low-label regime means whole regions
-unlabeled, not a thin uniform scatter; the nested draw is seeded and committed.
+inline (#184).
+
+**Label fractions: the geocell ladder (#189).** A real low-label regime leaves
+whole regions unlabelled, not a thin uniform scatter, so labels are withheld by
+10° geocell. Task 1's label-efficiency draw (1k ⊂ 5k ⊂ 20k, by tile,
+stratified) is not reused. What #189 measured on the head-train list:
+
+- It spans **376 train geocells** at 1–175 tiles each (median 51), so a literal
+  "1% of geocells" is about 4 cells holding **25–506 tiles** (median 210;
+  103–331 for the middle 90% of 5,000 simulated draws). Ten percent is 38 cells
+  and 1,710–2,353 tiles. The rung's data volume would be draw luck.
+- **No class vanishes at 1%.** In every simulated draw all ten classes were
+  present, with ≥129k pit and ≥137k peak pixels at the 5th percentile. A
+  geomorphon is a per-pixel local form; pit and peak occur in every ruggedness
+  band. The classes that do drop out of whole tiles are flat, shoulder and
+  footslope on steep ground, and a 1% draw reaches all four bands 99.6% of the
+  time. (Estimated by resampling #188's 50 labelled tiles within each band, so
+  within-cell correlation is not modelled.)
+- Terrain coverage is what thins: a 1% draw covers 18 of 20 strata at the
+  median, 14 at the 5th percentile, 4 at worst.
+
+The rule:
+
+- **Rungs are tile budgets, cells are the unit.** **1% (200 tiles) ⊂ 10%
+  (2,000 tiles) ⊂ 100% (20,000 tiles)**, written that way rather than "1% of
+  geocells". Geocells are taken whole in keyed order until the next one would
+  pass the budget; that next cell contributes just enough of its own tiles, in
+  keyed order, to land on the budget exactly. A rung therefore holds at most one
+  partial cell, which is still one contiguous region, and its id is recorded.
+  Stopping at the first cell that reaches the budget instead would overshoot to
+  202–292 tiles (up to 374).
+- **Nested by construction, asserted anyway.** Each ladder is one walk over
+  tiles (cell rank, then tile rank within the cell), and a rung is a prefix of it.
+- **One ladder per seed.** Ladders 0, 1 and 2 go with seeds 0, 1 and 2, and every
+  arm trains on the same three, so pairs stay paired. §6's seed spread at 1% and
+  10% then includes which regions were labelled, which the paired bootstrap over
+  test tiles cannot see. At 100% every ladder is the whole list.
+- **Not stratified.** This departs from Task 1's rule that every draw is
+  proportional over the k=20 strata, on purpose: four or five cells cannot be
+  proportional over 20 strata, and choosing cells to minimise stratum shortfall
+  (as the test-geocell selection does) would be picking the best-looking regions
+  ahead of time. Each draw's strata and band coverage is printed beside it
+  instead.
+- **Order** is `tie_rank` keyed with ladder *i*'s draw seed: over geocell ids,
+  then over tile ids within a cell. No RNG, so a redraw is byte-identical.
+- **Committed first, never re-drawn.** Each draw also reports its per-class
+  train-pixel counts. There is no merge-a-class or change-the-fraction rule,
+  because no simulated draw needed one.
 
 ### 3.4 Committed artifacts
 
@@ -245,7 +291,8 @@ buffer formula, the spacing rule, the ignore rule, and the frozen class weights)
 fingerprints per ADR-0014 (per-tile label and input-window hashes, a set fingerprint per
 variant, a config hash), the Iwahashi rebuild script with the source zip's md5
 (`5ae98dc7782c13384a1df4d8d609418f`) and a fingerprint of the tile-label table
-it produces, fraction draws, and the dataset card covering licenses
+it produces, the three geocell ladders (§3.3; one file each, md5 in the run
+record), and the dataset card covering licenses
 (WhiteboxTools labels derived from GLO-30, attribution per Copernicus licence).
 
 **The Iwahashi tile labels themselves are not committed (#193).** The
@@ -415,7 +462,8 @@ finding.
    independent check; both must point the same way for C1 to be claimed.
 7. Label-generation parameters committed (ADR-0014); the L- and flatness-sensitivity
    ablations show whether the encoder ranking is an artifact of one geomorphon setting.
-8. Geographic geocell splits only; fraction draws by geocell; nested subsets.
+8. Geographic geocell splits only; label fractions by geocell, as exact tile
+   budgets, one nested ladder per seed (§3.3).
 9. Pre-registration: this memo is committed before the first head trains;
    C1-C3 defined above any result.
 
@@ -441,9 +489,13 @@ $13-22, inside the < $50 envelope with the mandated slack.
 - **Buffered re-read friction:** #187 measured it: ~1.5 h of laptop wall-clock over a home
   network, at 16 threads. There is no ring-mask fallback (ADR-0014). The remaining risk is
   upstream drift in the public GLO-30 bucket, which the per-tile input hash detects.
-- **Class collapse at 1% labels:** with few geocells some rare classes may
-  vanish from training. Report which classes were present per fraction draw;
-  do not silently re-draw until it looks nice (the draw is committed first).
+- **Draw variance at 1% labels:** #189 found no class vanishes at 1% (pit and
+  peak are in every band), so class collapse is not the risk. The risk is which
+  ~4 regions a draw labels: a 1% rung covers as few as 14 of 20 strata at the
+  5th percentile. Handled in §3.3: exact tile budgets remove volume luck, one
+  ladder per seed puts region luck into the reported spread, and each draw's
+  coverage and per-class pixel counts are printed. A committed draw is never
+  re-drawn until it looks nice.
 - **Iwahashi label coarseness:** the 60% majority rule keeps 1,985 of 4,523
   clean test tiles, and five groups have under 30 test tiles each. Settled in
   §3.2 before scoring (#193): 60% is primary and 50% a fixed sensitivity row,

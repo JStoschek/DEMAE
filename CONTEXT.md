@@ -140,6 +140,15 @@ GitHub issue #1.
   and nesting is **asserted**, not assumed, because largest-remainder apportionment is not
   monotone in the house size. Nothing here is a redistribution question: the module commits tile
   lists and masks, **never tiles**.
+- **Geocell ladder** — Task 2's label fractions: nested head-train subsets in which labels are
+  withheld for **whole regions**, not thinned uniformly, because that is what a real low-label
+  regime looks like (Task 2 plan §3.3, [#189](https://github.com/JStoschek/DEMAE/issues/189)).
+  A rung is a **tile budget** reached by taking 10° geocells whole, so its size is fixed and only
+  *which* regions it holds is drawn; it is written "1% (200 tiles)", never "1% of geocells".
+  There is **one ladder per seed**, so a seed's spread includes which regions were labelled.
+  Unlike the **label-efficiency** draw in *Tile lists*, it is not stratified: a handful of
+  regions cannot be proportional over twenty strata, and choosing them to be would be picking
+  the answer.
 - **Train mask bank** — §3.4's second mask artifact: **K = 50 draws per head-train tile**,
   written once by Task 1's `freeze` and read by every arm, seed and hyperparameter config, so
   the mask sequence a run sees is a committed input rather than a reproduction of the
