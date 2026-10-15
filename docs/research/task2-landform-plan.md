@@ -130,6 +130,36 @@ the dataset card. Because the labels derive from a *different* DEM lineage and
 human calibration, this is the answer to "you trained on the label-generating
 function": nothing in the Iwahashi map is a function of GLO-30.
 
+**Verified 2026-10-15 ([#186](https://github.com/JStoschek/DEMAE/issues/186),
+[`p186-iwahashi-labels.md`](p186-iwahashi-labels.md)).** Corrections to the
+paragraph above:
+
+- **Source.** `gisstar.gsi.go.jp/terrain2018/` serves one zip,
+  `7.5_arc_second_compressedGeoTIFF.zip` (466 MB, md5 `5ae98dc7…418f`), over
+  plain HTTPS with no login or consent step.
+- **The raster.** The GeoTIFF is **7.5″ (~232 m), not 280 m**, so a tile spans
+  ~30 label rows. It holds the **15 groups only** (values 1–15; 255 nodata; 0
+  unclassified ice). Hengl (ISRIC) rasterized it from the authors' polygons.
+- **Grouping.** The 40 classes do not map to the 15 groups by lookup. They go to
+  12 groups by table, and groups 1–3 are then split a/b by texture. Use the
+  GeoTIFF's 15 groups. The legend is machine-readable (`Landform_legend.csv` in
+  the zip).
+- **Licence.** The page states "we believe the data … is licensed under a
+  Creative Commons CC-BY 4.0", and asks users to cite Iwahashi et al. (2018).
+  Its upstream DEM, MERIT, is CC BY-NC 4.0 / ODbL 1.0. The dataset card quotes
+  both and leaves the legal question to a human.
+- **Lineage.** MERIT DEM is built from SRTM, AW3D and Viewfinder Panoramas, with
+  no TanDEM-X, so the independence claim stands.
+- **Counts on the 5,000 committed test tiles,** majority group ÷ whole footprint:
+  - **2,240 clear 60%** (R1–R4: 624 / 539 / 593 / 484);
+  - **3,053 clear 50%** (757 / 731 / 832 / 733);
+  - on the 4,523 clean tiles, 1,985 and 2,712.
+- **Unlabellable tiles.** 639 tiles can never be labelled at any threshold: 555
+  are south of the map's 59.46° S edge, and 84 are on Arctic ice.
+- **Thin groups.** At 60%, five groups have under 30 tiles: 4 (10), 2b (17),
+  1b (22), 7 (23) and 5 (29). Whether to report at the 5-way overview level, or
+  to pool a/b, is left to the decision ticket.
+
 ### 3.3 Tiles, splits, fractions
 
 Same committed lists as Task 1 (20k train / 2k val / 5k test, geographic
@@ -145,7 +175,8 @@ unlabeled, not a thin uniform scatter; the nested draw is seeded and committed.
 label fingerprints, the Iwahashi tile-label table with the majority-fraction
 column, fraction draws, and the dataset card covering licenses (WhiteboxTools
 labels derived from GLO-30, attribution per Copernicus licence; Iwahashi
-CC-BY 4.0).
+CC-BY 4.0 as the distributor states it, with MERIT DEM's upstream terms beside it,
+per #186).
 
 ## 4. Training setup
 
