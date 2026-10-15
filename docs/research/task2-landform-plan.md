@@ -188,17 +188,43 @@ classes: flat, peak, ridge, shoulder, spur, slope, hollow, footslope, valley, pi
 
 ### 3.2 Secondary labels: Iwahashi & Pike 2018 (independence check)
 
-Global terrain-classification GeoTIFF (gisstar.gsi.go.jp/terrain2018, CC-BY
-4.0), 280 m, 40 classes grouped to the published 15 terrain groups. At 280 m a
-224 px GLO-30 tile spans ~24x24 label pixels, too coarse for dense
-segmentation, so this is a **tile-level task**: majority group over the tile
-footprint = the tile's label, predicted from the pooled embedding (mean-pooled
-patch tokens, linear classifier; kNN variant in §5.2). Tiles whose majority
-group covers < 60% of the footprint are dropped from this label set (mixed
-tiles make the label meaningless); the drop rule and the resulting counts go in
-the dataset card. Because the labels derive from a *different* DEM lineage and
-human calibration, this is the answer to "you trained on the label-generating
-function": nothing in the Iwahashi map is a function of GLO-30.
+Global terrain-classification GeoTIFF (gisstar.gsi.go.jp/terrain2018; licence
+as §3.4 states it), a rasterization of the authors' polygons at 7.5″ (~232 m at
+the equator) holding the published **15 terrain groups** directly. The 15 are
+not a lookup from the 40 classes: 40 → 12 by table, then mountains and hills
+split a/b by texture (#186). A 224 px GLO-30 tile spans ~30 label rows and
+~30–60 label columns (more poleward, where a tile is wider in degrees), far too
+coarse for dense segmentation, so this is a **tile-level task**: majority group
+over the tile footprint = the tile's label, predicted from the pooled embedding
+(mean-pooled patch tokens, linear classifier; kNN variant in §5.2).
+
+**The tile-label rule (#193), fixed before any probe is scored:**
+
+- **Fraction:** majority-group area over the **whole footprint**, area-weighted
+  per label pixel; nodata (255) and the unlegended value 0 count against the
+  majority.
+- **Threshold:** **≥ 60% is primary**, and C3 is read there only. **≥ 50% is a
+  pre-registered sensitivity row**, reported beside it and never used to decide
+  C3. The same rule labels train, val and test.
+- **Counts** (test, after #150's land filter): 1,985 of 4,523 tiles at 60%,
+  2,712 at 50%. 622 can never be labelled: Antarctica lies south of the map's
+  59.46° S edge, and Arctic ice reads 0. The 60% rule then drops more mixed
+  rugged tiles, so survival by band is roughly even (R1 48%, R2 40%, R3 45%,
+  R4 42%). **No re-weighting**: every arm is scored on the same surviving
+  tiles, so the loss cannot favour one; it limits coverage, which the dataset
+  card states (no Antarctica, no polar ice).
+- **Grouping:** all **15 groups** are the headline; the 5-way overview level
+  (bedrock mountain / hills / large highland slope / plateau-terrace / plain)
+  is a secondary table. The a/b subgroups are **not pooled**: pooling rescues
+  only 1b and 2b, not the thinnest groups (4, 5, 7, at 10–29 test tiles), and
+  the a/b texture split is where encoders are most likely to differ.
+
+Because the labels derive from a *different* DEM lineage (MERIT: SRTM, AW3D,
+Viewfinder Panoramas; no TanDEM-X) and human calibration, this is the answer to
+"you trained on the label-generating function": nothing in the Iwahashi map is
+a function of GLO-30. Independent is not uncorrelated: both DEMs sample the
+same ground, and the claim is only that the label is not a function of the
+encoder's input.
 
 ### 3.3 Tiles, splits, fractions
 
@@ -217,10 +243,20 @@ unlabeled, not a thin uniform scatter; the nested draw is seeded and committed.
 `benchmark/` additions: geomorphon config (WBT binary sha256, L, flatness, skip, fdist, the
 buffer formula, the spacing rule, the ignore rule, and the frozen class weights), label
 fingerprints per ADR-0014 (per-tile label and input-window hashes, a set fingerprint per
-variant, a config hash), the Iwahashi tile-label table with the majority-fraction
-column, fraction draws, and the dataset card covering licenses (WhiteboxTools
-labels derived from GLO-30, attribution per Copernicus licence; Iwahashi
-CC-BY 4.0).
+variant, a config hash), the Iwahashi rebuild script with the source zip's md5
+(`5ae98dc7782c13384a1df4d8d609418f`) and a fingerprint of the tile-label table
+it produces, fraction draws, and the dataset card covering licenses
+(WhiteboxTools labels derived from GLO-30, attribution per Copernicus licence).
+
+**The Iwahashi tile labels themselves are not committed (#193).** The
+distributor's grant is hedged and the upstream MERIT DEM is CC BY-NC 4.0 /
+ODbL 1.0, whose share-alike clause would reach a committed derived table if it
+applies at all. Shipping the script instead sidesteps that at no cost: the zip
+downloads without a login and the table rebuilds in about a minute. The dataset
+card quotes the distributor's licence sentence **verbatim** rather than stating
+"CC BY 4.0" as fact, carries the Iwahashi et al. (2018) citation, states
+MERIT's upstream terms beside it, and notes that the GeoTIFF is Hengl's
+rasterization of the polygons.
 
 ## 4. Training setup
 
@@ -267,8 +303,9 @@ all arms, same discipline as Task 1.
    anisotropic buffer re-read, WhiteboxTools pass, ignore mask, class weights from the train
    list, sensitivity variants (L 25/100, flatness 0.75°/1.25°) for test only, and a
    byte-identical rebuild check on a fixed sample.
-2. Build the Iwahashi tile-label table (one global GeoTIFF, zonal majority per
-   tile footprint; CPU).
+2. Build the Iwahashi tile-label table (one global GeoTIFF, area-weighted
+   majority per tile footprint under §3.2's rule; CPU) and commit its
+   fingerprint, not the table.
 3. Pin every frozen encoder in the ADR-0012 extractor registry (no feature
    caching step: encoders run inline, #184).
 4. Tune both heads on B6/val; freeze the recipes.
@@ -343,7 +380,9 @@ finding.
   ridge/spur/shoulder confusions are the geomorphologically interesting ones);
   boundary-F1 at a 2 px tolerance as a secondary number, since landform
   boundaries are where segmentation quality is visible.
-- **Tile-level (Iwahashi):** accuracy and macro-F1 over the 15 groups.
+- **Tile-level (Iwahashi):** accuracy and macro-F1 over the 15 groups at the
+  60% threshold; the 5-way overview level and the 50% sensitivity row reported
+  beside it (§3.2). Also per collapsed ruggedness stratum.
 - **Regression probes:** R² per target.
 - **Stratification:** all dense metrics also per collapsed ruggedness stratum
   (4 groups); a model that only classifies mountains well must be visible.
@@ -405,8 +444,12 @@ $13-22, inside the < $50 envelope with the mandated slack.
 - **Class collapse at 1% labels:** with few geocells some rare classes may
   vanish from training. Report which classes were present per fraction draw;
   do not silently re-draw until it looks nice (the draw is committed first).
-- **Iwahashi label coarseness:** the 60% majority rule discards mixed tiles;
-  if too many test tiles drop, relax to 50% and report both counts.
+- **Iwahashi label coarseness:** the 60% majority rule keeps 1,985 of 4,523
+  clean test tiles, and five groups have under 30 test tiles each. Settled in
+  §3.2 before scoring (#193): 60% is primary and 50% a fixed sensitivity row,
+  so there is no relax-if-too-many-drop choice left to make after looking.
+  Thin groups widen the macro-F1 CI; the paired bootstrap carries that rather
+  than a pooling choice hiding it.
 - **UperNet layer-choice sensitivity:** indices fixed at 3/6/9/12 and stated;
   the depth sweep doubles as the sensitivity check.
 - **TerraMind extraction pitfalls:** same as Task 1 (diffusers pin, NaN
