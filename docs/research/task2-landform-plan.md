@@ -15,18 +15,24 @@ the TerraMind representation comparison is run in full.
   seeds, and heads. "DEMAE" here is the R5 release encoder and nothing else;
   "TerraMind" is whichever of the tokenizer encoder (B4/B5) and the backbone
   (B9) scores higher, so the claim is read against TerraMind's stronger
-  encoder (#190). Thresholds are the register's.
-- **C2 (label efficiency, the money plot):** DEMAE-frozen at 1% of labeled
-  geocells beats or matches the from-scratch UNet at 10%, i.e. the pretraining
-  buys roughly an order of magnitude of labels. This is the plot the whole
+  encoder (#190). *Read by registered rules **L11–L14**, asserted in
+  [ADR-0015](../adr/0015-task2-pre-registration-register.md):* four pairs at 100%, all with CI lower bound > 0, gated on
+  the Iwahashi labels pointing the same way.
+- **C2 (label efficiency, the money plot):** R5 frozen with UperNet (B2) at
+  the 1% rung (200 tiles) beats or matches the from-scratch UNet (B7) at the
+  10% rung (2,000 tiles), i.e. the pretraining buys roughly an order of
+  magnitude of labels (#189's geocell ladder, §3.3). *Read by **L15–L16**
+  ([ADR-0015](../adr/0015-task2-pre-registration-register.md)):* beats if the CI lower bound > 0, matches if > −1.0 mIoU
+  point, and in at least 2 of 3 ladders. This is the plot the whole
   project is remembered by, and the claim most likely to survive even if C1's
   margins are thin.
 - **C3 (independence and practicality):** the advantage holds on the
   human-calibrated Iwahashi & Pike labels (closing the circularity objection),
   and a full fine-tune at 100% labels is at least competitive with the UNet
-  (the PANGAEA bar).
+  (the PANGAEA bar). *Read by **L17** ([ADR-0015](../adr/0015-task2-pre-registration-register.md)).*
 
-Pre-registered before the first head trains. If the UNet ties the fine-tune at
+Pre-registered before the first head trains; the register is
+[ADR-0015](../adr/0015-task2-pre-registration-register.md), indexed at §7 item 10. If the UNet ties the fine-tune at
 100% labels, that is the expected PANGAEA outcome and is reported as such; C2
 is the claim DEMAE's worth rests on.
 
@@ -53,7 +59,8 @@ reads "to pin" is planned, not runnable, until its pin lands (#190).
 
 All frozen rows run 3 seeds. B1/B2, B4/B5, B6 and B9 are the core grid. **R5
 is C1's DEMAE number unconditionally**, the rule Task 1's register made R3: an
-R4 win is reported prominently and never becomes C1's number. R4 earns its row
+R4 win is reported prominently and never becomes C1's number (*registered
+rule **L5**, [ADR-0015](../adr/0015-task2-pre-registration-register.md); the extra and control rows are **L9***). R4 earns its row
 because it is the only one that separates ImageNet init plus DEM pretraining
 from DEM pretraining alone. The ViT-S row has no ViT-S competitor (B6 is
 ViT-B only), so it is a within-DEMAE scaling row, run at every fraction because
@@ -139,7 +146,8 @@ The depth sweep's job is narrower than it was. With capacity matched, it is
 not a capacity curve but the check that a C1 win is not an artifact of which
 layer the linear probe reads. What a best-layer reversal (a comparator's best
 layer beating DEMAE's best while DEMAE wins at the last layer) does to C1 is
-the register's rule, not this section's.
+registered rule **L13** ([ADR-0015](../adr/0015-task2-pre-registration-register.md)): it qualifies C1's linear half to
+"at the registered layer" and never withdraws it.
 
 **GeomorPM is not benchmarked.** It is the one published DEM-pretrained
 encoder and technically viable frozen (#185): 14x14 tokens of 1024-d, all 24
@@ -369,8 +377,10 @@ and linear-probe grid run inline.
 - **B3:** encoder + §4.2's UperNet (same decoder, same layers), 100% labels
   only (budget), lr 1e-4 with 0.75 layer-wise decay, head lr 1e-3, 50 epochs,
   dihedral augmentation, bf16. A literature recipe, **used as given and not
-  tuned** (#196): B3 feeds only C3, at one rung. One seed plus a second if
-  variance on val looks material.
+  tuned** (#196): B3 feeds only C3, at one rung. **3 seeds**, paired with
+  B7's (*registered rule **L3***, [ADR-0015](../adr/0015-task2-pre-registration-register.md); this replaces "one seed
+  plus a second if variance on val looks material", a seed count that would
+  have been chosen after seeing the variance).
 - **B7:** the same 4-down/4-up UNet spec as Task 1's A7 (~17M params),
   1-channel input, from scratch at every label fraction, 3 seeds. **Batch 64
   and 40 epochs, B2's**, so under §4.5's floor its step counts equal B2's
@@ -432,7 +442,7 @@ the best val mIoU is the checkpoint scored on test. No early stopping. Task 1
 and PANGAEA both select on full val at every fraction. Reading val a fixed
 number of times keeps the 1% rung's 10x epochs from multiplying val's cost.
 The realism caveat (a user with 200 labelled tiles would not have 2,000
-labelled val tiles) is the register's; every arm gets the same val, so it costs
+labelled val tiles) is registered rule **L19** ([ADR-0015](../adr/0015-task2-pre-registration-register.md)); every arm gets the same val, so it costs
 realism, not fairness.
 
 **Tuning is Task 1's discipline (`benchmark.tune`), run at every rung.** One
@@ -502,7 +512,9 @@ read, and the sweep has to show both. The tokenizer gets no extra point: its
 matched (§2, item 3), is to check that a C1 win is not a last-layer artifact;
 it also shows where each model's most linearly useful features live (MAE
 features typically peak before the final layer; tokenizer encoders may peak
-earlier still). What a best-layer reversal does to C1 is the register's rule.
+earlier still). What a best-layer reversal does to C1 is registered rule
+**L13**: a reversal is a competitor's best point beating DEMAE's with a CI
+excluding zero, and it qualifies the linear half of C1 rather than withdrawing it.
 Plot: probe mIoU vs depth, one line per encoder.
 
 ### 5.4 Geometry comparison: CKA and mutual nearest neighbors
@@ -532,10 +544,21 @@ finding.
 - **Regression probes:** R² per target.
 - **Stratification:** all dense metrics also per collapsed ruggedness stratum
   (4 groups); a model that only classifies mountains well must be visible.
-- **Statistics:** 3 seeds (mean ± std) for probe cells; paired bootstrap over
-  test tiles (10k resamples) for the key pairs (B1 vs B4, B1 vs B6, B2 vs B7)
-  with 95% CIs; CI-excludes-zero marked in tables. Seed spread and bootstrap
-  CI reported separately.
+- **Statistics** (*registered rules **L1–L3, L10, L18***, asserted in
+  [ADR-0015](../adr/0015-task2-pre-registration-register.md)): claims are read on mIoU (dense) and macro-F1 (Iwahashi),
+  pooled over the test set; everything else above is printed and claims
+  nothing. Paired bootstrap over test tiles, 10,000 resamples: per seed, a
+  resample's mIoU comes from its tiles' summed confusion matrices, and the
+  statistic is the seed-paired difference averaged over 3 seeds. The test set
+  spans 13 geocells, so the tile CI is narrower than a spatially honest one;
+  the seed spread, which at 1% and 10% includes which regions were labelled,
+  prints separately as mean ± std. **Eight marked pairs**, named before any
+  result: C1's four (B1 and B2, each vs B6 and vs the stronger TerraMind
+  encoder, at 100%), C2's one (B2 at 1% vs B7 at 10%), C3's three (Iwahashi
+  R5 vs B6 and vs the stronger TerraMind; B3 vs B7 at 100%). Every other pair
+  is computed and left unmarked. A band's macro metric averages over the
+  classes present in that band; a run that never correctly predicts a class
+  present in test is flagged as class collapse, counted, and never excluded.
 - **Efficiency footnote:** params (frozen + trained) per arm; inline
   frozen-forward cost per arm stated so the compute story is honest.
 
@@ -566,6 +589,17 @@ finding.
    budgets, one nested ladder per seed (§3.3).
 9. Pre-registration: this memo is committed before the first head trains;
    C1-C3 defined above any result.
+10. The register (asserted in [ADR-0015](../adr/0015-task2-pre-registration-register.md); this item is its index):
+   L1 claim metrics, pooled only; L2 tile bootstrap, 10,000 resamples, 13
+   test geocells; L3 3 seeds, B3 and B7 included; L4 symmetric corpus
+   caveat; L5 R5 is C1's number; L6 20 tokenizer epochs; L7 symmetric GSD
+   caveat; L8 nulls as prominent as wins; L9 insulated rows; L10 per-band
+   macro and class collapse; L11 the stronger TerraMind encoder; L12 C1's
+   four pairs at 100% and the Iwahashi gate; L13 depth-sweep reversal
+   qualifies; L14 sensitivity-label swaps reported; L15 a margin of 1.0 mIoU
+   point; L16 C2's reading, 2 of 3 ladders; L17 C3's two halves; L18 eight
+   marked pairs; L19 val realism caveat; L20 reruns for infrastructure
+   failure only.
 
 ## 8. Compute budget
 
@@ -620,24 +654,24 @@ for encoder load and scoring set-up.
 | Linear-probe grid | 6 encoders x 3 fractions x 3 seeds = 54 | 314 |
 | **UperNet grid** | 6 encoders x 3 fractions x 3 seeds = 54 | **2,362** |
 | B7 UNet | 3 fractions x 3 seeds = 9 | 298 |
-| B3 fine-tune | 100%, 2 seeds | 362 |
+| B3 fine-tune | 100%, 3 seeds (#192) | 543 |
 | B8 + B4-ALT | linear, 100%, 3 seeds each = 6 | 69 |
 | B5-ALT | UperNet, 100%, 3 seeds | 315 |
 | Depth sweep | 6 encoders, 7 probes trained off one forward, 100%, 1 seed | 81 |
 | Concatenation probe | 100%, 3 seeds (two forwards) | 63 |
 | §5 forward passes | 6 encoders x 4 analyses (ridge, kNN, CKA/MNN, Iwahashi pooled) x 27k | 10 |
 | L- and flatness-sensitivity rescore | 4 label variants x B1/B4 x 3 seeds over test | 2 |
-| **GPU total** | | **4,156 = 69.3 h, ~$28** |
+| **GPU total** | | **4,337 = 72.3 h, ~$29** |
 | Geomorphon labels (buffered re-read + WhiteboxTools) | all 27k tiles | ~1.5 h laptop, network-bound (#187) |
 | Iwahashi tile-label table | one GeoTIFF | ~1 min CPU (#193) |
 
 Dollars are at the project's 5090 rate of $0.4016/hr. No 5080 price is recorded, and a 5080
-rents for less, so $28 is an upper bound at these counts.
+rents for less, so $29 is an upper bound at these counts.
 
 **A full UperNet cell at 100% costs 105 minutes, against a linear cell's 12.** The UperNet cells
 (the grid, B5-ALT and the UperNet tuning) are **68%** of the GPU total. #191 priced 90.2 h with
 12-config tuning at 100% and left four recipe choices open. #196 settled them, and this is what each
-would have cost against the 69.3 h above, the other three held at their settled values:
+would have cost against the 69.3 h it priced, the other three held at their settled values (B3's third seed, #192, adds 3.0 h to every row):
 
 | Recipe choice (#196's answer in bold) | GPU total |
 |---|---:|
@@ -649,10 +683,10 @@ would have cost against the 69.3 h above, the other three held at their settled 
 The floor costs ~4 h, and per-rung tuning costs less than #191's single 100% pass did, because a
 5-point pass at a fifth of the schedule is about one cell.
 
-**A rented box is needed.** On this laptop the same program is ~1,400 hours at 20.1x, and even
-the linear grid alone is ~105. On one 5080 it is **2.9 days** of continuous running. The cells are
+**A rented box is needed.** On this laptop the same program is ~1,450 hours at 20.1x, and even
+the linear grid alone is ~105. On one 5080 it is **3.0 days** of continuous running. The cells are
 independent, so a multi-GPU box divides that, and attention, not dollars, is still the real budget.
-Task 1's GPU program came to 9.83 h, $3.95 (its §7), so the two tasks come to ~$32 as priced. That
+Task 1's GPU program came to 9.83 h, $3.95 (its §7), so the two tasks come to ~$33 as priced. That
 is inside the < $50 envelope, though not by the margin the pre-#191 table claimed.
 
 ## 9. Risks
