@@ -5,6 +5,14 @@ on both: Task 1's frozen-head step (R5 inline + the 1.18M head), 23.2 ms/tile on
 1.15 ms/tile in the 5080 logs. B7 needs no transfer (A7 was timed on the 5080).
 
     python scripts/p191_price.py [--upernet-channels 256] [--tune-fraction 10%] [--steps-matched]
+
+#196 froze the head recipes; its budget is
+
+    python scripts/p191_price.py --floor 10% --val-reads 10 --tune-per-rung
+
+i.e. the 1% rung trains as many steps as the 10% rung, val is read 10 times per run, and tuning is
+Task 1's discipline (lr only, 5 points, the first fifth of the schedule, one seed) on B6 at every
+rung, with B7 tuning itself the same way.
 """
 from __future__ import annotations
 
@@ -19,6 +27,10 @@ ap.add_argument("--upernet-channels", type=int, default=512, choices=(512, 256))
 ap.add_argument("--tune-fraction", default="100%")
 ap.add_argument("--tune-configs", type=int, default=12)
 ap.add_argument("--steps-matched", action="store_true", help="1%%/10%% cells cost as much as 100%%")
+ap.add_argument("--floor", default=None, help="#196: a smaller rung trains as many steps as this one")
+ap.add_argument("--val-reads", type=int, default=None, help="#196: val passes per run (default: every epoch)")
+ap.add_argument("--tune-per-rung", action="store_true",
+                help="#196: 5-point lr passes at a fifth of the schedule, at every rung, linear + UperNet + B7")
 a = ap.parse_args()
 
 R = P["anchor"]["ratio_mps_to_5080"]
@@ -50,18 +62,37 @@ KINDS = {
 }
 
 
-def cell(kind: str, frac: str) -> float:
-    """Minutes for one cell: epochs x (train + val + start-up) + one test scoring pass + fixed."""
+def cell(kind: str, frac: str, schedule: float = 1.0, test: bool = True) -> float:
+    """Minutes for one cell: epochs x (train + val + start-up) + one test scoring pass + fixed.
+
+    With --val-reads, val is read that many times per run rather than every epoch, and half of the
+    per-epoch start-up goes with it. `schedule` < 1 is a tuning run cut to that share of its steps.
+    """
     k = KINDS[kind]
     n = FR["100%" if a.steps_matched else frac]
+    if a.floor:
+        n = max(n, FR[a.floor])
     val_s = unet["val_s_per_epoch"] if k["val"] is None else VAL_N * k["val"] / 1e3
     train_s = n * max(k["tr"], LOADER) / 1e3
-    return (k["ep"] * (train_s + val_s + OVER) + TEST_N * k["test"] / 1e3 + CELL_FIXED) / 60
+    ep = k["ep"] * schedule
+    if a.val_reads:
+        reads = max(1, round(a.val_reads * schedule))
+        run_s = ep * (train_s + OVER / 2) + reads * (val_s + OVER / 2)
+    else:
+        run_s = ep * (train_s + val_s + OVER)
+    return (run_s + (TEST_N * k["test"] / 1e3 if test else 0) + CELL_FIXED) / 60
+
+
+def tuning() -> tuple[str, float]:
+    if not a.tune_per_rung:
+        return (f"{a.tune_configs} linear + {a.tune_configs} UperNet configs at {a.tune_fraction}",
+                a.tune_configs * (cell("linear", a.tune_fraction) + cell("upernet", a.tune_fraction)))
+    return ("5 lr points x a fifth of the schedule x 3 rungs, linear + UperNet on B6, B7 on itself",
+            sum(5 * cell(k, f, schedule=0.2, test=False) for k in ("linear", "upernet", "unet") for f in FR))
 
 
 rows = [
-    ("Head tuning on B6/val", f"{a.tune_configs} linear + {a.tune_configs} UperNet configs at {a.tune_fraction}",
-     a.tune_configs * (cell("linear", a.tune_fraction) + cell("upernet", a.tune_fraction))),
+    ("Head tuning on B6/val", *tuning()),
     ("Linear-probe grid", "6 encoders x 3 fractions x 3 seeds = 54",
      sum(18 * cell("linear", f) for f in FR)),
     ("UperNet grid", "6 encoders x 3 fractions x 3 seeds = 54",
