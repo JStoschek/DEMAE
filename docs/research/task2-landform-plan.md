@@ -204,7 +204,7 @@ split a/b by texture (#186). A 224 px GLO-30 tile spans ~30 label rows and
 ~30–60 label columns (more poleward, where a tile is wider in degrees), far too
 coarse for dense segmentation, so this is a **tile-level task**: majority group
 over the tile footprint = the tile's label, predicted from the pooled embedding
-(mean-pooled patch tokens, linear classifier; kNN variant in §5.2). It is
+(mean-pooled patch tokens, linear classifier fitted per §4.5; kNN variant in §5.2). It is
 trained **at 100% only** (#189): the 1% rung's 200 tiles leave about 90 that
 pass the 60% rule, under 6 per group across 15 groups.
 
@@ -320,9 +320,11 @@ rasterization of the polygons.
 LayerNorm on frozen last-layer patch tokens, a single 1x1 conv (d -> 10
 classes), bilinear upsample to 224, weighted cross-entropy. No hidden layers,
 no augmentation beyond the pretraining-native dihedral group applied jointly to
-tile and label raster. AdamW, lr 1e-3, wd 0, cosine, 30 epochs, batch 256,
-with the frozen encoder run inline through the ADR-0012 extractor and reading
-its `output`. Inline is what keeps the dihedral augmentation possible: the
+tile and label raster. AdamW, wd 0, batch 256, 30 epochs at the 10% and 100%
+rungs, on §4.5's schedule; lr is tuned per rung (§4.5) over
+`{3e-4, 1e-3, 3e-3, 1e-2, 3e-2}`, Task 1's grid. The frozen encoder runs inline
+through the ADR-0012 extractor and the probe reads its `output`.
+Inline is what keeps the dihedral augmentation possible: the
 feature of a rotated tile is not the rotated feature of the tile, so a cache
 would have to hold all eight orientations or drop the augmentation. 3 seeds
 per cell. The linear
@@ -331,26 +333,54 @@ representation differences.
 
 ### 4.2 UperNet probes (B2 / B5 / B6 / B9 and the B2/B5 extra rows): the PANGAEA instrument
 
-UperNet over 4 intermediate layers (indices 3, 6, 9, 12 of 12 for every
-encoder, stated explicitly since layer choice is a known sensitivity), frozen
-encoder, ~30M-param head, weighted CE, AdamW lr 6e-4, 40 epochs, batch 64.
+**PANGAEA's UperNet, verbatim (#196):** its ViT neck (`Feature2Pyramid`,
+rescales 4/2/1/0.5 by two ConvTranspose2d, one ConvTranspose2d, identity and
+2x2 max-pool, 768 channels kept), then UperNet at **512 channels** with pool
+scales (1, 2, 3, 6), **39.3M trainable parameters** for a 768-d encoder (PANGAEA's
+Table 4 reports 39.34-39.35 for every 768-d encoder). The plan's earlier
+"~30M" matched neither this nor #191's timed head (33.8M, pool scales (1, 7));
+the extra parameters sit in a 3x3 conv at 7x7, so #191's 7.64 ms/tile stands.
+A 256-channel head would have saved ~25 h (§8) and cost the one external
+anchor these rows have.
+
+**Layers: `intermediates[3, 5, 7, 11]`** (0-indexed under ADR-0012, blocks 4, 6,
+8 and 12 of 12), PANGAEA's `output_layers` for a 12-layer ViT, for every
+encoder. The plan's earlier "indices 3, 6, 9, 12" is withdrawn. Layer choice is
+a known sensitivity; the depth sweep (§5.3) measures it rather than this choice
+hiding it.
+
+Weighted CE, AdamW, wd 0.05 (PANGAEA's), batch 64, 40 epochs at the 10% and
+100% rungs, on §4.5's schedule; lr tuned per rung (§4.5) over
+`{3e-5, 1e-4, 3e-4, 1e-3, 3e-3}`, which brackets PANGAEA's 1e-4 and the plan's
+earlier 6e-4. **Departures from PANGAEA, stated in the writeup:** PANGAEA trains
+80 epochs at batch 8 with step decay at 60% and 90% and one untuned lr; at
+20k tiles that is ~200k steps a cell, which this budget cannot carry, so the
+batch, length and schedule are ours and lr is tuned. The decoder and layers
+are theirs.
+
 The encoder runs inline and the head reads the extractor's `intermediates` at
 those indices; nothing is cached (#184). A cache would cost 32.5 GB per ViT-B
 encoder (27k tiles x 4 layers x 196 tokens x 768 x fp16), ~146 GB for five
 frozen encoders, against roughly an hour of GPU forward for the whole UperNet
 and linear-probe grid run inline.
-Hyperparameters tuned once on B6 (the neutral encoder) on val, then frozen for
-all arms, same discipline as Task 1.
 
 ### 4.3 Full fine-tune (B3) and UNet (B7)
 
-- **B3:** encoder + UperNet, 100% labels only (budget), lr 1e-4 with 0.75
-  layer-wise decay, head lr 1e-3, 50 epochs, dihedral augmentation, bf16.
-  One seed plus a second if variance on val looks material.
+- **B3:** encoder + §4.2's UperNet (same decoder, same layers), 100% labels
+  only (budget), lr 1e-4 with 0.75 layer-wise decay, head lr 1e-3, 50 epochs,
+  dihedral augmentation, bf16. A literature recipe, **used as given and not
+  tuned** (#196): B3 feeds only C3, at one rung. One seed plus a second if
+  variance on val looks material.
 - **B7:** the same 4-down/4-up UNet spec as Task 1's A7 (~17M params),
-  1-channel input, from scratch at every label fraction, 3 seeds, same
-  schedule length as B2 for comparability. This is the bar: PANGAEA says it is
-  often not beaten, and the table must be able to say so plainly if it is not.
+  1-channel input, from scratch at every label fraction, 3 seeds. **Batch 64
+  and 40 epochs, B2's**, so under §4.5's floor its step counts equal B2's
+  exactly (1,280 / 1,280 / 12,520) and "same schedule length as B2" holds in
+  steps, not just epochs. (Task 1's A7 ran at batch 128.) **B7 tunes its own
+  lr** by §4.5's procedure over `{1e-4, 3e-4, 1e-3, 3e-3, 1e-2}` (centred
+  on the 3e-3 A7 shared with Task 1's head), rather than inheriting a
+  probe's: it is the bar for C2 and C3, and an untuned bar is the "you crippled
+  the baseline" objection. This is the bar: PANGAEA says it is often not beaten,
+  and the table must be able to say so plainly if it is not.
 
 ### 4.4 Order of operations
 
@@ -363,12 +393,70 @@ all arms, same discipline as Task 1.
    fingerprint, not the table.
 3. Pin every frozen encoder in the ADR-0012 extractor registry (no feature
    caching step: encoders run inline, #184).
-4. Tune both heads on B6/val; freeze the recipes.
+4. Tune per §4.5: the linear probe and UperNet on B6/val and B7 on itself,
+   at each of 1%, 10% and 100% on ladder 0, then the fitted probes' L2 on B6;
+   freeze the recipes.
 5. Core grid: B1/B2/B4/B5/B6/B9 x {1%, 10%, 100%} x seeds; B7 x fractions;
    the B1-R4/B2-R4 and B1-S/B2-S extra rows x fractions.
 6. B3 fine-tune; B8 and B4-ALT/B5-ALT at 100%.
 7. Representation suite (§5): one inline pass per analysis over a fixed tile
    set.
+
+### 4.5 Schedule, val and tuning, shared by every trained head (#196)
+
+**Training length is epochs, with a step floor at the 10% rung.** A run's
+length is a step count, `epochs x ceil(max(n_train, 2,000) / batch)`, so the
+1% rung trains as many optimizer steps as the 10% rung (10x the epochs over its
+200 tiles) and the 10% and 100% rungs keep fixed epochs:
+
+| Head | 1% | 10% | 100% |
+|---|---:|---:|---:|
+| Linear probe (batch 256, 30 epochs) | 240 | 240 | 2,370 |
+| UperNet and B7 (batch 64, 40 epochs) | 1,280 | 1,280 | 12,520 |
+
+Fixed epochs alone (Task 1's rule, and PANGAEA's, whose smallest fraction is
+10%) would have given the 1% rung 30 linear steps (a batch of 256 is larger
+than 200 tiles) and 160 UperNet and B7 steps: the 1% row would have measured
+under-training, not representation, and flattered C2 most, since B7 learns from
+scratch where the probes start pretrained. Matching every rung to 100%'s steps
+would have cost 138 h and run 200 tiles for ~250 epochs. At 1% the sampler
+cycles its 200 tiles, reshuffled each pass, and a batch may span two passes, so
+the linear probe's batch of 256 stands at every rung.
+
+**Shape:** 5% linear warmup, then cosine to zero over the run's step count
+(Task 1's shape).
+
+**Val is all 2,000 val tiles at every rung**, read **10 times per run** (at
+10%, 20% ... 100% of its steps, the final step always included); the read with
+the best val mIoU is the checkpoint scored on test. No early stopping. Task 1
+and PANGAEA both select on full val at every fraction. Reading val a fixed
+number of times keeps the 1% rung's 10x epochs from multiplying val's cost.
+The realism caveat (a user with 200 labelled tiles would not have 2,000
+labelled val tiles) is the register's; every arm gets the same val, so it costs
+realism, not fairness.
+
+**Tuning is Task 1's discipline (`benchmark.tune`), run at every rung.** One
+knob, lr; 5 log-spaced points per head (§4.1, §4.2); each point trains the
+first fifth of its rung's schedule (a fifth of the cosine, as Task 1's 10 of 50
+epochs) at one seed on **ladder 0**, and scores as the better of its two val
+reads. The neutral encoder **B6** tunes the linear probe and UperNet; **B7
+tunes itself** the same way. The tuning runs **separately at 1%, 10% and 100%**,
+and each rung's winner applies to every arm at that rung, so arms stay matched
+within a rung: the low-label row is the plot the paper turns on, and an lr won
+on 12,520 steps over 20k tiles has no claim on 1,280 steps over 200. Ladder 0's
+regions can bend the 1% pick; full-val checkpoint selection limits the harm.
+**A winner on a grid edge widens the grid by one point that way and reruns the
+whole pass**, as Task 1's did. Winners are copied into one frozen config line
+per head per rung; a run whose recipe differs from it is refused. Batch,
+epochs, weight decay, warmup and loss weighting are fixed, not searched. B3 is
+not tuned (§4.3).
+
+**The fitted, not trained, probes** follow the same discipline with no
+schedule: §3.2's Iwahashi tile classifier is a multinomial logistic regression
+fitted to convergence (L-BFGS) on in-memory mean-pooled embeddings, no
+augmentation, at 100% on the train tiles that clear §3.2's 60% rule; §5.1's
+derivative probes are ridge. Each has one knob, its L2 strength, given a
+5-point pass on B6/val and frozen for every encoder.
 
 ## 5. The representation-comparison suite
 
@@ -383,7 +471,7 @@ tokenizer encoder as a representation model).
 
 ### 5.1 Terrain-derivative regression probes
 
-Ridge regression (closed-form, CPU) from frozen per-patch tokens to per-patch
+Ridge regression (closed-form, CPU; L2 strength tuned on B6 and frozen, §4.5) from frozen per-patch tokens to per-patch
 mean slope, aspect (sin/cos pair), and profile curvature, computed from the
 buffered tiles so derivatives are edge-clean. R² per target per encoder.
 Derivatives are invariant to absolute altitude, so this probe is immune to the
@@ -454,7 +542,8 @@ finding.
 ## 7. Fairness checklist (verbatim into the writeup)
 
 1. Identical tiles, labels, fraction draws, seeds, heads, schedules across
-   frozen arms; head recipes tuned once on the neutral encoder (B6), frozen.
+   frozen arms; head recipes tuned per rung on the neutral encoder (B6),
+   frozen (§4.5). B7 tunes itself by the same procedure.
 2. Native normalization per encoder; the altitude-passthrough ablation
    quantifies the confound instead of arguing about it.
 3. GSD: one regime, native 30 m, labelled DEMAE-native. TerraMind's 10 m
@@ -515,52 +604,56 @@ make the linear grid loader-bound again. **Wall-clock is therefore GPU time.** (
 Task 1's projected *on-the-fly mask* loader, which the bank removed. It was never the measured
 loader.)
 
-Counts use fixed epochs per fraction (§4.1-§4.3) on §3.3's geocell ladder, whose rungs are exact
-budgets of 200, 2,000 and 20,000 train tiles (#189). Every cell also scores the 4,523 test tiles. Two costs are **assumed rather than
+Counts use §4.5's recipe (#196): fixed epochs per fraction with the 1% rung floored at the 10% rung's
+step count, val read 10 times per run, and per-rung lr tuning. They run on §3.3's geocell ladder, whose
+rungs are exact budgets of 200, 2,000 and 20,000 train tiles (#189). Every cell also scores the 4,523
+test tiles. `python scripts/p191_price.py --floor 10% --val-reads 10 --tune-per-rung` prints this
+table; with no flags it prints #191's. The UperNet primitive is #191's 33.8M head, not §4.2's 39.3M:
+the difference is a 3x3 conv at 7x7, so it is not re-timed, and B7 at batch 64 is priced at A7's
+batch-128 per-tile time. Two costs are **assumed rather than
 measured**: 2 s per epoch of DataLoader start-up for the train and val passes, and 60 s per cell
 for encoder load and scoring set-up.
 
 | Item | Count | 5080-min |
 |---|---|---:|
-| Head tuning on B6/val | 12 linear + 12 UperNet configs at 100% (Task 1's grid size, assumed) | 1,447 |
-| Linear-probe grid | 6 encoders x 3 fractions x 3 seeds = 54 | 351 |
-| **UperNet grid** | 6 encoders x 3 fractions x 3 seeds = 54 | **2,374** |
-| B7 UNet | 3 fractions x 3 seeds = 9 | 306 |
-| B3 fine-tune | 100%, 2 seeds | 371 |
-| B8 + B4-ALT | linear, 100%, 3 seeds each = 6 | 75 |
-| B5-ALT | UperNet, 100%, 3 seeds | 324 |
-| Depth sweep | 6 encoders, 7 probes trained off one forward, 100%, 1 seed | 87 |
-| Concatenation probe | 100%, 3 seeds (two forwards) | 68 |
+| Head tuning | 5 lr points x a fifth of the schedule x 3 rungs: linear and UperNet on B6, B7 on itself (29 + 143 + 111) | 283 |
+| Linear-probe grid | 6 encoders x 3 fractions x 3 seeds = 54 | 314 |
+| **UperNet grid** | 6 encoders x 3 fractions x 3 seeds = 54 | **2,362** |
+| B7 UNet | 3 fractions x 3 seeds = 9 | 298 |
+| B3 fine-tune | 100%, 2 seeds | 362 |
+| B8 + B4-ALT | linear, 100%, 3 seeds each = 6 | 69 |
+| B5-ALT | UperNet, 100%, 3 seeds | 315 |
+| Depth sweep | 6 encoders, 7 probes trained off one forward, 100%, 1 seed | 81 |
+| Concatenation probe | 100%, 3 seeds (two forwards) | 63 |
 | §5 forward passes | 6 encoders x 4 analyses (ridge, kNN, CKA/MNN, Iwahashi pooled) x 27k | 10 |
 | L- and flatness-sensitivity rescore | 4 label variants x B1/B4 x 3 seeds over test | 2 |
-| **GPU total** | | **5,414 = 90.2 h, ~$36** |
+| **GPU total** | | **4,156 = 69.3 h, ~$28** |
 | Geomorphon labels (buffered re-read + WhiteboxTools) | all 27k tiles | ~1.5 h laptop, network-bound (#187) |
 | Iwahashi tile-label table | one GeoTIFF | ~1 min CPU (#193) |
 
 Dollars are at the project's 5090 rate of $0.4016/hr. No 5080 price is recorded, and a 5080
-rents for less, so $36 is an upper bound at these counts.
+rents for less, so $28 is an upper bound at these counts.
 
-**A full UperNet cell at 100% costs 108 minutes, against a linear cell's 12.** The UperNet cells
-(the grid, B5-ALT and the UperNet half of tuning, 69 cells) are **74%** of the GPU total. Three choices this
-section does not make move the total more than anything else. They belong to the head recipes (§4,
-and the map's head-recipe ticket):
+**A full UperNet cell at 100% costs 105 minutes, against a linear cell's 12.** The UperNet cells
+(the grid, B5-ALT and the UperNet tuning) are **68%** of the GPU total. #191 priced 90.2 h with
+12-config tuning at 100% and left four recipe choices open. #196 settled them, and this is what each
+would have cost against the 69.3 h above, the other three held at their settled values:
 
-| Recipe choice | GPU total |
+| Recipe choice (#196's answer in bold) | GPU total |
 |---|---:|
-| As priced: 512-channel UperNet, tuned at 100% | 90.2 h, $36 |
-| Tune on the 10% draw instead | 70.2 h, $28 |
-| 256-channel UperNet (15.2M head, 3.53 ms/tile) | 54.7 h, $22 |
-| Both | 44.5 h, $18 |
-| Steps matched across fractions instead of epochs | 160.5 h, $64 |
+| **PANGAEA's 512-channel UperNet** (256 channels instead) | **69.3 h** (43.1 h) |
+| **Task 1's tuning discipline, per rung** (12 full configs per head at 100% instead) | **69.3 h** (87.8 h) |
+| **1% floored at the 10% rung's steps** (fixed epochs, 30 linear / 160 UperNet steps at 1%) | **69.3 h** (65.6 h) |
+| (every rung steps-matched to 100%) | (141.8 h) |
 
-The last row matters because §4 does not yet say whether a 1% cell trains for 30 epochs of 200
-tiles or for as many steps as a 100% cell. "Same recipe at every fraction" can be read either way.
+The floor costs ~4 h, and per-rung tuning costs less than #191's single 100% pass did, because a
+5-point pass at a fifth of the schedule is about one cell.
 
-**A rented box is needed.** On this laptop the same program is ~1,800 hours at 20.1x, and even
-the linear grid alone is ~120. On one 5080 it is **3.8 days** of continuous running. The cells are
+**A rented box is needed.** On this laptop the same program is ~1,400 hours at 20.1x, and even
+the linear grid alone is ~105. On one 5080 it is **2.9 days** of continuous running. The cells are
 independent, so a multi-GPU box divides that, and attention, not dollars, is still the real budget.
-Task 1's GPU program came to 9.83 h, $3.95 (its §7), so the two tasks come to ~$40 as priced. That
-is inside the < $50 envelope but no longer by the margin the old table claimed.
+Task 1's GPU program came to 9.83 h, $3.95 (its §7), so the two tasks come to ~$32 as priced. That
+is inside the < $50 envelope, though not by the margin the pre-#191 table claimed.
 
 ## 9. Risks
 
@@ -580,7 +673,7 @@ is inside the < $50 envelope but no longer by the margin the old table claimed.
   so there is no relax-if-too-many-drop choice left to make after looking.
   Thin groups widen the macro-F1 CI; the paired bootstrap carries that rather
   than a pooling choice hiding it.
-- **UperNet layer-choice sensitivity:** indices fixed at 3/6/9/12 and stated;
+- **UperNet layer-choice sensitivity:** fixed at PANGAEA's `intermediates[3, 5, 7, 11]` and stated (§4.2);
   the depth sweep doubles as the sensitivity check.
 - **TerraMind extraction pitfalls:** same as Task 1 (diffusers pin, NaN
   handling, grid check); the verified code path is in
