@@ -336,21 +336,29 @@ def run_pass(
     done = 0
     queue = enumerate(todo)
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        pending: dict = {}  # future -> submission order, so results are written in that order
+        pending: dict = {}  # future -> submission order
+        # Finished results held until every earlier one is written, so the store's log is in
+        # submission order whatever order the workers finish in.
+        ready: dict[int, tuple[str, list]] = {}
+        next_write = 0
 
         def submit() -> None:
+            # Bounded by what is in flight *or* held, so one slow tile cannot let the buffer
+            # grow without limit behind it.
             for order, (tile_id, split, need) in queue:
                 pending[pool.submit(job.label, tile_id, split, need)] = order
-                if len(pending) >= threads * 2:
+                if len(pending) + len(ready) >= threads * 2:
                     return
 
         submit()
         try:
             while pending:
                 finished, _ = wait(pending, return_when=FIRST_COMPLETED)
-                for future in sorted(finished, key=pending.__getitem__):
-                    del pending[future]
-                    tile_id, labels = future.result()
+                for future in finished:
+                    ready[pending.pop(future)] = future.result()
+                while next_write in ready:
+                    tile_id, labels = ready.pop(next_write)
+                    next_write += 1
                     for v, label, ih in labels:
                         store.put(v.name, tile_id, label, ih)
                     done += 1

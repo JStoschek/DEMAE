@@ -428,6 +428,37 @@ def test_without_a_pinned_binary_freeze_refuses_before_reading_a_tile(world, fla
         freeze(flags)
 
 
+
+def test_the_pass_writes_tiles_in_submission_order_when_a_later_one_finishes_first():
+    """A later tile finishing alone, in its own wait, is still written after the earlier one."""
+    import threading
+
+    written: list[str] = []
+    first_written = threading.Event()
+
+    class Store:
+        def done(self, variant, tile_id):
+            return False
+
+        def put(self, variant, tile_id, label, input_hash):
+            if variant == "primary":
+                written.append(tile_id)
+                first_written.set()
+
+    class Job:
+        g = Geomorphon()
+
+        def label(self, tile_id, split, todo):
+            if tile_id == "early":
+                # Held until something is written, or a bounded wait: an out-of-order writer
+                # writes "late" first and releases this at once.
+                first_written.wait(timeout=0.5)
+            return tile_id, [(v, np.zeros((1, 1), np.uint8), "ih") for v in todo]
+
+    geomorphon_pass.run_pass({"train": ("early", "late")}, Job(), Store(), threads=2,
+                             report_every=10, say=lambda line: None)
+    assert written == ["early", "late"]
+
 # --- Substitution point A: the one narrow WBT call ------------------------------------------------
 
 FAKE_WBT = """#!{python}
