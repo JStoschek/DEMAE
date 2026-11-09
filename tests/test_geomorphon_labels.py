@@ -670,6 +670,16 @@ def test_the_census_counts_the_absences_and_the_wraps_each_window_reaches(tmp_pa
     assert result.absent == {stem(-45, 172): 1, stem(10, 29): 2}
 
 
+
+def test_the_macos_build_adr_0014_pins_is_in_the_config():
+    """D1 names the macOS M-series build's sha256; the config is where the call reads pins."""
+    import re
+
+    adr = (Path(__file__).resolve().parents[1] / "docs" / "adr").glob("0014-*.md")
+    (text,) = [p.read_text() for p in adr]
+    (pin,) = re.findall(r"`([0-9a-f]{64})` for the macOS M-series", text.replace("\n   ", " "))
+    assert pin in Geomorphon().wbt_sha256
+
 # --- The live binary ------------------------------------------------------------------------------
 
 #: The committed label hash of :func:`live_window` under the primary parameters, from the pinned

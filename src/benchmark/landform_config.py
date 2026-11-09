@@ -123,9 +123,12 @@ class Geomorphon(_Frozen):
     """
 
     wbt_version: str = "2.4.0"
-    #: The per-platform sha256 pin list for the WBT binary. Empty until #202 fetches and pins the
-    #: macOS build; #201's one narrow call refuses a binary whose hash is not in it.
-    wbt_sha256: tuple[str, ...] = ()
+    #: The per-platform sha256 pin list for the WBT binary; #201's one narrow call refuses a
+    #: binary whose hash is not in it. ADR-0014 D1 settled the macOS M-series build's. A build
+    #: for another platform is added only once its labels pass the fixed-sample check (#202).
+    wbt_sha256: tuple[str, ...] = (
+        "63ce77174e2abc32590df2b4868b6fb4123d8598a540290ef9669b2cb919647b",  # macOS M-series
+    )
     #: Outer search radius L, in cells (1.5 km at 30 m). WBT's default, chosen by #188's sweep.
     search: int = 50
     #: Flatness threshold, degrees. #188: under 0.5° erases flat, shoulder and footslope.
