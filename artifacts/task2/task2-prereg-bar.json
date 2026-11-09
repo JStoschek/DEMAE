@@ -1,0 +1,448 @@
+{
+  "artifact": "task2-prereg-bar.json",
+  "asserted_in": "docs/adr/0015-task2-pre-registration-register.md",
+  "anchored_in": "docs/research/task2-landform-plan.md ## 7. Fairness checklist (verbatim into the writeup)",
+  "purpose": "The numeric subset of ADR-0015's register of twenty rules, committed by `benchmark.launch freeze --task landform` before any head trains. Every entry carries its value and the exact §7 phrase it was registered in; `benchmark.prereg` refuses a bar whose phrase no longer appears in §7, by the same check Task 1's bar passes against its §6, and names the entry that lost its anchor. Eleven discursive rules are recorded here without values. A field listed under an entry's `unanchored` is a value §7 does not state: it is tied to the other entries by the register's cross-checks and to nothing in the plan, until §7 item 10 and ADR-0015 are amended to state it.",
+  "rules": 20,
+  "mechanised": 9,
+  "entries": [
+    {
+      "rule": "L1",
+      "statement": "Claims are read on mIoU (geomorphons) and macro-F1 (Iwahashi tiles), on the pooled test set only. Dense macro-F1, per-class IoU, overall accuracy, boundary-F1, per-band metrics and C1's 1%/10% rows are printed and carry no claim.",
+      "home": "§6",
+      "source": "#192",
+      "counted": true,
+      "value": {
+        "claim_metrics": {
+          "geomorphon": "miou",
+          "iwahashi": "macro_f1"
+        },
+        "population": "pooled"
+      },
+      "registered_in": "L1 claim metrics, pooled only",
+      "units": "metric keys per label set, and the test population claims are read on",
+      "unanchored": [
+        "claim_metrics"
+      ]
+    },
+    {
+      "rule": "L2",
+      "statement": "Paired bootstrap over test tiles, 10,000 resamples, confusion matrices summed per resample, seed-paired differences averaged over seeds on one shared resample. Registered caveat: the test set spans 13 geocells, so the tile CI is narrower than a spatially honest one.",
+      "home": "§6",
+      "source": "#192",
+      "counted": true,
+      "value": {
+        "unit": "tile",
+        "resamples": 10000,
+        "test_geocells": 13
+      },
+      "registered_in": "L2 tile bootstrap, 10,000 resamples, 13 test geocells",
+      "units": "resamples of the test tiles; test geocells the caveat counts"
+    },
+    {
+      "rule": "L3",
+      "statement": "3 seeds for every core cell, B3 and B7 included; seed i trains on ladder i. The seed spread prints as mean ± std, separate from the CI and never folded into it.",
+      "home": "§3.3, §4.3, §6",
+      "source": "#189, #192",
+      "counted": true,
+      "value": {
+        "seeds": 3,
+        "including": [
+          "B3",
+          "B7"
+        ]
+      },
+      "registered_in": "L3 3 seeds, B3 and B7 included",
+      "units": "seeds per core cell"
+    },
+    {
+      "rule": "L4",
+      "statement": "The pretraining-corpus caveat is symmetric: it can't explain a DEMAE loss unless also priced as a discount on a DEMAE win (Task 1 R2).",
+      "home": "§2, §7.4",
+      "source": "#122",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "symmetry is a property of how a sentence is used in an argument, not a quantity — Task 1's R2 reason, unchanged"
+    },
+    {
+      "rule": "L5",
+      "statement": "R5 is C1's DEMAE number unconditionally; an R4 win is reported prominently and never becomes C1's number (Task 1 R3).",
+      "home": "§0, §1",
+      "source": "#122, #190",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "it governs which number a sentence is about; both rows are computed either way, so there is no constant a run could read"
+    },
+    {
+      "rule": "L6",
+      "statement": "TerraMind's DEM tokenizer had 20 epochs, cited per modality, not the paper's 100 (Task 1 R4).",
+      "home": "§2",
+      "source": "#138",
+      "counted": true,
+      "value": 20,
+      "registered_in": "L6 20 tokenizer epochs",
+      "units": "epochs over the DEM modality"
+    },
+    {
+      "rule": "L7",
+      "statement": "The GSD caveat is symmetric, and stated as a bandwidth shift rather than a resolution handicap (Task 1 R9).",
+      "home": "§2, §7.3",
+      "source": "#139",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "same shape as L4 — it constrains how a caveat may be deployed in argument"
+    },
+    {
+      "rule": "L8",
+      "statement": "A null is reported with the prominence of a win (Task 1 R10).",
+      "home": "§0",
+      "source": "plan §0",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "prominence is a property of the memo's prose, not of a number"
+    },
+    {
+      "rule": "L9",
+      "statement": "Insulated rows (B4-ALT/B5-ALT, B8, the concatenation row, B1-S/B2-S, B1-R4/B2-R4) carry no claim and never stand in for a core row; an ALT row beating DEMAE at 100% with lower > 0 is said in C1's paragraph.",
+      "home": "§1, §5.4",
+      "source": "#190, #192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "it fixes what a row may stand in for in prose; its one trigger reads L2's CI and adds no constant of its own"
+    },
+    {
+      "rule": "L10",
+      "statement": "A band's macro metric averages over the classes with ground truth in that band. Class collapse (a class present in test truth with test IoU = 0) is flagged and counted per cell, never excluded or rerun.",
+      "home": "§6",
+      "source": "ADR-0014, #192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "it is a definition — how a macro metric averages and what counts as collapse — and its one number, IoU = 0, is the definition rather than a threshold anyone could tune"
+    },
+    {
+      "rule": "L11",
+      "statement": "The stronger TerraMind encoder is whichever of the tokenizer (B4/B5) and the backbone (B9) has the higher seed-mean test score, per head and per label set.",
+      "home": "§0, §1",
+      "source": "#190, #192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "its trigger is an ordering between two encoders, not a level, so there is no constant to hold; the marked pairs name it as a token `report` resolves"
+    },
+    {
+      "rule": "L12",
+      "statement": "C1 is read at the 100% rung on 4 pairs — B1 and B2, each vs B6 and vs the stronger TerraMind — and holds if all four have lower > 0; one head's two clearing reports C1 for that head only. Iwahashi gate: C1 is claimed only if R5's Iwahashi macro-F1 point estimate exceeds both B6's and the stronger TerraMind's.",
+      "home": "§0",
+      "source": "#190, #192",
+      "counted": true,
+      "value": {
+        "rung": "100%",
+        "pairs": [
+          {
+            "pair": [
+              "B1",
+              "B6"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B1",
+              "stronger-terramind"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B2",
+              "B6"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B2",
+              "stronger-terramind"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          }
+        ]
+      },
+      "registered_in": "L12 C1's four pairs at 100% and the Iwahashi gate",
+      "units": "the rung C1 is read at, and its marked pairs"
+    },
+    {
+      "rule": "L13",
+      "statement": "Depth-sweep reversal: a competitor's best point beating DEMAE's best with a CI excluding zero qualifies C1's linear half to \"at the registered layer\" and never withdraws it.",
+      "home": "§5.3",
+      "source": "#190, #192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "its trigger is a CI excluding zero, which is not a tunable level, and what it changes is a sentence rather than a number"
+    },
+    {
+      "rule": "L14",
+      "statement": "If B1 and B4 swap order under any of ADR-0014's sensitivity label sets, C1's paragraph says so; C1 is read on the primary labels only.",
+      "home": "§7.7",
+      "source": "ADR-0014, #192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "its trigger is an ordering swap, not a level"
+    },
+    {
+      "rule": "L15",
+      "statement": "δ = 1.0 mIoU point, the non-inferiority margin for C2's \"matches\" and C3b's \"competitive\".",
+      "home": "§0",
+      "source": "#192",
+      "counted": true,
+      "value": 1.0,
+      "registered_in": "L15 a margin of 1.0 mIoU point",
+      "units": "mIoU points"
+    },
+    {
+      "rule": "L16",
+      "statement": "C2: B2 at the 1% rung vs B7 at the 10% rung — beats if lower > 0, matches if lower > −δ. The per-ladder difference must be ≥ −δ in at least 2 of 3 ladders, otherwise C2 is region-dependent and not claimed.",
+      "home": "§0",
+      "source": "#189, #192",
+      "counted": true,
+      "value": {
+        "pair": {
+          "pair": [
+            "B2",
+            "B7"
+          ],
+          "claim": "C2",
+          "rungs": [
+            "1%",
+            "10%"
+          ],
+          "label_set": "geomorphon",
+          "metric": "miou"
+        },
+        "ladders_required": 2,
+        "ladders": 3
+      },
+      "registered_in": "L16 C2's reading, 2 of 3 ladders",
+      "units": "C2's marked pair, and ladders that must clear −δ of those drawn",
+      "unanchored": [
+        "pair"
+      ]
+    },
+    {
+      "rule": "L17",
+      "statement": "C3a: R5's Iwahashi classifier vs B6's and the stronger TerraMind's, macro-F1 over the 15 groups at the 60% rule, holding if both have lower > 0. C3b: B3 vs B7 at 100%, mIoU, competitive if lower > −δ.",
+      "home": "§0, §3.2",
+      "source": "#193, #192",
+      "counted": true,
+      "value": {
+        "pairs": [
+          {
+            "pair": [
+              "demae-r5",
+              "imagenet-mae"
+            ],
+            "claim": "C3a",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "iwahashi",
+            "metric": "macro_f1"
+          },
+          {
+            "pair": [
+              "demae-r5",
+              "stronger-terramind"
+            ],
+            "claim": "C3a",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "iwahashi",
+            "metric": "macro_f1"
+          },
+          {
+            "pair": [
+              "B3",
+              "B7"
+            ],
+            "claim": "C3b",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          }
+        ],
+        "iwahashi_rule": 0.6,
+        "iwahashi_groups": 15
+      },
+      "registered_in": "L17 C3's two halves",
+      "units": "C3's marked pairs; the Iwahashi tile-majority fraction and group count",
+      "unanchored": [
+        "iwahashi_rule",
+        "iwahashi_groups"
+      ]
+    },
+    {
+      "rule": "L18",
+      "statement": "Eight marked bootstrap pairs, named in L12 (4), L16 (1) and L17 (3); every other pair is computed and left unmarked in print.",
+      "home": "§6",
+      "source": "#192",
+      "counted": true,
+      "value": {
+        "marked_pairs": [
+          {
+            "pair": [
+              "B1",
+              "B6"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B1",
+              "stronger-terramind"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B2",
+              "B6"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B2",
+              "stronger-terramind"
+            ],
+            "claim": "C1",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "B2",
+              "B7"
+            ],
+            "claim": "C2",
+            "rungs": [
+              "1%",
+              "10%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          },
+          {
+            "pair": [
+              "demae-r5",
+              "imagenet-mae"
+            ],
+            "claim": "C3a",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "iwahashi",
+            "metric": "macro_f1"
+          },
+          {
+            "pair": [
+              "demae-r5",
+              "stronger-terramind"
+            ],
+            "claim": "C3a",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "iwahashi",
+            "metric": "macro_f1"
+          },
+          {
+            "pair": [
+              "B3",
+              "B7"
+            ],
+            "claim": "C3b",
+            "rungs": [
+              "100%",
+              "100%"
+            ],
+            "label_set": "geomorphon",
+            "metric": "miou"
+          }
+        ]
+      },
+      "registered_in": "L18 eight marked pairs",
+      "units": "arm pairs marked in print"
+    },
+    {
+      "rule": "L19",
+      "statement": "Val realism caveat: every rung selects its checkpoint on all 2,000 val tiles, which a real 200-label user would not have; it costs realism, not fairness.",
+      "home": "§4.5",
+      "source": "#196",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "a caveat that applies equally to every arm; there is nothing for a run to clear"
+    },
+    {
+      "rule": "L20",
+      "statement": "A run may be rerun only for an infrastructure failure, with the same seed and ladder and the reason in the run record; a finished run is never replaced, and class collapse counts as finished.",
+      "home": "§4.4",
+      "source": "#192",
+      "counted": true,
+      "value": null,
+      "unmechanised_because": "it governs which runs may exist, which the results and the run record enforce; there is no constant to hold"
+    }
+  ]
+}

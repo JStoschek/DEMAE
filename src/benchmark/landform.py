@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import arms, artifacts, landform_arms, landform_config
+from . import arms, artifacts, landform_arms, landform_config, prereg
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -65,12 +65,39 @@ class FreezeStage:
     write: Callable[[LandformResolution], list[str]] | None = None
 
 
+def _freeze_bar(resolution: LandformResolution) -> list[str]:
+    """ADR-0015's bar, checked against §7 before a byte is written (:meth:`prereg.Register.write_bar`).
+
+    Rewritten on every freeze, as Task 1's is: a bar is a pure function of its register, so a
+    re-freeze writes the same bytes or an amendment that already passed all three links.
+    """
+    paths = resolution.config.paths
+    register = prereg.TASK2
+    bar = register.write_bar(bar_path(resolution.config), plan=paths.plan_path)
+    doc = register.document()
+    return [
+        f"wrote {bar}",
+        f"  {register.adr_name}'s register: {doc['rules']} rules, {doc['mechanised']} with a "
+        f"number, each anchored in {register.section} of {paths.plan_path}",
+    ]
+
+
+def bar_path(cfg: LandformConfig) -> Path:
+    """Where Task 2's bar sits on this box."""
+    return Path(cfg.paths.artifacts_dir) / prereg.TASK2.bar_name
+
+
+def bar_for(cfg: LandformConfig) -> prereg.LandformBar:
+    """Task 2's committed bar, refused at load if §7 no longer states what it registered."""
+    return prereg.TASK2.read_bar(bar_path(cfg), plan=cfg.paths.plan_path)
+
+
 #: What ``freeze --task landform`` writes, in §4.4's order: the bar first (every threshold the
 #: later stages are drawn against is in it, Task 1's reason), then the labels (§4.4 steps 1-2),
 #: then the ladders (their coverage reports carry per-class pixel counts, so labels come first),
 #: then the card, which describes everything above it and so goes last.
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
-    FreezeStage("prereg bar", "#199"),
+    FreezeStage("prereg bar", "#199", _freeze_bar),
     FreezeStage("geomorphon labels", "#201"),
     FreezeStage("iwahashi labels", "#203"),
     FreezeStage("ladders", "#200"),
@@ -83,7 +110,6 @@ PENDING_INPUTS: Final[tuple[Pending, ...]] = (
     Pending("ladder", "ladder", "#200"),
     Pending("labels", "labels", "#201, #203"),
     Pending("recipe_line", "recipe line", "#207"),
-    Pending("prereg_bar", "prereg bar", "#199"),
 )
 
 
@@ -184,11 +210,13 @@ def _checkpoint(arm: landform_arms.LandformArm, cfg: LandformConfig) -> Resolved
 
 
 def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
-    """The committed inputs a cell reads that exist today: Task 1's, reused unchanged.
+    """The committed inputs a cell reads that exist today: Task 1's, reused unchanged, and
+    Task 2's own bar.
 
     §3.3 reuses Task 1's train, val and test lists (with #150's land filter) and ADR-0012's
     extractor contract, so they are read from Task 1's artifacts directory and frozen by Task
-    1's ``freeze``. The ladders draw their rungs from the full head-train list.
+    1's ``freeze``. The ladders draw their rungs from the full head-train list. The bar is
+    ADR-0015's, frozen by ``freeze --task landform`` into Task 2's own directory (#199).
     """
     task1 = Path(cfg.paths.task1_artifacts_dir)
     at = {
@@ -197,7 +225,7 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
         "test_tiles": ("test list", task1 / artifacts.TEST_TILES_NAME),
         "extractor_spec": ("extractor spec", task1 / "extractor_spec.json"),
     }
-    return tuple(
+    task1_inputs = tuple(
         Resolved(
             key=key,
             label=label,
@@ -206,6 +234,16 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
             absent_note="Task 1's, not frozen yet (`python -m benchmark.launch freeze`)",
         )
         for key, (label, path) in at.items()
+    )
+    bar = bar_path(cfg)
+    return task1_inputs + (
+        Resolved(
+            key="prereg_bar",
+            label="prereg bar",
+            path=str(bar),
+            md5=artifacts.file_md5(bar),
+            absent_note="not frozen yet (`python -m benchmark.launch freeze --task landform`)",
+        ),
     )
 
 

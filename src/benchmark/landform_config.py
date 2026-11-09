@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from . import landform_arms
+from . import landform_arms, prereg
 from .config import (
     ENVIRONMENT,
     Extract,
@@ -162,9 +162,11 @@ class Iwahashi(_Frozen):
 
     #: The distributor's zip, pinned (§3.4).
     zip_md5: str = "5ae98dc7782c13384a1df4d8d609418f"
-    groups: int = 15
+    #: L17's 15 groups and its 60% rule, read off ADR-0015's register rather than typed here: a
+    #: second home for a registered number is how one moves without anything failing (#199).
+    groups: int = prereg.TASK2.rule("L17").value["iwahashi_groups"]
     #: Primary; C3 is read here only.
-    threshold: float = 0.60
+    threshold: float = prereg.TASK2.rule("L17").value["iwahashi_rule"]
     #: A pre-registered sensitivity row, never used to decide C3.
     sensitivity_threshold: float = 0.50
 

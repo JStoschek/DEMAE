@@ -137,8 +137,10 @@ def test_a_dry_run_prints_the_cell_it_resolved_before_any_step(box, flags, capsy
     checkpoint = hashlib.md5((box / "release" / "encoder.pt").read_bytes()).hexdigest()
     assert checkpoint in out
     lines = out.splitlines()
-    for pending in ("ladder", "labels", "recipe line", "prereg bar"):
+    for pending in ("ladder", "labels", "recipe line"):
         assert any(line.startswith(pending) and "not built yet" in line for line in lines)
+    # #199 built the bar: it resolves by path, and says it is not frozen on a bare box.
+    assert any(line.startswith("prereg bar") and "not frozen yet" in line for line in lines)
 
 
 @pytest.mark.parametrize("rung, count", [("1%", "240"), ("10%", "240"), ("100%", "2,370")])
@@ -162,8 +164,8 @@ def test_freeze_names_the_generator_hash_and_its_stages_not_a_cell(flags, capsys
     assert LandformConfig().artifact_hash in out
     assert LandformConfig().config_hash not in out
     assert "arm B1" not in out and "encoder" not in out
+    assert "prereg bar — built (#199)" in out
     for stage, ticket in (
-        ("prereg bar", "#199"),
         ("geomorphon labels", "#201"),
         ("iwahashi labels", "#203"),
         ("ladders", "#200"),
@@ -284,8 +286,9 @@ def test_past_the_dry_run_a_verb_names_its_ticket_rather_than_returning_zero(ver
 def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(flags):
     with pytest.raises(NotImplementedError) as exc:
         launch.main(["freeze", *flags])
-    for ticket in ("#199", "#200", "#201", "#203", "#218"):
+    for ticket in ("#200", "#201", "#203", "#218"):
         assert ticket in str(exc.value)
+    assert "#199" not in str(exc.value), "the bar has a writer now (#199)"
 
 
 # --- Below the seam: §4.5's step-count function ------------------------------
