@@ -599,23 +599,26 @@ def _checkpoint_for(arm: arms.Arm, cfg: BenchmarkConfig) -> Resolved | None:
     # pretraining checkpoint instead of the release export of them. Resolved and printed either
     # way, because what is on this box is a fact about the box; what changes is that its absence
     # does not stop the run (#167, and `missing`'s own rule).
-    required = not arm.reads_mae_checkpoint
-    path = getattr(cfg.paths, field)
-    if path is None:
-        return Resolved(
-            key="checkpoint",
-            label="checkpoint",
-            path=None,
-            md5=None,
-            absent_note=f"not mounted on this box — set paths.{field}",
-            required=required,
-        )
+    return encoder_checkpoint(cfg.paths, field, required=not arm.reads_mae_checkpoint)
+
+
+def encoder_checkpoint(paths, field: str, *, required: bool = True) -> Resolved:
+    """The checkpoint at ``paths.<field>`` as this box has it, in either task's paths group.
+
+    An unset field and a set one with nothing at it get different notes, because the fix for
+    each is different: mount it, or check where it was mounted.
+    """
+    path = getattr(paths, field)
     return Resolved(
         key="checkpoint",
         label="checkpoint",
-        path=str(path),
+        path=None if path is None else str(path),
         md5=file_md5(path),
-        absent_note=f"missing — check paths.{field}",
+        absent_note=(
+            f"not mounted on this box — set paths.{field}"
+            if path is None
+            else f"missing — check paths.{field}"
+        ),
         required=required,
     )
 

@@ -214,19 +214,7 @@ def _checkpoint(arm: landform_arms.LandformArm, cfg: LandformConfig) -> Resolved
     """The arm's encoder checkpoint as this box has it — or that it has not mounted one."""
     if arm.encoder is None:
         return None
-    field = arms.ENCODERS[arm.encoder].checkpoint_field
-    path = getattr(cfg.paths, field)
-    return Resolved(
-        key="checkpoint",
-        label="checkpoint",
-        path=None if path is None else str(path),
-        md5=artifacts.file_md5(path),
-        absent_note=(
-            f"not mounted on this box — set paths.{field}"
-            if path is None
-            else f"missing — check paths.{field}"
-        ),
-    )
+    return artifacts.encoder_checkpoint(cfg.paths, arms.ENCODERS[arm.encoder].checkpoint_field)
 
 
 def _ladders(cfg: LandformConfig, verb: str) -> tuple[Resolved, ...]:

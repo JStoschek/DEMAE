@@ -61,6 +61,7 @@ from .config import (
     Frozen,
     Paths,
     Runtime,
+    build_kwargs,
     canonical_hash,
     check_paths,
     config_from_dict,
@@ -653,16 +654,7 @@ def build_config(
 
 
 def config_from_args(args: argparse.Namespace) -> LandformConfig:
-    """:func:`build_config` off the namespace ``benchmark.launch`` parsed — the one call."""
-    return build_config(
-        config_path=args.config,
-        arm=getattr(args, "arm", None),
-        rung=getattr(args, "rung", None),
-        seed=getattr(args, "seed", None),
-        head=getattr(args, "head", None),
-        label_set=getattr(args, "label_set", None),
-        corpus=args.corpus,
-        artifacts_dir=args.artifacts_dir,
-        overrides=args.overrides,
-    )
+    """:func:`build_config` off the namespace ``benchmark.launch`` parsed — through Task 1's one
+    keyword list (:func:`benchmark.config.build_kwargs`), with Task 2's cell scalars."""
+    return build_config(**build_kwargs(args, scalars=SCALARS))
 

@@ -1188,23 +1188,40 @@ def build_config(
     return cfg
 
 
+#: The flags :func:`add_config_arguments` adds, as ``build_config keyword -> namespace name``.
+#: Every task's ``build_config`` takes these four, plus one keyword per cell scalar.
+_SHARED_FLAGS: Final = {
+    "config_path": "config",
+    "corpus": "corpus",
+    "artifacts_dir": "artifacts_dir",
+    "overrides": "overrides",
+}
+
+
+def build_kwargs(args: argparse.Namespace, *, scalars: Sequence[str]) -> dict[str, Any]:
+    """A task's ``build_config`` keywords off the namespace :func:`add_config_arguments` filled.
+
+    The keyword list is written once, here, for both tasks: the four shared flags, then the
+    task's cell scalars, each ``None`` when the verb has no such flag. Task 2's
+    :func:`benchmark.landform_config.config_from_args` goes through it too, so a flag added to
+    the parser reaches both tasks' configs or neither.
+    """
+    return {
+        **{keyword: getattr(args, name) for keyword, name in _SHARED_FLAGS.items()},
+        **{name: getattr(args, name, None) for name in scalars},
+    }
+
+
 def config_from_args(args: argparse.Namespace) -> BenchmarkConfig:
     """:func:`build_config` off the namespace :func:`add_config_arguments` filled. Use this.
 
     The two halves of one flag set, written next to each other so they cannot come apart —
     ADR-0009 §4's rule, and the bug it was written for was a *call* that lost one argument of
     six while its parser stayed correct. So there is one call, here, and every entrypoint
-    delegates to it rather than retyping the keyword list.
+    delegates to it rather than retyping the keyword list (:func:`build_kwargs` holds it, for
+    both tasks).
     """
-    return build_config(
-        config_path=args.config,
-        arm=getattr(args, "arm", None),
-        size=getattr(args, "size", None),
-        seed=getattr(args, "seed", None),
-        corpus=args.corpus,
-        artifacts_dir=args.artifacts_dir,
-        overrides=args.overrides,
-    )
+    return build_config(**build_kwargs(args, scalars=_SCALARS))
 
 
 def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
