@@ -244,6 +244,11 @@ a function of GLO-30. Independent is not uncorrelated: both DEMs sample the
 same ground, and the claim is only that the label is not a function of the
 encoder's input.
 
+**Source, licence and lineage verified 2026-10-15** ([#186](https://github.com/JStoschek/DEMAE/issues/186),
+[`p186-iwahashi-labels.md`](p186-iwahashi-labels.md)); the paragraph above already
+carries its corrections. On all 5,000 committed test tiles (before the land
+filter), 2,240 clear 60% and 3,053 clear 50%.
+
 ### 3.3 Tiles, splits, fractions
 
 Same committed lists as Task 1 (20k train / 2k val / 5k test, geographic
