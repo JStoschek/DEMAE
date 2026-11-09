@@ -82,6 +82,18 @@ under its pin and are registry entries of their own on ``terramind-bicubic``'s p
 DEMAE's per-tile diet. Neither has a Task 1 arm, so both are reached by registry name
 (``Extractor.extract(..., encoder_name=...)``) rather than through the Task 1 `arms` map.
 
+## Task 2's backbone (#205)
+
+``terramind-backbone`` (B9) is a different file and a different network: TerraMind's v1 base
+model on raw DEM, ADR-0012 Amendment 2. Its format, ``terramind_v1_base``, has a loader and a
+forward of its own. The loader builds the DEM-only model with ``pretrained=False``, loads the
+model's keys out of the pinned any-to-any file strictly, and compares every tensor to the file's,
+never going through terratorch's filter, which keeps a random init and warns. The forward keeps
+each block's raw output, because terratorch's list overwrites its last entry with the normed
+tensor, so `intermediates[11]` is the raw block 12 and `output` is ``encoder_norm`` of it. Its
+position table is the native 14x14 one, run as published and checked against the closed form.
+It is reached by registry name, as B8 and ALT are.
+
 **The position embedding is re-derived, and the derivation is a declared field.**
 :attr:`EncoderSpec.pos_emb` carries ADR-0011 Decision 2's centre-anchored 14x14 crop —
 ``pos_emb[:, :, 1:15, 1:15]`` — rather than terratorch's bicubic resize, and carries it as a
@@ -172,8 +184,10 @@ STATISTICS: Final = "recomputed from the passed valid mask; never read from the 
 #: degenerate mask. ``test_the_std_floor_is_the_loaders_own`` pins the two together.
 STD_FLOOR: Final = 1e-6
 
-#: The checkpoint layouts :meth:`Extractor.encoder` can read — all three the registry declares.
-READABLE_FORMATS: Final = ("timm", "mmselfsup_rgb", "terratorch")
+#: The checkpoint layouts :meth:`Extractor.encoder` can read — all four the registry declares.
+#: ``terramind_v1_base`` is B9's (#205): TerraMind's full any-to-any file, of which the DEM
+#: encoder is a strict subset of keys, built and loaded by :meth:`Extractor._build_terramind_backbone`.
+READABLE_FORMATS: Final = ("timm", "mmselfsup_rgb", "terratorch", "terramind_v1_base")
 
 #: The diets :func:`normalize` applies. Listed rather than sliced out of
 #: :data:`benchmark.arms.NORMALIZATIONS`, whose extra member is ``none`` — an arm with no encoder
@@ -388,11 +402,21 @@ def _encoder_note(encoder: arms.Encoder) -> str:
             f"as for the entry reading the same weights without the latent."
         )
     if encoder.output_is_normed:
-        return (
+        note = (
             f"`output` is {ADR} §3's own final tensor: block {encoder.depth} put through this "
             f"encoder's final norm. It is **not** `intermediates[{encoder.depth - 1}]`, and the "
             f"two are separately named so nobody discovers the norm by reading tensors."
         )
+        if encoder.checkpoint_format == "terramind_v1_base":
+            # Amendment 2: the one place this encoder's library and this contract disagree, and
+            # the one a consumer re-deriving the features from terratorch would get wrong.
+            note += (
+                f" terratorch's own `TerraMindViT` list overwrites its last entry with the normed "
+                f"tensor, so it never returns the raw block {encoder.depth}; this contract's "
+                f"`intermediates[{encoder.depth - 1}]` is that raw block, as it is for DEMAE "
+                f"({ADR} Amendment 2)."
+            )
+        return note
     return (
         f"`output` is bit-identical to `intermediates[{encoder.depth - 1}]` (p118 §5.3) — and "
         f"not because nothing happens after block {encoder.depth}. terratorch's `ViTEncoder` "
@@ -931,31 +955,33 @@ def _torch_dtype(name: str):
         raise ValueError(f"unknown dtype {name!r} (fp32 | bf16 | fp16)") from None
 
 
-def _checkpoint_depth(state) -> int:
+def _checkpoint_depth(state, *, blocks: str = "blocks") -> int:
     """How many blocks the *checkpoint* actually has, off its own keys.
 
     Read before the model is built, so a declared layer count that does not match the weights
     is refused **by name** rather than surfacing as two dozen missing keys from a strict load —
-    which names every tensor and not the one fact that is wrong.
+    which names every tensor and not the one fact that is wrong. ``blocks`` is the key prefix the
+    layout numbers its blocks under: ``blocks`` for timm and the tokenizer's encoder half,
+    ``encoder`` for TerraMind's any-to-any file (B9), whose decoder's blocks are not counted.
     """
     indices = set()
     for key in state:
         head, _, rest = key.partition(".")
-        if head == "blocks" and rest:
+        if head == blocks and rest:
             index, _, _ = rest.partition(".")
             if index.isdigit():
                 indices.add(int(index))
     return 1 + max(indices) if indices else 0
 
 
-def _check_depth(state, entry: EncoderSpec, path: str) -> None:
-    """ADR-0012 §3's layer-count refusal, shared by both loaders because it is one claim.
+def _check_depth(state, entry: EncoderSpec, path: str, *, blocks: str = "blocks") -> None:
+    """ADR-0012 §3's layer-count refusal, shared by every loader because it is one claim.
 
     Read off the checkpoint's own keys before a model is built, so a declared count that does not
     match the weights is refused **by name** rather than surfacing as two dozen unmatched tensors
     from a strict load — which names every tensor and not the one fact that is wrong.
     """
-    depth = _checkpoint_depth(state)
+    depth = _checkpoint_depth(state, blocks=blocks)
     if depth != entry.depth:
         raise ValueError(
             f"{path} has {depth} transformer blocks; {SPEC_FILENAME} declares "
@@ -1075,6 +1101,8 @@ class Extractor:
         path = self._checked_path(entry)
         if entry.checkpoint_format == "terratorch":
             return self._build_terratorch(entry, path)
+        if entry.checkpoint_format == "terramind_v1_base":
+            return self._build_terramind_backbone(entry, path)
         if entry.checkpoint_format in ("timm", "mmselfsup_rgb"):
             return self._build_timm(entry, path)
         raise NotImplementedError(
@@ -1374,6 +1402,107 @@ class Extractor:
         quant_proj.load_state_dict(state, strict=True)
         return quant_proj
 
+    def _build_terramind_backbone(self, entry: EncoderSpec, path: str):
+        """B9: TerraMind's v1 base backbone on raw DEM, by **our own** strict load (Amendment 2).
+
+        ``terramind_v1_base(pretrained=False, modalities=["DEM"], merge_method=None)`` builds the
+        DEM-only encoder with random weights, and the pinned file fills it. terratorch's own path
+        is not used: its ``checkpoint_filter_fn`` logs a warning and keeps the random init for a
+        missing or misshapen key and only then runs a strict load, which therefore always
+        succeeds — a renamed key would give B9 a random layer and raise nothing. The file holds
+        the whole any-to-any model (374 tensors; #194 §1), so the model's own keys are picked
+        out of it: one the file lacks is refused by name, the strict load then catches a shape,
+        and every tensor in the built model is compared to the file's afterwards.
+
+        ``merge_method=None`` because the default ``"mean"`` averages over image modalities — a
+        no-op with one, and a step whose meaning changes the moment a second is added.
+
+        No position-embedding derivation: the ``untok_dem@224`` table is the native 14x14 sin-cos
+        buffer of a 224 px tile (D7.4, ``as_published``). It is still checked against the closed
+        form, because a fixed table is only "as published" if it is the one published.
+        """
+        import torch
+
+        from pretrain.init import read_state_dict
+
+        try:
+            from terratorch.models.backbones.terramind.model.terramind_register import (
+                terramind_v1_base,
+            )
+            from terratorch.models.backbones.terramind.model.tm_utils import (
+                build_2d_sincos_posemb,
+            )
+        except ImportError as exc:  # pragma: no cover - environment, not behaviour
+            raise ImportError(
+                f"the {entry.name} encoder is terratorch's, which is not on this box: {exc}. "
+                f"It is an extra rather than a core dependency — `{TERRAMIND_EXTRA}`."
+            ) from None
+
+        # §7.2 at load, as for the tokenizer: under the backbone's own key, value-checked.
+        terramind_constants(entry.modality)
+
+        full, _ = read_state_dict(path)
+        _check_depth(full, entry, path, blocks="encoder")
+
+        model = terramind_v1_base(pretrained=False, modalities=["DEM"], merge_method=None)
+        if list(model.encoder_embeddings) != [entry.modality]:
+            raise ValueError(
+                f"the installed terratorch builds {entry.name}'s DEM input as "
+                f"{list(model.encoder_embeddings)}; {SPEC_FILENAME} declares {entry.modality!r}, "
+                f"the key its constant pair is selected by (ADR-0012 §7.2)"
+            )
+        if model.num_register_tokens:
+            raise ValueError(
+                f"terratorch built {entry.name} with {model.num_register_tokens} register tokens; "
+                f"{ADR} §5's layout is {self.spec.tokens} patch tokens and nothing else"
+            )
+        wanted = model.state_dict()
+        missing = sorted(set(wanted) - set(full))
+        if missing:
+            raise ValueError(
+                f"{path} is missing {len(missing)} of the {len(wanted)} tensors {entry.name} is "
+                f"built from: {missing[:5]}. Loaded strictly by this contract rather than through "
+                f"terratorch's filter, which would keep a random init for each and warn "
+                f"({ADR} Amendment 2)"
+            )
+        model.load_state_dict({key: full[key] for key in wanted}, strict=True)
+        _assert_loaded_from(model, full, entry, path)
+
+        pos_emb = model.encoder_embeddings[entry.modality].pos_emb
+        grid = self.spec.grid_px
+        if tuple(pos_emb.shape) != (1, self.spec.tokens, entry.width):
+            raise ValueError(
+                f"{path}'s `{entry.modality}` pos_emb is {tuple(pos_emb.shape)}; {SPEC_FILENAME} "
+                f"runs {entry.name} as published on the native {grid}x{grid} grid, "
+                f"(1, {self.spec.tokens}, {entry.width})"
+            )
+        # The same tolerance, and the same reason, as the tokenizer's 16x16 check: float32
+        # rounding from whatever built the shipped table (#194: max abs 5.96e-8) against a
+        # different tensor, which misses by orders of magnitude more.
+        reference = build_2d_sincos_posemb(grid, grid, embed_dim=entry.width)
+        if not torch.allclose(pos_emb.float(), reference.float(), atol=1e-6, rtol=0):
+            raise ValueError(
+                f"{path}'s `{entry.modality}` pos_emb is not `build_2d_sincos_posemb({grid}, "
+                f"{grid})`. {entry.name} runs it as published (ADR-0012 §7.4), which is only "
+                f"the native table if it is the closed form"
+            )
+        if len(model.encoder) != entry.depth:
+            raise ValueError(
+                f"terratorch's terramind_v1_base built {len(model.encoder)} blocks against "
+                f"{SPEC_FILENAME}'s declared {entry.depth}"
+            )
+        # §2's capacity table, against the model actually built. For this entry the registry's
+        # count *is* `parameters()` as built (#194 §6), so a terratorch that grew the
+        # architecture — a bias, a register token — would load strictly and still be refused.
+        registered = arms.ENCODERS[entry.name].params
+        built = sum(p.numel() for p in model.parameters())
+        if built != registered:
+            raise ValueError(
+                f"terratorch's terramind_v1_base built {entry.name} with {built:,} parameters; "
+                f"the registry (and plan §2's capacity table) declares {registered:,}"
+            )
+        return model.eval().to(self.device)
+
     # --- ADR-0012's one call
 
     def extract(
@@ -1426,6 +1555,8 @@ class Extractor:
             forward = _forward_latent
         elif entry.checkpoint_format == "terratorch":
             forward = _forward_terratorch
+        elif entry.checkpoint_format == "terramind_v1_base":
+            forward = _forward_terramind_backbone
         else:
             forward = _forward_blocks
         with torch.no_grad():
@@ -1524,6 +1655,54 @@ def _forward_terratorch(model, x):
     blocks = model(x, return_intermediates=True)
     sequence = tuple(t.flatten(2).transpose(1, 2) for t in blocks)
     return sequence[-1], sequence
+
+
+def _forward_terramind_backbone(model, x):
+    """B9's pass: ``TerraMindViT.forward`` unrolled, keeping each block's **raw** output.
+
+    The library's own list cannot be used, and the reason is ADR-0012 Amendment 2's: it
+    overwrites its last entry with ``encoder_norm(block 12)``, so the raw block 12 is never
+    returned. Taken as `intermediates`, that list would put a normed tensor at
+    `intermediates[11]` for B9 and a raw one for DEMAE. So this is :func:`_forward_blocks`'
+    choice rather than :func:`_forward_terratorch`'s: the DEM patch embedding, ``x + emb``
+    (position plus modality embedding, no CLS, no register tokens), twelve blocks kept as they
+    come out, and ``encoder_norm`` applied only to make `output`.
+
+    The loader builds exactly one input embedding, keyed by the encoder's declared modality, so
+    the one in the model is the one to run. Pinned bit-identical to terratorch's list for entries
+    1-11, with `output` equal to its entry 12, by
+    ``test_b9s_unrolled_forward_is_terratorchs_list_but_for_its_last_entry``.
+    """
+    (embedding,) = model.encoder_embeddings.values()
+    tokens = embedding(x)
+    x = tokens["x"] + tokens["emb"]
+    intermediates = []
+    for block in model.encoder:
+        x = block(x)
+        intermediates.append(x)
+    return model.encoder_norm(x), tuple(intermediates)
+
+
+def _assert_loaded_from(model, state, entry: EncoderSpec, path: str) -> None:
+    """Every tensor in the built model equal to the file's — the check a strict load is not.
+
+    A strict load guarantees every key arrived, not that what arrived is what the file holds: a
+    cast on the way in (a half-precision file into a float32 module) loads cleanly and changes
+    every value. #194 measured equality on the real file; Amendment 2 asks that it be checked
+    rather than inherited, so it is checked on every build.
+    """
+    import torch
+
+    moved = sorted(
+        key
+        for key, tensor in model.state_dict().items()
+        if tensor.dtype != state[key].dtype or not torch.equal(tensor, state[key])
+    )
+    if moved:
+        raise ValueError(
+            f"{len(moved)} of {entry.name}'s tensors differ from {path}'s after a strict load: "
+            f"{moved[:5]}. The model run must be the file pinned ({ADR} §7.1, Amendment 2)"
+        )
 
 
 def _latent_tap(encoder, quant_proj):

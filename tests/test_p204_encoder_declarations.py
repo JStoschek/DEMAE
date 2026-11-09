@@ -445,6 +445,7 @@ PLAN_ROW_ARM = {
     "terramind-latent": "B8",
     "terramind-per-tile": "B4-ALT",
     "demae-vits": "B1-S",
+    "terramind-backbone": "B9",
 }
 
 
@@ -496,10 +497,10 @@ def test_a_count_that_disagrees_with_the_table_is_refused_by_name(monkeypatch):
 def test_an_encoder_the_table_does_not_place_is_refused(monkeypatch):
     from dataclasses import replace
 
-    unplaced = replace(arms.ENCODERS["terramind"], name="terramind-backbone")
-    monkeypatch.setitem(arms.ENCODERS, "terramind-backbone", unplaced)
-    with pytest.raises(ValueError, match="terramind-backbone.*capacity table"):
-        arms.check_capacity("terramind-backbone")
+    unplaced = replace(arms.ENCODERS["terramind"], name="terramind-unplaced")
+    monkeypatch.setitem(arms.ENCODERS, "terramind-unplaced", unplaced)
+    with pytest.raises(ValueError, match="terramind-unplaced.*capacity table"):
+        arms.check_capacity("terramind-unplaced")
 
 
 def test_the_contract_refuses_a_registry_whose_counts_have_drifted(tmp_path, monkeypatch):

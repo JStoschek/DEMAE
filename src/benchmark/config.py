@@ -786,6 +786,11 @@ class Paths(_Frozen):
     #: is the whole reason these are fields rather than lookups inside a loader.
     terramind_checkpoint: str | None = None
     imagenet_mae_checkpoint: str | None = None
+    #: TerraMind's v1 base model, `TerraMind_v1_base.pt` — the file Task 2's B9 reads (#205), a
+    #: different file from the tokenizer above under a different pin. Here because an encoder's
+    #: `checkpoint_field` is looked up on whichever task's paths group is in hand; no Task 1 arm
+    #: reads it, and as environment it moves no hash.
+    terramind_backbone_checkpoint: str | None = None
     # There is no `imagenet_mae_vits_checkpoint`: A6-S was dropped in #147. A ViT-S/16 ImageNet
     # MAE does exist (`lambert-x/medical_mae`, Apache-2.0) — it is its *provenance* that failed,
     # not its availability. See `benchmark.arms` and docs/research/p147-vit-s-mae-checkpoint.md.

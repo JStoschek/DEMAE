@@ -424,6 +424,7 @@ class LandformPaths(_Frozen):
     cog_root: str | None = None
     #: The label rasters and the pass's resume log: rebuilt, gitignored, fingerprinted.
     labels_dir: str = "data/task2/labels"
+    terramind_backbone_checkpoint: str | None = Paths.terramind_backbone_checkpoint
 
     def __post_init__(self) -> None:
         check_paths(self)
