@@ -88,7 +88,29 @@ def box(tmp_path, corpus):
     assert len(train) == TRAIN_TILES
     write_tile_strata(train, tmp_path / "task1" / "head_train_tiles.csv")
     (tmp_path / "task2").mkdir()
+    _write_primary_fingerprints(tmp_path / "task2", [t for t, _ in train])
     return tmp_path
+
+
+#: The ten geomorphon classes, in the order the committed fingerprint CSV carries them.
+CLASSES = ("flat", "peak", "ridge", "shoulder", "spur", "slope", "hollow", "footslope",
+           "valley", "pit")
+
+
+def _tile_counts(k: int) -> list[int]:
+    """Tile ``k``'s per-class pixel counts, then its ignored count: distinct per tile, so a sum
+    over the wrong tiles comes out wrong. Each row sums to 224 * 224."""
+    counts = [(k + 1) * (c + 1) for c in range(10)]
+    return [*counts, 224 * 224 - sum(counts)]
+
+
+def _write_primary_fingerprints(directory: Path, tiles: list[str]) -> None:
+    """What the geomorphon stage commits for the primary label set, for these tiles."""
+    lines = ["tile_id,content_hash,input_hash," + ",".join(CLASSES) + ",ignore"]
+    for k, t in enumerate(sorted(tiles)):
+        lines.append(f"{t},{k:016x},{k:016x}," + ",".join(map(str, _tile_counts(k))))
+    (directory / "geomorphon_fingerprints").mkdir()
+    (directory / "geomorphon_fingerprints" / "primary.csv").write_text("\n".join(lines) + "\n")
 
 
 @pytest.fixture
@@ -130,14 +152,15 @@ def _md5(path: Path) -> str:
 
 
 def _snapshot(directory: Path) -> dict[str, str]:
-    return {p.name: _md5(p) for p in sorted(directory.iterdir())}
+    return {str(p.relative_to(directory)): _md5(p) for p in sorted(directory.rglob("*"))
+            if p.is_file()}
 
 
 # --- freeze writes three ladders and their coverage reports -------------------
 
 
 def test_freeze_writes_three_ladders_and_a_coverage_report_beside_each(box, frozen):
-    assert sorted(p.name for p in (box / "task2").iterdir()) == [
+    assert sorted(p.name for p in (box / "task2").iterdir() if p.is_file()) == [
         "ladder_0.csv", "ladder_0_coverage.json",
         "ladder_1.csv", "ladder_1_coverage.json",
         "ladder_2.csv", "ladder_2_coverage.json",
@@ -213,8 +236,39 @@ def test_each_rung_reports_its_strata_and_band_coverage(box, corpus, frozen):
             assert rung["bands"]["present"] == sum(
                 1 for n in rung["bands"]["tiles"].values() if n
             )
-            assert rung["class_pixels"] is None
-        assert "#201" in report["class_pixels_note"]
+
+
+def test_each_rung_reports_its_per_class_train_pixels_summed_over_its_tiles(box, frozen):
+    """Story 30's class half (#202): the primary labels' counts over exactly the rung's tiles."""
+    counts = {t: _tile_counts(k) for k, t in enumerate(sorted(_ladder(box, 0)))}
+    primary = box / "task2" / "geomorphon_fingerprints" / "primary.csv"
+    for i in range(3):
+        walk, report = _ladder(box, i), _coverage(box, i)
+        assert report["class_pixels_from"] == {"path": "geomorphon_fingerprints/primary.csv",
+                                               "md5": _md5(primary)}
+        for budget, rung in zip(BUDGETS, report["rungs"]):
+            want = [sum(counts[t][c] for t in walk[:budget]) for c in range(10)]
+            assert rung["class_pixels"] == dict(zip(CLASSES, want))
+            assert rung["ignored_pixels"] == sum(counts[t][10] for t in walk[:budget])
+    # The whole-list rung is the same in every ladder, whatever the walk order.
+    assert len({json.dumps(_coverage(box, i)["rungs"][-1]["class_pixels"]) for i in range(3)}) == 1
+
+
+def test_freeze_refuses_a_ladder_report_without_the_primary_fingerprints(
+    box, flags, only_the_ladder_stage
+):
+    (box / "task2" / "geomorphon_fingerprints" / "primary.csv").unlink()
+    with pytest.raises(FileNotFoundError, match="geomorphon"):
+        launch.main(["freeze", *flags])
+    assert not list((box / "task2").glob("ladder_*"))
+
+
+def test_freeze_refuses_a_rung_tile_with_no_primary_label(box, flags, only_the_ladder_stage):
+    path = box / "task2" / "geomorphon_fingerprints" / "primary.csv"
+    lines = path.read_text().splitlines()
+    path.write_text("\n".join(lines[:-1]) + "\n")
+    with pytest.raises(ValueError, match="no primary geomorphon label"):
+        launch.main(["freeze", *flags])
 
 
 def test_freeze_prints_each_rung_s_coverage(frozen):
@@ -247,7 +301,7 @@ def test_freeze_refuses_to_overwrite_a_hand_edited_ladder(box, flags, frozen):
 def test_freeze_refuses_a_top_rung_that_is_not_the_whole_list(box, flags, only_the_ladder_stage):
     with pytest.raises(ValueError, match="whole head-train list"):
         launch.main(["freeze", *flags, "--set", f"ladders.budgets=[5, 13, {TRAIN_TILES - 1}]"])
-    assert list((box / "task2").iterdir()) == []
+    assert not list((box / "task2").glob("ladder_*"))
 
 
 def test_freeze_refuses_a_head_train_list_naming_a_tile_outside_train(

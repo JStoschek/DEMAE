@@ -332,8 +332,12 @@ def test_freeze_without_wbt_runs_the_stages_that_do_not_need_it_and_still_refuse
     """ADR-0009: the shipping command writes what this box can, then names #202, never exit 0.
 
     WhiteboxTools is a declared external (ADR-0014 D1). A box without it must still reach the
-    Iwahashi and ladder stages, which do not read a geomorphon label.
+    Iwahashi stage, which reads no geomorphon label. The ladders do read them: each rung's
+    coverage report sums the primary labels' per-class pixels (#202), so they are skipped.
     """
+    needs = {s.label: s.needs for s in landform.FREEZE_STAGES}
+    assert needs["iwahashi labels"] == ()
+    assert needs["ladders"] == ("geomorphon labels",)
     geomorphon = next(s for s in landform.FREEZE_STAGES if s.label == "geomorphon labels")
     ran = []
     later = landform.FreezeStage("later", "#000", lambda resolution: ran.append(1) or ["later ran"])

@@ -113,15 +113,11 @@ def bar_for(cfg: LandformConfig) -> prereg.LandformBar:
 #: later stages are drawn against is in it, Task 1's reason), then the labels (§4.4 steps 1-2),
 #: then the ladders (their coverage reports carry per-class pixel counts, so labels come first),
 #: then the card, which describes everything above it and so goes last.
-#:
-#: The ladders do not ``need`` the geomorphon stage yet: their per-class pixel counts are null
-#: until #202 measures them (:data:`benchmark.ladders.CLASS_PIXELS_NOTE`). The change that fills
-#: them in adds ``needs=("geomorphon labels",)`` to the ladder stage.
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199", _freeze_bar),
     FreezeStage("geomorphon labels", "#201", geomorphon_pass.write),
     FreezeStage("iwahashi labels", "#203", iwahashi.freeze),
-    FreezeStage("ladders", "#200", ladders.freeze),
+    FreezeStage("ladders", "#200", ladders.freeze, needs=("geomorphon labels",)),
     FreezeStage("dataset card", "#218"),
 )
 
@@ -307,7 +303,7 @@ def _freeze(resolution: LandformResolution, args: argparse.Namespace) -> int:
 
     A stage that raises :class:`benchmark.geomorphon.WbtUnavailable` is skipped, with every
     later stage that ``needs`` it, and the stages that read none of its output still run: a box
-    without WhiteboxTools can freeze the bar, the Iwahashi labels and the ladders. It still
+    without WhiteboxTools can freeze the bar and the Iwahashi labels. It still
     never exits 0 (ADR-0009): the refusal names what was skipped and #202.
     """
     skipped: dict[str, str] = {}  # stage label -> why

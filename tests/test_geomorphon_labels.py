@@ -34,7 +34,7 @@ import pytest
 
 from benchmark import geomorphon as gm
 from benchmark import geomorphon_pass, landform, launch
-from benchmark.landform_config import Geomorphon
+from benchmark.landform_config import GEOMORPHON_CLASSES, Geomorphon, build_config
 from dataset.geometry import COLS_PER_DEGREE, format_cog_stem, lat_band
 from pretrain.artifact import write_tile_strata
 
@@ -318,6 +318,38 @@ def test_ocean_and_the_reach_of_absent_land_are_255_and_verified_ocean_reads_as_
     )
     assert rows[tile_id(TEST, 0)]["counts"][-1] == 5 * 224
     assert rows[tile_id(VAL, 1)]["counts"][-1] == reach * 224
+
+
+def _cell(flags, rung: str, *more: str):
+    """The config a ``run --task landform`` cell at ``rung`` resolves, on this fixture box."""
+    sets = [flags[i + 1] for i, f in enumerate(flags) if f == "--set"]
+    return build_config(rung=rung, overrides=[*sets, *more])
+
+
+def test_every_rung_trains_on_the_committed_class_weights_unchanged(
+    world, flags, only_labels, labeller
+):
+    """D6: computed once on the full train list, then read as committed, at the 1% rung too."""
+    box, _ = world
+    assert freeze(flags) == 0
+    committed_weights = committed(box)["class_weights"]
+    want = tuple(committed_weights[c] for c in GEOMORPHON_CLASSES)
+    for rung in ("1%", "10%", "100%"):
+        assert geomorphon_pass.committed_class_weights(_cell(flags, rung)) == want
+
+
+def test_class_weights_are_refused_before_the_labels_are_frozen(flags):
+    with pytest.raises(FileNotFoundError, match="freeze --task landform"):
+        geomorphon_pass.committed_class_weights(_cell(flags, "1%"))
+
+
+def test_class_weights_committed_under_another_label_config_are_refused(
+    world, flags, only_labels, labeller
+):
+    """A weight vector belongs to the label set it was counted on, not to a moved one."""
+    assert freeze(flags) == 0
+    with pytest.raises(ValueError, match="label config"):
+        geomorphon_pass.committed_class_weights(_cell(flags, "1%", "geomorphon.threshold=1.1"))
 
 
 def test_a_second_freeze_is_idempotent_and_regenerates_the_fixed_sample(
@@ -683,17 +715,25 @@ def test_the_macos_build_adr_0014_pins_is_in_the_config():
 # --- The live binary ------------------------------------------------------------------------------
 
 #: The committed label hash of :func:`live_window` under the primary parameters, from the pinned
-#: macOS build. ``None`` until #202 fetches and pins WBT v2.4.0 and runs this test once.
-LIVE_LABEL_HASH: str | None = None
+#: macOS build (sha256 63ce7717…19647b), first run by #202.
+LIVE_LABEL_HASH: str = "c9d3b0086be9ad46"
 
 
 def live_window() -> gm.Window:
-    """A committed fixture window: analytic relief with ridges, valleys and a flat floor."""
+    """A committed fixture window that WBT labels with all ten forms.
+
+    The west part is analytic relief (ridges, spurs, hollows, valleys, a closed basin read as
+    pit). The east part is a broad plain meeting a 3 m-per-column ramp and the plateau above it:
+    flat, footslope at the ramp's foot and shoulder at its top. Relief alone gives none of those
+    three, and a pin that cannot see them could not catch a build that moved them.
+    """
     rows, cols = 50, 77
     shape = (224 + 2 * rows, 224 + 2 * cols)
     y, x = np.mgrid[: shape[0], : shape[1]].astype(np.float64)
-    z = 400 + 120 * np.sin(x / 23.0) * np.cos(y / 31.0) + 0.8 * x + 60 * np.sin((x + y) / 57.0)
-    z = np.maximum(z, 380.0)  # a flat valley floor, so "flat" has somewhere to appear
+    relief = 120 * np.sin(x / 23.0) * np.cos(y / 31.0) + 60 * np.sin((x + y) / 57.0)
+    ramp = np.clip((x - 300) * 3.0, 0, None) - np.clip((x - 420) * 3.0, 0, None)
+    z = np.where(x < 200, 400 + relief + 0.8 * x, 400 + 0.8 * 200 + ramp)
+    z = np.maximum(z, 380.0)
     return gm.Window(tile_id="live-fixture", elevation=z.astype(np.float32),
                      absent=np.zeros(shape, dtype=bool),
                      header=gm.SpacingHeader(dx=20.2, dy=30.9), rows=rows, cols=cols)
@@ -704,22 +744,22 @@ def test_the_pinned_binary_labels_the_committed_window_to_the_committed_hash():
     if not binary or not Path(binary).is_file():
         pytest.skip("WhiteboxTools v2.4.0 is not on this box (set DEMAE_WBT_BINARY; #202)")
     g = Geomorphon()
-    if gm.binary_sha256(binary) not in g.wbt_sha256 or LIVE_LABEL_HASH is None:
+    params = gm.WbtParams(g.search, g.threshold, g.skip, g.fdist)
+    shard = np.rint(live_window().elevation[50:274, 77:301]).astype(np.int16)
+    if gm.binary_sha256(binary) not in g.wbt_sha256:
         label = gm.label_tile(
-            live_window(), gm.WbtParams(g.search, g.threshold, g.skip, g.fdist),
+            live_window(), params,
             lambda w, p: gm.call_wbt(w, p, binary=binary, pins=(gm.binary_sha256(binary),)),
-            shard_raw_i16=np.rint(live_window().elevation[50:274, 77:301]).astype(np.int16),
+            shard_raw_i16=shard,
         )[0]
         pytest.fail(
-            f"#202: pin sha256 {gm.binary_sha256(binary)} in Geomorphon.wbt_sha256 and commit "
-            f"LIVE_LABEL_HASH = {gm.content_hash(label)!r} (classes present: "
-            f"{sorted(np.unique(label).tolist())})"
+            f"{binary} (sha256 {gm.binary_sha256(binary)}) is not a pinned build. It labels the "
+            f"fixture {gm.content_hash(label)!r}, committed {LIVE_LABEL_HASH!r}; pin it only if "
+            f"those agree and the fixed sample passes (ADR-0014 D1)"
         )
-    label, _ = gm.label_tile(
-        live_window(), gm.WbtParams(g.search, g.threshold, g.skip, g.fdist),
-        gm.WbtLabeller(binary, g.wbt_sha256),
-        shard_raw_i16=np.rint(live_window().elevation[50:274, 77:301]).astype(np.int16),
-    )
+    label, _ = gm.label_tile(live_window(), params, gm.WbtLabeller(binary, g.wbt_sha256),
+                             shard_raw_i16=shard)
+    assert sorted(np.unique(label).tolist()) == list(range(10)), "all ten forms appear"
     assert gm.content_hash(label) == LIVE_LABEL_HASH
 
 

@@ -14,9 +14,10 @@ committed no code, so this is new. What it says, in the order this module does i
   has none, and records ``null`` rather than the last whole cell.
 * **Nested by construction, asserted anyway** (:func:`check`), on every ladder ``freeze``
   writes, so a later edit to the walk cannot break it quietly.
-* **Not stratified, never redrawn.** Each rung's strata and band coverage is committed beside
-  it instead (:func:`coverage`). Per-class train-pixel counts need the geomorphon labels, so
-  #201/#202 add them; until then the report says so rather than omitting the field.
+* **Not stratified, never redrawn.** Each rung's strata, band coverage and per-class train
+  pixels are committed beside it instead (:func:`coverage`). The pixel counts are summed from
+  the primary label set's committed fingerprint file, which carries every tile's per-class
+  counts (#202), so the ladder stage runs after the geomorphon stage and refuses without it.
 
 ## The files
 
@@ -24,8 +25,10 @@ committed no code, so this is new. What it says, in the order this module does i
 in **walk order** rather than sorted, which that format allows (order is the caller's), because
 walk order is what makes a rung a prefix: rung *r* of ladder *i* is the first
 ``ladders.budgets[r]`` rows. ``ladder_<i>_coverage.json`` records the ladder's index, its draw
-seed, the md5 of the walk it describes and of the head-train list it walked, and each rung's
-coverage. The resolver reads the JSON back to refuse a walk filed under the wrong ladder.
+seed, the md5 of the walk it describes, of the head-train list it walked and of the fingerprint
+file its pixel counts came from, and each rung's coverage (``class_pixels`` per class and the
+rung's ``ignored_pixels``). The resolver reads the JSON back to refuse a walk filed under the
+wrong ladder.
 
 Both go through :func:`benchmark.artifacts.write_committed`, so a second ``freeze`` is a no-op
 and one that would write a different walk refuses rather than overwrite it.
@@ -44,22 +47,17 @@ import numpy as np
 
 from pretrain.artifact import read_tile_strata, render_tile_strata
 
-from . import artifacts
+from . import artifacts, geomorphon_pass
+from . import geomorphon as gm
 from .artifacts import Resolved
 from .config import STRATUM_COUNT
-from .landform_config import RUNGS, LandformConfig
+from .landform_config import GEOMORPHON_CLASSES, RUNGS, LandformConfig
 
 if TYPE_CHECKING:
     from .landform import LandformResolution
 
 #: The split every head-train tile must carry. Task 1 drew the list from it.
 TRAIN_SPLIT: Final = "train"
-
-#: What the coverage report says about the per-class pixel counts it does not carry yet.
-CLASS_PIXELS_NOTE: Final = (
-    "not computed yet: per-class train-pixel counts need the geomorphon labels, which the "
-    "label pass adds (#201, #202)"
-)
 
 #: How the walk is ordered, in the plan's words, so the report is readable without this module.
 ORDER: Final = (
@@ -227,8 +225,10 @@ def coverage(
     bands,
     ladder_md5: str,
     head_train_md5: str,
+    labels: ClassPixels,
 ) -> dict:
-    """What region luck each rung carries: its cells, strata and ruggedness bands (story 30).
+    """What region luck each rung carries: its cells, strata, ruggedness bands and per-class
+    train pixels (story 30).
 
     ``bands`` is :class:`benchmark.voids.Bands`, cut over the eligible test pool and not refit
     on train, so a band here means what it means in every Task 1 and Task 2 table.
@@ -236,6 +236,7 @@ def coverage(
     rungs = []
     for rung in ladder.rungs:
         per_band = Counter(bands.label(bands.of(slope[t])) for t in rung.tile_id)
+        pixels, ignored = labels.over(rung.tile_id)
         strata = sorted(set(rung.stratum_id))
         rungs.append(
             {
@@ -255,7 +256,8 @@ def coverage(
                     "tiles": {bands.label(b): per_band.get(bands.label(b), 0)
                               for b in range(bands.count)},
                 },
-                "class_pixels": None,
+                "class_pixels": pixels,
+                "ignored_pixels": ignored,
             }
         )
     return {
@@ -270,7 +272,7 @@ def coverage(
             "cut_over": "slope_mean quartiles of the eligible test pool (benchmark.voids.Bands)",
             "pool_n": bands.pool_n,
         },
-        "class_pixels_note": CLASS_PIXELS_NOTE,
+        "class_pixels_from": {"path": labels.path, "md5": labels.md5},
         "rungs": rungs,
     }
 
@@ -293,6 +295,49 @@ def summary(rung: Mapping) -> str:
         f"{rung['bands']['present']}/{len(rung['bands']['tiles'])} "
         f"({', '.join(f'{b} {n}' for b, n in rung['bands']['tiles'].items())})"
     )
+
+
+@dataclass(frozen=True)
+class ClassPixels:
+    """Every train tile's primary-label pixel counts, from the committed fingerprint file."""
+
+    #: The file, relative to ``paths.artifacts_dir``, and its md5.
+    path: str
+    md5: str
+    #: ``tile_id -> [ten class counts, ignored count]``.
+    counts: Mapping[str, Sequence[int]]
+
+    @classmethod
+    def read(cls, artifacts_dir: Path | str) -> ClassPixels:
+        path = geomorphon_pass.fingerprint_path(artifacts_dir, gm.PRIMARY)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} is not frozen. Each rung's coverage report carries its per-class train "
+                f"pixels, summed from the primary geomorphon labels' committed fingerprints, so "
+                f"the geomorphon stage of `freeze --task landform` runs first (#202)"
+            )
+        rows = geomorphon_pass.read_fingerprints(path)
+        return cls(
+            path=str(path.relative_to(artifacts_dir)),
+            md5=artifacts.file_md5(path),
+            counts={t: r["counts"] for t, r in rows.items()},
+        )
+
+    def check(self, tile_ids: Sequence[str]) -> None:
+        """Refuse a tile the label pass did not fingerprint."""
+        missing = [t for t in tile_ids if t not in self.counts]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} rung tile(s) have no primary geomorphon label in {self.path}, "
+                f"e.g. {missing[:3]}: the label pass did not cover the head-train list the "
+                f"ladders walk"
+            )
+
+    def over(self, tile_ids: Sequence[str]) -> tuple[dict[str, int], int]:
+        """``(class -> pixels, ignored pixels)`` summed over ``tile_ids``."""
+        self.check(tile_ids)
+        total = np.sum([self.counts[t] for t in tile_ids], axis=0, dtype=np.int64)
+        return dict(zip(GEOMORPHON_CLASSES, map(int, total[:-1]))), int(total[-1])
 
 
 # --- freeze -------------------------------------------------------------------
@@ -351,9 +396,11 @@ def freeze(resolution: LandformResolution) -> list[str]:
     cfg = resolution.config
     spec = cfg.ladders
     tile_id, stratum, geocell, slope = _read_head_train(cfg)
+    directory = Path(cfg.paths.artifacts_dir)
+    labels = ClassPixels.read(directory)
+    labels.check(tile_id)  # before any ladder is written, not partway through
     bands = Bands.from_manifest(cfg.paths.corpus_dir, split="test")
     head_train_md5 = artifacts.file_md5(head_train_path(cfg))
-    directory = Path(cfg.paths.artifacts_dir)
     lines = []
     for i in range(spec.count):
         ladder = walk(
@@ -363,7 +410,8 @@ def freeze(resolution: LandformResolution) -> list[str]:
             directory / ladder_name(i), lambda ladder=ladder: render(ladder), what="ladder"
         )
         report = coverage(
-            ladder, slope=slope, bands=bands, ladder_md5=md5, head_train_md5=head_train_md5
+            ladder, slope=slope, bands=bands, ladder_md5=md5, head_train_md5=head_train_md5,
+            labels=labels,
         )
         _, report_md5 = artifacts.write_committed(
             directory / coverage_name(i),

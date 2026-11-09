@@ -132,6 +132,9 @@ class Variant:
     splits: tuple[str, ...]
 
 
+#: The label set every split is labelled with; the sensitivity variants label test tiles only.
+PRIMARY: Final = "primary"
+
 #: Where each split's tiles come from in Task 1's committed lists.
 SPLITS: Final = ("train", "val", "test")
 
@@ -143,7 +146,7 @@ def variants(g) -> tuple[Variant, ...]:
     :class:`benchmark.landform_config.Geomorphon`.
     """
     primary = WbtParams(search=g.search, threshold=g.threshold, skip=g.skip, fdist=g.fdist)
-    out = [Variant("primary", primary, SPLITS)]
+    out = [Variant(PRIMARY, primary, SPLITS)]
     for search in g.variant_search:
         out.append(Variant(f"L{search}", _moved(primary, search=search), ("test",)))
     for threshold in g.variant_threshold:

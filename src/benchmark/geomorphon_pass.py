@@ -456,6 +456,31 @@ def class_weights(counts: Iterable[Iterable[int]]) -> tuple[dict[str, int], dict
     )
 
 
+def committed_class_weights(cfg: LandformConfig) -> tuple[float, ...]:
+    """The loss weights a geomorphon cell trains with, in class order: the committed ones.
+
+    D6 computes them once, on the full train list, so a cell at any rung reads the same vector
+    from ``geomorphon_config.json`` and never recounts its own rung's pixels. That is why this
+    reads nothing about the cell but its label config, which must be the one the weights were
+    counted under.
+    """
+    path = Path(cfg.paths.artifacts_dir) / CONFIG_NAME
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is not frozen: the class weights are counted by the geomorphon label pass "
+            f"(`freeze --task landform`, #202)"
+        )
+    body = json.loads(path.read_text())
+    want = label_config_hash(cfg.geomorphon)
+    if body["label_config_hash"] != want:
+        raise ValueError(
+            f"{path} holds class weights counted under label config "
+            f"{body['label_config_hash']}, and this cell labels under {want}. Weights from one "
+            f"label set do not carry to another (ADR-0014 D6)"
+        )
+    return tuple(float(body["class_weights"][c]) for c in _classes())
+
+
 def render_config(g: Geomorphon, cen: Census, sets: Mapping[str, dict], pixels: dict,
                   weights: dict) -> bytes:
     """``geomorphon_config.json``: what labels are a function of, and what they came out as."""
@@ -583,7 +608,7 @@ def write(resolution: LandformResolution) -> list[str]:
             f"{sets[v.name]['set_fingerprint']}")
     train = set(lists["train"])
     pixels, weights = class_weights(
-        r["counts"] for r in by_variant["primary"] if r["tile_id"] in train
+        r["counts"] for r in by_variant[gm.PRIMARY] if r["tile_id"] in train
     )
     _, md5 = artifacts.write_committed(
         committed_config, lambda: render_config(g, cen, sets, pixels, weights),
