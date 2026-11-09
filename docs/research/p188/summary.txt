@@ -1,0 +1,48 @@
+config            | flat% per band 0..3      | rarest class% (band0) | absent classes per band | TV vs base (band3, all) | flat-strata tiles: median/max flat%
+L25  t1.0  fd=0    |  47.1   6.7   0.0   1.0 |       pit  0.7 | [0, 0, 0, 0] | 0.029 0.018 |  44.2 /  96.5
+L25  t1.0  fd=half |  42.7   5.8   0.0   0.4 |       pit  0.7 | [0, 0, 1, 0] | 0.025 0.019 |  40.9 /  95.0
+L25  t0.5  fd=0    |  11.7   3.1   0.0   0.0 |       pit  2.8 | [0, 0, 2, 0] | 0.038 0.185 |   2.5 /  47.4
+L25  t0.5  fd=half |   8.8   2.8   0.0   0.0 |       pit  3.0 | [0, 0, 2, 0] | 0.038 0.200 |   1.5 /  44.5
+L25  t0.2  fd=0    |   0.2   0.4   0.0   0.0 |      flat  0.2 | [0, 0, 2, 2] | 0.038 0.283 |   0.0 /   1.3
+L25  t0.2  fd=half |   0.1   0.4   0.0   0.0 |      flat  0.1 | [0, 0, 2, 3] | 0.038 0.285 |   0.0 /   1.0
+L25  t0.1  fd=0    |   0.0   0.3   0.0   0.0 |  shoulder  0.0 | [0, 0, 2, 3] | 0.037 0.289 |   0.0 /   0.5
+L25  t0.1  fd=half |   0.0   0.3   0.0   0.0 |  shoulder  0.0 | [0, 0, 2, 3] | 0.037 0.289 |   0.0 /   0.5
+L50  t1.0  fd=0    |  45.9   6.1   0.0   0.5 |       pit  0.7 | [0, 0, 1, 0] | 0.000 0.000 |  43.3 /  96.5
+L50  t1.0  fd=half |  42.8   5.4   0.0   0.1 |       pit  0.8 | [0, 0, 1, 0] | 0.007 0.014 |  40.5 /  96.3
+L50  t0.5  fd=0    |  10.4   2.3   0.0   0.0 |       pit  3.0 | [0, 0, 3, 0] | 0.020 0.194 |   1.7 /  46.1
+L50  t0.5  fd=half |   8.1   1.9   0.0   0.0 |       pit  3.2 | [0, 0, 3, 1] | 0.022 0.206 |   0.9 /  43.2
+L50  t0.2  fd=0    |   0.1   0.1   0.0   0.0 |      flat  0.1 | [0, 0, 3, 3] | 0.027 0.288 |   0.0 /   0.4
+L50  t0.2  fd=half |   0.0   0.0   0.0   0.0 |      flat  0.0 | [0, 0, 3, 3] | 0.027 0.289 |   0.0 /   0.2
+L50  t0.1  fd=0    |   0.0   0.0   0.0   0.0 |  shoulder  0.0 | [0, 1, 3, 3] | 0.027 0.292 |   0.0 /   0.1
+L50  t0.1  fd=half |   0.0   0.0   0.0   0.0 |      flat  0.0 | [0, 1, 3, 3] | 0.027 0.292 |   0.0 /   0.0
+
+(50, 1.0, '0')
+  band 0: flat 45.9 peak  0.8 ridg  6.2 shou 10.9 spur  2.5 slop 12.3 holl  2.0 foot 12.6 vall  6.1 pit  0.7
+  band 1: flat  6.1 peak  4.5 ridg 13.4 shou  3.7 spur  9.8 slop 25.8 holl  9.5 foot  6.1 vall 17.0 pit  4.1
+  band 2: flat  0.0 peak  4.7 ridg 15.2 shou  0.1 spur 20.8 slop 28.0 holl 13.0 foot  0.0 vall 13.5 pit  4.7
+  band 3: flat  0.5 peak  2.7 ridg 13.8 shou  1.1 spur 18.8 slop 29.5 holl 15.4 foot  0.5 vall 15.1 pit  2.8
+  band all: flat 18.1 peak  2.9 ridg 11.3 shou  5.0 spur 11.2 slop 22.1 holl  8.7 foot  6.1 vall 12.0 pit  2.7
+(50, 0.2, '0')
+  band 0: flat  0.1 peak  5.2 ridg 13.8 shou  0.2 spur 15.9 slop 26.3 holl 15.5 foot  0.5 vall 16.4 pit  6.2
+  band 1: flat  0.1 peak  7.1 ridg 14.7 shou  0.1 spur 13.3 slop 22.1 holl 14.2 foot  0.4 vall 18.7 pit  9.4
+  band 2: flat  0.0 peak  4.9 ridg 15.4 shou  0.0 spur 21.0 slop 27.1 holl 13.2 foot  0.0 vall 12.5 pit  5.8
+  band 3: flat  0.0 peak  2.9 ridg 14.4 shou  0.0 spur 19.5 slop 28.8 holl 16.2 foot  0.0 vall 15.3 pit  2.8
+  band all: flat  0.0 peak  5.1 ridg 14.5 shou  0.1 spur 17.0 slop 26.0 holl 14.9 foot  0.3 vall 15.9 pit  6.2
+(50, 0.1, '0')
+  band 0: flat  0.0 peak  5.4 ridg 14.1 shou  0.0 spur 16.6 slop 24.4 holl 16.2 foot  0.1 vall 16.2 pit  7.1
+  band 1: flat  0.0 peak  7.1 ridg 14.8 shou  0.0 spur 13.4 slop 21.9 holl 14.4 foot  0.0 vall 18.8 pit  9.6
+  band 2: flat  0.0 peak  4.9 ridg 15.4 shou  0.0 spur 21.0 slop 27.1 holl 13.2 foot  0.0 vall 12.5 pit  5.8
+  band 3: flat  0.0 peak  2.9 ridg 14.4 shou  0.0 spur 19.5 slop 28.8 holl 16.2 foot  0.0 vall 15.3 pit  2.8
+  band all: flat  0.0 peak  5.2 ridg 14.6 shou  0.0 spur 17.3 slop 25.2 holl 15.2 foot  0.0 vall 15.9 pit  6.6
+(50, 0.2, 'half')
+  band 0: flat  0.0 peak  5.2 ridg 13.8 shou  0.2 spur 16.0 slop 26.0 holl 15.7 foot  0.4 vall 16.3 pit  6.4
+  band 1: flat  0.0 peak  7.1 ridg 14.7 shou  0.1 spur 13.3 slop 22.1 holl 14.2 foot  0.3 vall 18.7 pit  9.4
+  band 2: flat  0.0 peak  4.9 ridg 15.4 shou  0.0 spur 21.0 slop 27.1 holl 13.2 foot  0.0 vall 12.5 pit  5.8
+  band 3: flat  0.0 peak  2.9 ridg 14.4 shou  0.0 spur 19.5 slop 28.8 holl 16.2 foot  0.0 vall 15.3 pit  2.8
+  band all: flat  0.0 peak  5.1 ridg 14.5 shou  0.1 spur 17.1 slop 25.8 holl 14.9 foot  0.2 vall 15.9 pit  6.3
+(25, 0.2, '0')
+  band 0: flat  0.2 peak  5.1 ridg 13.8 shou  0.3 spur 15.7 slop 26.9 holl 15.4 foot  0.9 vall 16.1 pit  5.5
+  band 1: flat  0.4 peak  7.1 ridg 14.4 shou  0.2 spur 13.2 slop 23.1 holl 14.1 foot  0.7 vall 17.7 pit  9.0
+  band 2: flat  0.0 peak  4.5 ridg 14.5 shou  0.0 spur 21.2 slop 28.6 holl 13.2 foot  0.0 vall 12.8 pit  5.2
+  band 3: flat  0.0 peak  2.3 ridg 12.8 shou  0.0 spur 19.7 slop 30.9 holl 16.6 foot  0.0 vall 15.3 pit  2.3
+  band all: flat  0.2 peak  4.9 ridg 13.9 shou  0.2 spur 17.0 slop 27.1 holl 14.9 foot  0.5 vall 15.7 pit  5.6
