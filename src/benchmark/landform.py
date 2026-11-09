@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import arms, artifacts, landform_arms, landform_config
+from . import arms, artifacts, ladders, landform_arms, landform_config
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -73,14 +73,13 @@ FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199"),
     FreezeStage("geomorphon labels", "#201"),
     FreezeStage("iwahashi labels", "#203"),
-    FreezeStage("ladders", "#200"),
+    FreezeStage("ladders", "#200", ladders.freeze),
     FreezeStage("dataset card", "#218"),
 )
 
 #: What a cell reads that is not built yet. Story 4's whole cell is arm, encoder pin, rung,
 #: ladder, label set, frozen recipe line and bar; these are the parts with no artifact yet.
 PENDING_INPUTS: Final[tuple[Pending, ...]] = (
-    Pending("ladder", "ladder", "#200"),
     Pending("labels", "labels", "#201, #203"),
     Pending("recipe_line", "recipe line", "#207"),
     Pending("prereg_bar", "prereg bar", "#199"),
@@ -118,6 +117,7 @@ class LandformResolution:
                 f"{'':<16} {self.arm.what}",
                 "",
                 *self.arm_lines(),
+                ladders.rung_line(cfg),
                 "",
             ]
         else:
@@ -183,6 +183,19 @@ def _checkpoint(arm: landform_arms.LandformArm, cfg: LandformConfig) -> Resolved
     )
 
 
+def _ladders(cfg: LandformConfig, verb: str) -> tuple[Resolved, ...]:
+    """The ladders a command reads (#200): ``run``'s cell reads its seed's one; ``freeze`` and
+    ``report`` see all of them. :func:`benchmark.ladders.resolved` refuses a walk filed under
+    the wrong ladder."""
+    if verb == "run":
+        return (ladders.resolved(cfg, ladders.bind(cfg), key="ladder", label="ladder"),)
+    ladders.bind(cfg)
+    return tuple(
+        ladders.resolved(cfg, i, key=f"ladder_{i}", label=f"ladder {i}", verify=verb != "freeze")
+        for i in range(cfg.ladders.count)
+    )
+
+
 def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
     """The committed inputs a cell reads that exist today: Task 1's, reused unchanged.
 
@@ -220,7 +233,10 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
         )
     arm = landform_arms.get(cfg.arm)
     return LandformResolution(
-        config=cfg, arm=arm, checkpoint=_checkpoint(arm, cfg), inputs=_inputs(cfg)
+        config=cfg,
+        arm=arm,
+        checkpoint=_checkpoint(arm, cfg),
+        inputs=(*_inputs(cfg), *_ladders(cfg, args.verb)),
     )
 
 
