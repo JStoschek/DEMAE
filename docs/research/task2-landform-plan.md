@@ -755,5 +755,5 @@ frozen-encoder arm, **not** for comparability. *(Amended 2026-10-15,
 "task-level comparability". There is none. No landform number of theirs is readable, and
 their task has five classes from what is very probably China's 1:1M geomorphological map,
 scored per tile after a full fine-tune. The released pretrained encoder could still be
-probed under our heads; whether it becomes an arm is #190's call. See
+probed under our heads; #190 decided it does not become an arm (§2.3). See
 [`p185-geomorpm-task2.md`](p185-geomorpm-task2.md).)*
