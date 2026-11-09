@@ -688,7 +688,9 @@ def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
     for name, encoder in arms.ENCODERS.items():
         if encoder.checkpoint_format not in READABLE_FORMATS:
             continue  # named in `pending` instead — see the module docstring
-        path = getattr(cfg.paths, encoder.checkpoint_field)
+        # An encoder mounted only by the other task's paths group is unmounted here: B9's field
+        # is Task 2's alone, and the contract's bytes never depend on a mount either way.
+        path = getattr(cfg.paths, encoder.checkpoint_field, None)
         observed = None if encoder.checkpoint_md5 is None else file_md5(path)
         if observed is not None and observed != encoder.checkpoint_md5:
             raise ValueError(
@@ -1114,7 +1116,7 @@ class Extractor:
 
     def _checked_path(self, entry: EncoderSpec) -> str:
         registered = arms.ENCODERS[entry.name]
-        path = getattr(self.config.paths, registered.checkpoint_field)
+        path = getattr(self.config.paths, registered.checkpoint_field, None)
         if path is None:
             raise FileNotFoundError(
                 f"the {entry.name} encoder is not mounted on this box — set "

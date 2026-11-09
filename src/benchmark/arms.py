@@ -161,8 +161,8 @@ HEAD_VARIANTS: Final = ("shared", "skip")
 class Encoder:
     """A frozen encoder's identity: what it is, how wide, and which file it is loaded from.
 
-    ``checkpoint_field`` names a field of :class:`benchmark.config.Paths` rather than holding a
-    path, because *where* a checkpoint is mounted is environment (a rented box mounts it
+    ``checkpoint_field`` names a field of a task's paths group (:class:`benchmark.config.Paths`,
+    or Task 2's :class:`benchmark.landform_config.LandformPaths`) rather than holding a path, because *where* a checkpoint is mounted is environment (a rented box mounts it
     somewhere else) while *which* encoder an arm reads is the arm — and the arm is hashed.
     ``checkpoint_md5`` is the other half of that split and is **not** environment: it is the
     one fact that distinguishes this encoder's weights from a sibling's, so it is declared here
@@ -181,7 +181,8 @@ class Encoder:
     #: ``sincos2d_terramind`` is `build_2d_sincos_posemb`'s, the MoCo-v3 form TerraMind's
     #: ``[1, D, 16, 16]`` parameter is a closed form of. What the shipped tensor **is**.
     pos_encoding: str
-    #: The :class:`benchmark.config.Paths` field naming this encoder's checkpoint.
+    #: The paths-group field naming this encoder's checkpoint. A field only Task 2's group has
+    #: (B9's) reads as unmounted under Task 1's config.
     checkpoint_field: str
     #: §2.1's diet for this encoder — one of :data:`NORMALIZATIONS` other than ``none``.
     #:

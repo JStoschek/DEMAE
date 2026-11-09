@@ -402,7 +402,8 @@ class LandformPaths(_Frozen):
 
     The encoder checkpoint fields carry Task 1's names and defaults, because an encoder's
     :attr:`benchmark.arms.Encoder.checkpoint_field` is looked up on whichever task's paths group
-    is in hand — one registry, one field name per checkpoint.
+    is in hand — one registry, one field name per checkpoint. A checkpoint only Task 2 reads
+    (B9's) is a field here alone, so Task 1's group does not change for it.
     """
 
     corpus_dir: str = Paths.corpus_dir
@@ -436,7 +437,10 @@ class LandformPaths(_Frozen):
     cog_root: str | None = None
     #: The label rasters and the pass's resume log: rebuilt, gitignored, fingerprinted.
     labels_dir: str = "data/task2/labels"
-    terramind_backbone_checkpoint: str | None = Paths.terramind_backbone_checkpoint
+    #: TerraMind's v1 base model, `TerraMind_v1_base.pt` — the file B9 reads (#205), a different
+    #: file from the tokenizer above under a different pin. Task 2's alone: no Task 1 arm reads
+    #: it, so Task 1's :class:`Paths` has no such field.
+    terramind_backbone_checkpoint: str | None = None
 
     def __post_init__(self) -> None:
         check_paths(self)

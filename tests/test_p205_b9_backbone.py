@@ -53,21 +53,32 @@ def test_b9s_count_is_plan_section_2s():
     assert arms.check_capacity(B9) == B9_PARAMS
 
 
-def test_both_task_paths_groups_can_mount_b9():
+def test_only_task_twos_paths_group_mounts_b9():
+    """Task 1's config is out of scope (#197): B9's mount is Task 2's alone."""
     from benchmark.config import Paths
     from benchmark.landform_config import LandformPaths
 
-    assert Paths().terramind_backbone_checkpoint is None
+    assert not hasattr(Paths(), "terramind_backbone_checkpoint")
     assert LandformPaths().terramind_backbone_checkpoint is None
+
+
+def test_task_ones_freeze_builds_the_same_contract_without_b9s_mount(tmp_path):
+    """The contract's bytes are a function of the code, whichever task's config builds it."""
+    from benchmark.config import BenchmarkConfig
+    from benchmark.extract import build_spec
+
+    task1 = BenchmarkConfig()
+    task1 = task1.replace(paths=task1.paths.replace(artifacts_dir=str(tmp_path)))
+    assert build_spec(task1).to_json() == build_spec(_unmounted(tmp_path)).to_json()
 
 
 # --- Story 39 for B9: the contract carries it --------------------------------------
 
 
 def _unmounted(tmp_path):
-    from benchmark.config import BenchmarkConfig
+    from benchmark.landform_config import LandformConfig
 
-    base = BenchmarkConfig()
+    base = LandformConfig()
     return base.replace(
         paths=base.paths.replace(
             artifacts_dir=str(tmp_path),
