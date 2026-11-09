@@ -360,7 +360,7 @@ def build_tokenizer(checkpoint: Path, spec, entry, *, device: str):
             f"{entry.name}. A9 reads the same file A5 does, and a different one is a different "
             f"tokenizer with the same shape"
         )
-    terramind_constants()
+    terramind_constants(entry.modality)
 
     model = FULL_MODEL_REGISTRY.build("terramind_v1_tokenizer_dem", pretrained=True)
     native = model.encoder.pos_emb.detach()
@@ -396,7 +396,9 @@ def encoder_agreement(model, extractor, raw, mask) -> dict:
     from benchmark.extract import normalize
 
     features = extractor.extract(raw, mask, arm=ARM)
-    x = normalize(raw, mask, normalization="terramind_v1")
+    x = normalize(
+        raw, mask, normalization="terramind_v1", modality=extractor.spec.encoder_for(ARM).modality
+    )
     tensor = torch.from_numpy(x).unsqueeze(1).to(extractor.device)
     with torch.no_grad():
         tokens = model.encoder(model.prepare_input(tensor)).flatten(2).transpose(1, 2)
@@ -677,7 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     model = build_tokenizer(checkpoint, spec, entry, device=args.device)
     agreement = encoder_agreement(model, extractor, raw, mask)
 
-    x = normalize(raw, mask, normalization="terramind_v1")
+    x = normalize(raw, mask, normalization="terramind_v1", modality=entry.modality)
     tensor = torch.from_numpy(x).unsqueeze(1).to(args.device)
     measured = measure(
         model,
