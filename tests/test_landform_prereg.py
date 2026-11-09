@@ -55,12 +55,12 @@ def _plan_with(tmp_path: Path, old: str, new: str) -> Path:
 def test_freeze_writes_the_task_two_bar_with_the_nine_rules_and_their_section_seven_phrases(
     tmp_path, capsys, monkeypatch
 ):
-    # #200's ladders walk Task 1's head-train list, which this empty box does not hold; they are
-    # tested with their own fixture. What is under test here is the bar stage alone.
+    # Only the bar's stage: the label and ladder stages need a corpus and Task 1's lists, which
+    # this box does not hold, and each is tested with its own fixture.
     from benchmark import landform
 
-    stages = tuple(stage for stage in landform.FREEZE_STAGES if stage.label == "prereg bar")
-    monkeypatch.setattr(landform, "FREEZE_STAGES", stages)
+    bar_stage = next(s for s in landform.FREEZE_STAGES if s.label == "prereg bar")
+    monkeypatch.setattr(landform, "FREEZE_STAGES", (bar_stage,))
     task2 = tmp_path / "task2"
     flags = [
         "--task", "landform",
@@ -68,7 +68,7 @@ def test_freeze_writes_the_task_two_bar_with_the_nine_rules_and_their_section_se
         "--set", f'paths.task1_artifacts_dir="{tmp_path / "task1"}"',
         "--set", f'paths.results_path="{tmp_path / "results.parquet"}"',
     ]
-    launch.main(["freeze", *flags])
+    assert launch.main(["freeze", *flags]) == 0
     doc = json.loads((task2 / "task2-prereg-bar.json").read_text())
     mechanised = [e for e in doc["entries"] if e.get("registered_in")]
     assert tuple(e["rule"] for e in mechanised) == BAR_RULES

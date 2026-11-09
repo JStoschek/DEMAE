@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmark import launch
+from benchmark import landform, launch
 from benchmark.config import BenchmarkConfig
 from benchmark.landform_config import RUNG_TILES, RUNGS, LandformConfig, steps
 
@@ -168,8 +168,8 @@ def test_freeze_names_the_generator_hash_and_its_stages_not_a_cell(flags, capsys
     assert LandformConfig().config_hash not in out
     assert "arm B1" not in out and "encoder" not in out
     assert "prereg bar — built (#199)" in out
+    assert "geomorphon labels — built (#201)" in out
     for stage, ticket in (
-        ("geomorphon labels", "#201"),
         ("iwahashi labels", "#203"),
         ("dataset card", "#218"),
     ):
@@ -297,9 +297,10 @@ def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zer
     monkeypatch.setattr(landform, "FREEZE_STAGES", pending)
     with pytest.raises(NotImplementedError) as exc:
         launch.main(["freeze", *flags])
-    for ticket in ("#201", "#203", "#218"):
+    for ticket in ("#203", "#218"):
         assert ticket in str(exc.value)
     assert "#199" not in str(exc.value), "the bar has a writer now (#199)"
+    assert "#201" not in str(exc.value), "the geomorphon labels have a writer now (#201)"
 
 
 # --- Below the seam: §4.5's step-count function ------------------------------

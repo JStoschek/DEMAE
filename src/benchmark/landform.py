@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import arms, artifacts, ladders, landform_arms, landform_config, prereg
+from . import arms, artifacts, geomorphon_pass, ladders, landform_arms, landform_config, prereg
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -98,7 +98,7 @@ def bar_for(cfg: LandformConfig) -> prereg.LandformBar:
 #: then the card, which describes everything above it and so goes last.
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199", _freeze_bar),
-    FreezeStage("geomorphon labels", "#201"),
+    FreezeStage("geomorphon labels", "#201", geomorphon_pass.write),
     FreezeStage("iwahashi labels", "#203"),
     FreezeStage("ladders", "#200", ladders.freeze),
     FreezeStage("dataset card", "#218"),
@@ -249,6 +249,9 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
         for key, (label, path) in at.items()
     )
     bar = bar_path(cfg)
+    # The geomorphon label config: its md5 moves with the label config hash, the census, every
+    # variant's set fingerprint and the class weights (#201).
+    geomorphon = Path(cfg.paths.artifacts_dir) / geomorphon_pass.CONFIG_NAME
     return task1_inputs + (
         Resolved(
             key="prereg_bar",
@@ -256,6 +259,13 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
             path=str(bar),
             md5=artifacts.file_md5(bar),
             absent_note="not frozen yet (`python -m benchmark.launch freeze --task landform`)",
+        ),
+        Resolved(
+            key="geomorphon_config",
+            label="geomorphon",
+            path=str(geomorphon),
+            md5=artifacts.file_md5(geomorphon),
+            absent_note="not frozen yet (`freeze --task landform`, #201/#202)",
         ),
     )
 
