@@ -69,6 +69,18 @@ across IBM's artifacts — 651.663/928.168 in the dataset loader, 435.726/560.32
 tokenizer — so the *name* is what selects the pair belonging to the v1 checkpoint this plan
 benchmarks, and hardcoding a value would silently accept whichever pair happened to sit at it.
 The *value* check is what catches a terratorch upgrade retuning the pair the name resolves to.
+The name is the encoder's own declaration (:attr:`benchmark.arms.Encoder.modality`, #204), not a
+module constant: the tokenizer reads ``tok_dem@224`` and the backbone ``untok_dem@224``, and one
+constant for both would have let them share a diet by accident.
+
+## Task 2's entries on the same weights (#204)
+
+``terramind-latent`` (B8) and ``terramind-per-tile`` (B4-ALT/B5-ALT) read the tokenizer's file
+under its pin and are registry entries of their own on ``terramind-bicubic``'s precedent. B8's
+`output` is the post-`quant_proj`, pre-FSQ 5-d latent (:attr:`EncoderSpec.output_tap`), and its
+`quant_proj` is loaded strictly beside the encoder half; ALT is the tokenizer's encoder on
+DEMAE's per-tile diet. Neither has a Task 1 arm, so both are reached by registry name
+(``Extractor.extract(..., encoder_name=...)``) rather than through the Task 1 `arms` map.
 
 **The position embedding is re-derived, and the derivation is a declared field.**
 :attr:`EncoderSpec.pos_emb` carries ADR-0011 Decision 2's centre-anchored 14x14 crop —
@@ -175,12 +187,15 @@ PENDING: Final[dict[str, dict]] = {}
 
 # --- TerraMind's declared constants (ADR-0012 §7.2, ADR-0011) ------------------
 
-#: The modality key that *selects* the constant pair. #138's three pairs are why this is a name
-#: and not a number — see the module docstring.
-TERRAMIND_MODALITY: Final = "tok_dem@224"
-
-#: What that name must resolve to. p118 §5.4 read these out of the installed package on the
-#: verified terratorch, and :func:`terramind_constants` refuses anything else.
+#: The modality key that *selects* the constant pair is **not** here: it is
+#: :attr:`benchmark.arms.Encoder.modality`, declared per encoder since #204. It was a module
+#: constant while the tokenizer was the only TerraMind encoder; the backbone (B9) reads
+#: ``untok_dem@224`` where the tokenizer reads ``tok_dem@224``, and one constant would have let
+#: them share a diet by accident.
+#:
+#: What every key this contract reads must resolve to. p118 §5.4 read these out of the installed
+#: package on the verified terratorch, and :func:`terramind_constants` refuses anything else.
+#: Both keys registered today (``tok_dem@224``, and B9's ``untok_dem@224``) resolve to it.
 TERRAMIND_MEAN: Final = 670.665
 TERRAMIND_STD: Final = 951.272
 
@@ -289,6 +304,11 @@ class EncoderSpec:
     #: §2.1's declared diet. ``per_tile`` recomputes from the passed mask; ``terramind_v1`` is
     #: the global affine #12 owns.
     normalization: str
+    #: The key that selects ``terramind_v1``'s constant pair, ``None`` for ``per_tile``
+    #: (:attr:`benchmark.arms.Encoder.modality`). In the file because it is half of the diet: the
+    #: tokenizer's ``tok_dem@224`` and the backbone's ``untok_dem@224`` are two clauses, and a
+    #: contract that carried only the diet's name would let one stand for the other (#204).
+    modality: str | None
     #: How the file is laid out — one of :data:`READABLE_FORMATS`, or a format this ticket
     #: declares and does not read.
     checkpoint_format: str
@@ -308,6 +328,12 @@ class EncoderSpec:
     #: Whether ``output`` is ``intermediates[-1]`` put through a final norm. **The field-level
     #: note ADR-0012 §3 asks for**, so nobody discovers DEMAE's final norm by reading tensors.
     output_is_normed: bool
+    #: Which tensor `output` is — :data:`benchmark.arms.OUTPUT_TAPS`. ``pre_fsq_latent`` is B8's
+    #: post-`quant_proj` latent; every other encoder's is ``final``, its own final tensor.
+    output_tap: str
+    #: `output`'s width ``D_out``: :attr:`width` unless the tap is the latent, whose width is the
+    #: tokenizer's FSQ code dimension. `intermediates` are :attr:`width` wide either way.
+    output_width: int
     #: Whether the architecture has a CLS token at all.
     has_cls: bool
     #: What the resolution line and this file's reader see about that distinction.
@@ -352,6 +378,15 @@ def pos_emb_block(encoder: arms.Encoder, *, grid_px: int) -> dict:
 
 def _encoder_note(encoder: arms.Encoder) -> str:
     """The field-level note, written from the fact rather than copied per entry."""
+    if encoder.output_tap == "pre_fsq_latent":
+        return (
+            f"`output` is the tokenizer's post-`quant_proj`, pre-FSQ latent: a 1x1 convolution "
+            f"from `intermediates[{encoder.depth - 1}]`'s {encoder.width} channels down to "
+            f"{encoder.output_width}, which is what terratorch's own `return_type=\"latent\"` "
+            f"returns. It is **not** `intermediates[{encoder.depth - 1}]` and not normed; the "
+            f"twelve `intermediates` are this encoder's blocks at width {encoder.width}, exactly "
+            f"as for the entry reading the same weights without the latent."
+        )
     if encoder.output_is_normed:
         return (
             f"`output` is {ADR} §3's own final tensor: block {encoder.depth} put through this "
@@ -514,11 +549,13 @@ class ExtractorSpec:
             declared = (
                 entry.family, entry.width, entry.depth, entry.pos_encoding,
                 entry.checkpoint_format, entry.timm_model, entry.output_is_normed, entry.has_cls,
+                entry.modality, entry.output_tap, entry.output_width,
             )
             actual = (
                 registered.family, registered.width, registered.depth, registered.pos_encoding,
                 registered.checkpoint_format, registered.timm_model,
                 registered.output_is_normed, registered.has_cls,
+                registered.modality, registered.output_tap, registered.output_width,
             )
             if declared != actual:
                 raise ValueError(
@@ -538,6 +575,10 @@ class ExtractorSpec:
                     f"rather than a line in extraction code precisely so the two cannot drift "
                     f"apart silently."
                 )
+            # Plan §2's capacity table, on every load (#204, story 40). Not a field of this file
+            # — the contract governs what comes out of an encoder, not how big it is — so it is
+            # the registry the check reads, by the registry's own refusal.
+            arms.check_capacity(name)
             if entry.depth != self.layers:
                 raise ValueError(
                     f"{SPEC_FILENAME}'s {name} declares {entry.depth} blocks against the "
@@ -584,6 +625,21 @@ class ExtractorSpec:
             raise ValueError(f"{SPEC_FILENAME} has no entry for encoder {name!r}")
         return entry
 
+    def encoder_named(self, name: str) -> EncoderSpec:
+        """The contract clause for one registered encoder, by its registry name.
+
+        :meth:`encoder_for`'s sibling for an encoder no Task 1 arm reads — Task 2's B8 and ALT
+        entries (#204), and whatever Task 2 arm table keys into the shared registry. The file's
+        `arms` map is Task 1's table and stays so; the `encoders` block is the whole registry.
+        """
+        entry = self.encoders.get(name)
+        if entry is None:
+            raise ValueError(
+                f"{SPEC_FILENAME} has no entry for encoder {name!r}; it covers "
+                f"{sorted(self.encoders)}"
+            )
+        return entry
+
 
 # --- Writing it ---------------------------------------------------------------
 
@@ -624,10 +680,13 @@ def build_spec(cfg: BenchmarkConfig | None = None) -> ExtractorSpec:
             pos_encoding=encoder.pos_encoding,
             pos_emb=pos_emb_block(encoder, grid_px=grid_px),
             normalization=arms.normalization_for(name),
+            modality=encoder.modality,
             checkpoint_format=encoder.checkpoint_format,
             timm_model=encoder.timm_model,
             checkpoint_md5=encoder.checkpoint_md5,
             output_is_normed=encoder.output_is_normed,
+            output_tap=encoder.output_tap,
+            output_width=encoder.output_width,
             has_cls=encoder.has_cls,
             note=_encoder_note(encoder),
         )
@@ -757,13 +816,16 @@ def _as_batch(raw_i16, valid_mask) -> tuple[np.ndarray, np.ndarray]:
     return raw, mask
 
 
-def terramind_constants() -> tuple[float, float]:
+def terramind_constants(modality: str) -> tuple[float, float]:
     """TerraMind's DEM affine, **selected by name and checked by value** (ADR-0012 §7.2).
 
-    Read out of the installed terratorch rather than off :data:`TERRAMIND_MEAN` — the module
-    docstring has why both halves are load-bearing, and the short version is #138's three pairs.
-    A refusal here beats a silent rescale of every A5 and A9 input, which is what a retuned pair
-    would otherwise be: the encoder accepts any affine and returns a plausible tensor (p118 §7).
+    ``modality`` is the encoder's declared key (:attr:`benchmark.arms.Encoder.modality`), and
+    the caller always passes it: there is no default, because a default is the module constant
+    #204 removed. Read out of the installed terratorch rather than off :data:`TERRAMIND_MEAN` —
+    the module docstring has why both halves are load-bearing, and the short version is #138's
+    three pairs. A refusal here beats a silent rescale of every A5 and A9 input, which is what a
+    retuned pair would otherwise be: the encoder accepts any affine and returns a plausible
+    tensor (p118 §7).
     """
     try:
         from terratorch.models.backbones.terramind.model.terramind_register import (
@@ -778,22 +840,22 @@ def terramind_constants() -> tuple[float, float]:
         ) from None
 
     try:
-        mean, std = v1_pretraining_mean[TERRAMIND_MODALITY], v1_pretraining_std[TERRAMIND_MODALITY]
+        mean, std = v1_pretraining_mean[modality], v1_pretraining_std[modality]
     except KeyError:
         raise ValueError(
             f"the installed terratorch publishes no v1 pretraining constants under "
-            f"{TERRAMIND_MODALITY!r}. That name is what *selects* the pair belonging to the "
+            f"{modality!r}. That name is what *selects* the pair belonging to the "
             f"checkpoint this plan benchmarks (#138 found three DEM pairs across IBM's "
             f"artifacts), so a rename is a refusal and not something to work around."
         ) from None
     if len(mean) != 1 or len(std) != 1:
         raise ValueError(
-            f"{TERRAMIND_MODALITY} resolves to multi-channel constants {mean} / {std}; the DEM "
+            f"{modality} resolves to multi-channel constants {mean} / {std}; the DEM "
             f"tokenizer is single-channel"
         )
     if (mean[0], std[0]) != (TERRAMIND_MEAN, TERRAMIND_STD):
         raise ValueError(
-            f"the installed terratorch resolves {TERRAMIND_MODALITY!r} to "
+            f"the installed terratorch resolves {modality!r} to "
             f"{mean[0]} / {std[0]}; {ADR} §7.2 declares {TERRAMIND_MEAN} / {TERRAMIND_STD}. An "
             f"encoder fed a retuned affine returns a plausible tensor and raises nothing "
             f"(p118 §7), so this refuses."
@@ -801,7 +863,21 @@ def terramind_constants() -> tuple[float, float]:
     return float(mean[0]), float(std[0])
 
 
-def normalize(raw: np.ndarray, mask: np.ndarray, *, normalization: str) -> np.ndarray:
+def global_affine(raw: np.ndarray, *, mean: float, std: float) -> np.ndarray:
+    """``terramind_v1``'s arithmetic, over a pair already selected and value-checked.
+
+    The one implementation of the forward affine, which :func:`normalize` applies after
+    :func:`terramind_constants` has looked the pair up under the encoder's declared key. A9's
+    pass-through applies it with the pair :func:`benchmark.passthrough.load` looked up the same
+    way, so its forward and its inverse (:func:`benchmark.passthrough.to_metres`) read one pair
+    and neither re-derives which key it came from (#204).
+    """
+    return ((raw.astype(np.float32) - np.float32(mean)) / np.float32(std)).astype(np.float32)
+
+
+def normalize(
+    raw: np.ndarray, mask: np.ndarray, *, normalization: str, modality: str | None = None
+) -> np.ndarray:
     """Apply the encoder's **declared** diet — the whole of what §2.1 says is per-arm.
 
     ``per_tile`` standardizes by statistics recomputed from the passed mask (Decision 2), one
@@ -812,6 +888,11 @@ def normalize(raw: np.ndarray, mask: np.ndarray, *, normalization: str) -> np.nd
     TerraMind, the affine has no per-tile term for a mask to enter, and the A1 fill happened
     upstream. The mask still arrives, because it is the same call — and a signature that dropped
     it for one diet is a branch whose two sides belong to different arms.
+
+    ``modality`` is the encoder's declared key for that affine's pair
+    (:attr:`benchmark.arms.Encoder.modality`, #204), and ``terramind_v1`` refuses to run without
+    one rather than reaching for a default. ``per_tile`` uses no constants and so no key; the
+    parameter defaults to ``None`` for that diet's callers, never to a key.
     """
     if normalization == "per_tile":
         out = np.empty(raw.shape, dtype=np.float32)
@@ -822,8 +903,15 @@ def normalize(raw: np.ndarray, mask: np.ndarray, *, normalization: str) -> np.nd
             ) / np.float32(max(std, STD_FLOOR))
         return out
     if normalization == "terramind_v1":
-        mean, std = terramind_constants()
-        return ((raw.astype(np.float32) - np.float32(mean)) / np.float32(std)).astype(np.float32)
+        if modality is None:
+            raise ValueError(
+                f"the `terramind_v1` diet is a constant pair selected by name, and no modality "
+                f"key was passed. It is the encoder's declaration "
+                f"(`benchmark.arms.Encoder.modality`) — the tokenizer and the backbone read "
+                f"different keys, which is why there is no default ({ADR} §7.2, #204)"
+            )
+        mean, std = terramind_constants(modality)
+        return global_affine(raw, mean=mean, std=std)
     raise NotImplementedError(
         f"normalization {normalization!r} is not one this contract implements "
         f"({', '.join(IMPLEMENTED_NORMALIZATIONS)}). §2.1's diets are the registry's, and an "
@@ -954,9 +1042,24 @@ class Extractor:
 
     # --- the encoder, and §7.1's four refusals
 
-    def encoder(self, arm: str):
-        """The frozen model this arm reads, checked against the contract on the way in."""
-        entry = self.spec.encoder_for(arm)
+    def _entry(self, arm: str | None, encoder_name: str | None) -> EncoderSpec:
+        """The clause to run: by Task 1 arm, or by registry name. Exactly one of the two."""
+        if (arm is None) == (encoder_name is None):
+            raise ValueError(
+                f"name the arm or the encoder, exactly one; got arm={arm!r}, "
+                f"encoder_name={encoder_name!r}"
+            )
+        if arm is not None:
+            return self.spec.encoder_for(arm)
+        return self.spec.encoder_named(encoder_name)
+
+    def encoder(self, arm: str | None = None, *, encoder_name: str | None = None):
+        """The frozen model this arm (or this registry encoder) reads, checked on the way in.
+
+        ``encoder_name`` reaches an encoder no Task 1 arm reads — Task 2's B8 and ALT entries
+        (#204) — through the same refusals and the same per-name cache.
+        """
+        entry = self._entry(arm, encoder_name)
         model = self._models.get(entry.name)
         if model is None:
             model = self._models[entry.name] = self._build(entry)
@@ -1140,7 +1243,11 @@ class Extractor:
         # they are what it applies, so it has to — but a contract clause that only fired once a
         # tile arrived would let `Extractor.encoder("A5")` succeed against a terratorch whose
         # diet has moved, and "the encoder resolved" is what a `--dry-run` pre-flight reports.
-        terramind_constants()
+        #
+        # Only for an encoder fed that diet: `terramind-per-tile` (B4-ALT/B5-ALT) reads the same
+        # weights on DEMAE's per-tile diet, uses no constant pair, and declares no key to check.
+        if entry.normalization == "terramind_v1":
+            terramind_constants(entry.modality)
 
         full, _ = read_state_dict(path)
         prefix = "encoder."
@@ -1152,6 +1259,11 @@ class Extractor:
             )
 
         _check_depth(state, entry, path)
+        # B8's half, off the file's own keys before a model is built — the same moment the depth
+        # is read, and for the same reason: a refusal that names the latent beats a shape error.
+        quant_proj = (
+            self._quant_proj(entry, full, path) if entry.output_tap == "pre_fsq_latent" else None
+        )
         native = state.get("pos_emb")
         if native is None:
             raise ValueError(
@@ -1225,12 +1337,51 @@ class Extractor:
                 f"{SPEC_FILENAME}'s declared {entry.width} for {entry.name}"
             )
         model.pos_emb = nn.Parameter(derived.clone(), requires_grad=False)
+        if quant_proj is not None:
+            model = _latent_tap(model, quant_proj)
         return model.eval().to(self.device)
+
+    def _quant_proj(self, entry: EncoderSpec, full: dict, path: str):
+        """B8's `quant_proj`, out of the same file and loaded **strictly** like the encoder half.
+
+        terratorch builds it as ``Conv2d(enc_dim, latent_dim, 1)`` (`vqvae.py`). Its width is
+        checked against the declared one off the file's own tensor before anything is built, so
+        a different latent is refused by name rather than as a shape error from a strict load.
+        """
+        from torch import nn
+
+        prefix = "quant_proj."
+        state = {k[len(prefix):]: v for k, v in full.items() if k.startswith(prefix)}
+        if not state:
+            raise ValueError(
+                f"{path} has no `{prefix}` tensors: {SPEC_FILENAME} declares {entry.name}'s "
+                f"`output` as the tokenizer's pre-FSQ latent, and that latent is what `quant_proj` "
+                f"computes. An encoder-only file can be B4 and cannot be B8"
+            )
+        weight = state.get("weight")
+        if weight is None or tuple(weight.shape[1:]) != (entry.width, 1, 1):
+            raise ValueError(
+                f"{path}'s `{prefix}weight` is "
+                f"{None if weight is None else tuple(weight.shape)}; the latent is a 1x1 "
+                f"convolution from the encoder's {entry.width} channels"
+            )
+        if int(weight.shape[0]) != entry.output_width:
+            raise ValueError(
+                f"{path}'s `quant_proj` computes a {int(weight.shape[0])}-d latent; "
+                f"{SPEC_FILENAME} declares {entry.output_width} for {entry.name}"
+            )
+        quant_proj = nn.Conv2d(entry.width, entry.output_width, 1)
+        quant_proj.load_state_dict(state, strict=True)
+        return quant_proj
 
     # --- ADR-0012's one call
 
-    def extract(self, raw_i16, valid_mask, *, arm: str) -> Features:
+    def extract(
+        self, raw_i16, valid_mask, *, arm: str | None = None, encoder_name: str | None = None
+    ) -> Features:
         """Raw int16 metres and a valid-pixel mask in; ADR-0012 §5's canonical layout out.
+
+        Named by Task 1 arm or by registry encoder (``encoder_name``, #204), exactly one.
 
         The compute dtype is :attr:`benchmark.config.Extract.compute_dtype` and the returned
         tensors are always fp32 — §6's reference — because a task that moves its compute dtype
@@ -1242,10 +1393,10 @@ class Extractor:
         # The input is checked and normalized *before* the encoder is materialized, so a
         # pre-normalized tensor costs a type check rather than a 340 MB load. Which is also the
         # order that makes the refusal legible: it is about the argument, not about the box.
-        entry = self.spec.encoder_for(arm)
+        entry = self._entry(arm, encoder_name)
         raw, mask = _as_batch(raw_i16, valid_mask)
-        x = normalize(raw, mask, normalization=entry.normalization)
-        model = self.encoder(arm)
+        x = normalize(raw, mask, normalization=entry.normalization, modality=entry.modality)
+        model = self.encoder(encoder_name=entry.name)
         tensor = torch.from_numpy(x).unsqueeze(1).to(self.device)
 
         compute = self.config.extract.compute_dtype
@@ -1271,9 +1422,12 @@ class Extractor:
         """One pass, at the requested dtype, in the canonical ``(N, 1 + 196, D)`` sequence."""
         import torch
 
-        forward = (
-            _forward_terratorch if entry.checkpoint_format == "terratorch" else _forward_blocks
-        )
+        if entry.output_tap == "pre_fsq_latent":
+            forward = _forward_latent
+        elif entry.checkpoint_format == "terratorch":
+            forward = _forward_terratorch
+        else:
+            forward = _forward_blocks
         with torch.no_grad():
             if dtype == self.spec.reference_dtype:
                 return forward(model, tensor)
@@ -1319,14 +1473,16 @@ class Extractor:
             "immaterial": bool(cosine.mean() >= PRECISION_THRESHOLD),
         }
 
-    def precision_agreement(self, arm: str) -> dict | None:
+    def precision_agreement(
+        self, arm: str | None = None, *, encoder_name: str | None = None
+    ) -> dict | None:
         """This arm's encoder's measured fp32-versus-compute-dtype agreement, or ``None``.
 
         ``None`` means one of two things and they are not worth a branch to tell apart: the arm
         has not extracted anything yet, or it runs at the reference dtype and there is no second
         number to compare. Either way there is nothing measured to record.
         """
-        return self.precision.get(self.spec.encoder_for(arm).name)
+        return self.precision.get(self._entry(arm, encoder_name).name)
 
 
 def _forward_blocks(model, x):
@@ -1368,6 +1524,31 @@ def _forward_terratorch(model, x):
     blocks = model(x, return_intermediates=True)
     sequence = tuple(t.flatten(2).transpose(1, 2) for t in blocks)
     return sequence[-1], sequence
+
+
+def _latent_tap(encoder, quant_proj):
+    """B8's model: the tokenizer's encoder and its `quant_proj`, as one frozen module (#204).
+
+    A ``ModuleDict`` so `.eval()`, `.to()` and `parameters()` cover both halves and
+    ``model.encoder`` / ``model.quant_proj`` read the way terratorch names them. ``encoder`` is
+    the same `vit_b_enc` the ``terramind`` entry builds, ADR-0011's crop in it.
+    """
+    from torch import nn
+
+    return nn.ModuleDict({"encoder": encoder, "quant_proj": quant_proj})
+
+
+def _forward_latent(model, x):
+    """B8's pass: the tokenizer's twelve blocks, then `quant_proj` over the last of them.
+
+    Exactly terratorch's own ``return_type="latent"`` (`vqvae_backbone.py`:
+    ``self.quant_proj(embedding[-1])``) — over the *spatial* block 12, before FSQ rounds it.
+    One pass, so the intermediates are bit-identical to the ``terramind`` entry's.
+    """
+    blocks = model.encoder(x, return_intermediates=True)
+    latent = model.quant_proj(blocks[-1])
+    sequence = tuple(t.flatten(2).transpose(1, 2) for t in blocks)
+    return latent.flatten(2).transpose(1, 2), sequence
 
 
 def _timm_state_from_mmselfsup(state, entry: EncoderSpec) -> dict:

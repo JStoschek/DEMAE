@@ -277,7 +277,9 @@ class PassThrough:
         import torch
 
         tile_px = int(composed.a1_i16.shape[-1])
-        x = extract.normalize(composed.a1_i16, composed.valid, normalization="terramind_v1")
+        # The pair `load` selected under the tokenizer's declared key and value-checked — the
+        # same one `to_metres` inverts below — through the arithmetic `extract.normalize` uses.
+        x = extract.global_affine(composed.a1_i16, mean=self.mean, std=self.std)
         tensor = torch.from_numpy(x).unsqueeze(1).to(self.device)
         with torch.no_grad():
             quant, _, _ = self.model.encode(tensor)
@@ -382,7 +384,7 @@ def load(cfg, arm: arms.Arm, *, device: str | None = None) -> PassThrough:
     contract_encoder = extractor.encoder(arm.name)
     spec_entry = spec.encoder_for(arm.name)
     path = getattr(cfg.paths, entry.checkpoint_field)
-    mean, std = extract.terramind_constants()
+    mean, std = extract.terramind_constants(entry.modality)
 
     model = FULL_MODEL_REGISTRY.build(REGISTRY_MODEL, pretrained=False)
     state, _ = _read_state(path)
