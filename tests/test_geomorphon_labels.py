@@ -240,7 +240,7 @@ def test_freeze_labels_every_listed_tile_and_commits_fingerprints_per_variant(
     world, flags, only_labels, labeller, capsys
 ):
     box, _ = world
-    assert freeze(flags) == 0
+    assert freeze([*flags, "--set", "labelling.threads=3"]) == 0  # the pool, not one thread
     out = capsys.readouterr().out
     fp = box / "task2" / geomorphon_pass.FINGERPRINT_DIR
     assert sorted(p.stem for p in fp.iterdir()) == sorted(VARIANTS)

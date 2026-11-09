@@ -334,13 +334,13 @@ def run_pass(
         return 0, skipped
     started = time.monotonic()
     done = 0
-    queue = iter(todo)
+    queue = enumerate(todo)
     with ThreadPoolExecutor(max_workers=threads) as pool:
         pending: dict = {}  # future -> submission order, so results are written in that order
 
         def submit() -> None:
-            for tile_id, split, need in queue:
-                pending[pool.submit(job.label, tile_id, split, need)] = len(pending) + done
+            for order, (tile_id, split, need) in queue:
+                pending[pool.submit(job.label, tile_id, split, need)] = order
                 if len(pending) >= threads * 2:
                     return
 
