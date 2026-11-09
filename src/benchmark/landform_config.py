@@ -32,7 +32,8 @@ the head follow the new arm, which is what :func:`build_config` arranges.
 The frozen per-rung lr lines (§4.5) are a committed artifact that ``run --tune`` writes (#207),
 not a knob, so only the grids are here. The geomorphon class weights and the verified-ocean list
 are measured by the label pass (#202) and committed in the geomorphon config file, not in this
-object. Ladder draw seeds arrive with the ladders (#200). Each of those tickets adds its group to
+object. The ladders' draw seeds and budgets are the ``ladders`` group (#200). Each of those
+tickets adds its group to
 :data:`GROUPS` and, if ``freeze`` writes from it, to :data:`ARTIFACT_GROUPS`. No Task 2 hash is
 committed yet, so adding a group here moves nothing anyone has recorded.
 
@@ -51,7 +52,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from . import landform_arms
+from dataset import config as dataset_config
+
+from . import landform_arms, prereg
 from .config import (
     ENVIRONMENT,
     Extract,
@@ -162,9 +165,11 @@ class Iwahashi(_Frozen):
 
     #: The distributor's zip, pinned (§3.4).
     zip_md5: str = "5ae98dc7782c13384a1df4d8d609418f"
-    groups: int = 15
+    #: L17's 15 groups and its 60% rule, read off ADR-0015's register rather than typed here: a
+    #: second home for a registered number is how one moves without anything failing (#199).
+    groups: int = prereg.TASK2.rule("L17").value["iwahashi_groups"]
     #: Primary; C3 is read here only.
-    threshold: float = 0.60
+    threshold: float = prereg.TASK2.rule("L17").value["iwahashi_rule"]
     #: A pre-registered sensitivity row, never used to decide C3.
     sensitivity_threshold: float = 0.50
 
@@ -279,6 +284,62 @@ class Schedule(_Frozen):
             raise ValueError(f"schedule.decay {self.decay!r}: §4.5 is warmup then cosine to zero")
 
 
+# --- §3.3 The geocell ladders --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Ladders(_Frozen):
+    """§3.3's geocell ladders (#200): how many, the seed each is walked under, the rung budgets.
+
+    **Draw seeds.** The plan says only "ladder *i*'s draw seed", so the rule is this group's:
+    ladder *i* is walked under ``first_draw_seed + i``, and ``first_draw_seed`` is the project
+    seed plus one (0xDEAF = 57007, so 57007 / 57008 / 57009). Not the project seed itself,
+    because that key already decided two things about these very tiles: it breaks the ties in
+    which geocells went to test and which COGs to val (:func:`dataset.splits.
+    select_test_geocells`, :func:`dataset.splits.select_val_cogs`), and it is Task 1's
+    ``tiles.draw_seed``, the order the 20,000-tile head-train list was apportioned in. A ladder
+    walked under it would rank train cells by the key that sorted cells *out* of train, and
+    tiles by the order they entered the list. Each ladder's coverage report records its seed,
+    and the resolver checks it.
+
+    **Budgets** are §3.3's 200 / 2,000 / 20,000 tiles, one per rung in :data:`RUNGS` order, and
+    knobs only so the fixture corpus can walk the same rule at a scale it holds. The top one
+    must be the whole head-train list ("at 100% every ladder is the whole list"); ``freeze``
+    refuses a list of any other length rather than draw a 100% rung that is not 100%.
+
+    ``count`` is how many ladders ``freeze`` writes. ADR-0015 L3 registers three seeds and binds
+    seed *i* to ladder *i*, so a seed at or past ``count`` has no ladder and is refused.
+    """
+
+    count: int = 3
+    first_draw_seed: int = dataset_config.RANDOM_SEED + 1
+    budgets: tuple[int, ...] = tuple(RUNG_TILES[rung] for rung in RUNGS)
+
+    def __post_init__(self) -> None:
+        _positive("ladders", count=self.count)
+        if len(self.budgets) != len(RUNGS):
+            raise ValueError(
+                f"ladders.budgets {self.budgets} must hold one tile budget per rung {list(RUNGS)}"
+            )
+        if self.budgets[0] < 1 or any(a >= b for a, b in zip(self.budgets, self.budgets[1:])):
+            raise ValueError(
+                f"ladders.budgets {self.budgets} must ascend from >= 1: §3.3's rungs are nested "
+                f"prefixes of one walk"
+            )
+
+    def draw_seed(self, ladder: int) -> int:
+        """The seed ladder ``ladder`` is walked under — see the class docstring."""
+        if not 0 <= ladder < self.count:
+            raise ValueError(
+                f"there is no ladder {ladder}; freeze writes ladders 0..{self.count - 1}"
+            )
+        return self.first_draw_seed + ladder
+
+    def budget(self, rung: str) -> int:
+        """How many tiles ``rung`` holds: a prefix of that many tiles of the cell's ladder."""
+        return self.budgets[RUNGS.index(rung)]
+
+
 # --- Where it all is, on this box ---------------------------------------------
 
 
@@ -328,6 +389,7 @@ GROUPS: Final = {
     "unet": Unet,
     "finetune": Finetune,
     "schedule": Schedule,
+    "ladders": Ladders,
     "extract": Extract,
     "runtime": Runtime,
     "paths": LandformPaths,
@@ -338,7 +400,7 @@ SCALARS: Final = ("arm", "rung", "seed", "head", "label_set")
 
 #: The groups ``freeze``'s committed inputs are a function of, and so the ones
 #: :attr:`LandformConfig.artifact_hash` covers. Not the cell, and not the head recipes.
-ARTIFACT_GROUPS: Final = ("geomorphon", "iwahashi")
+ARTIFACT_GROUPS: Final = ("geomorphon", "iwahashi", "ladders")
 
 
 @dataclass(frozen=True)
@@ -359,6 +421,7 @@ class LandformConfig(_Frozen):
     unet: Unet = field(default_factory=Unet)
     finetune: Finetune = field(default_factory=Finetune)
     schedule: Schedule = field(default_factory=Schedule)
+    ladders: Ladders = field(default_factory=Ladders)
     extract: Extract = field(default_factory=Extract)
     runtime: Runtime = field(default_factory=_runtime, metadata=ENVIRONMENT)
     paths: LandformPaths = field(default_factory=LandformPaths, metadata=ENVIRONMENT)
@@ -385,8 +448,13 @@ class LandformConfig(_Frozen):
 
     @property
     def train_tiles(self) -> int:
-        """How many head-train tiles this cell's rung holds."""
-        return RUNG_TILES[self.rung]
+        """How many head-train tiles this cell's rung holds — its ladder's budget for the rung."""
+        return self.ladders.budget(self.rung)
+
+    @property
+    def ladder(self) -> int:
+        """The ladder this cell trains on. Seed *i* trains on ladder *i* (ADR-0015 L3)."""
+        return self.seed
 
     @property
     def recipe(self) -> Linear | Upernet | Unet:
