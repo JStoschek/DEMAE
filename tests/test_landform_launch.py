@@ -137,8 +137,9 @@ def test_a_dry_run_prints_the_cell_it_resolved_before_any_step(box, flags, capsy
     checkpoint = hashlib.md5((box / "release" / "encoder.pt").read_bytes()).hexdigest()
     assert checkpoint in out
     lines = out.splitlines()
-    for pending in ("labels", "recipe line"):
-        assert any(line.startswith(pending) and "not built yet" in line for line in lines)
+    assert any(line.startswith("recipe line") and "not built yet" in line for line in lines)
+    # #201 built the geomorphon labels: their config resolves by path, not frozen on a bare box.
+    assert any(line.startswith("geomorphon") and "not frozen yet" in line for line in lines)
     # #200 built the ladder: seed 2's, by path, and the rung as a prefix of it.
     assert any(line.startswith("ladder") and "ladder_2.csv" in line for line in lines)
     assert "the first 200 tiles of ladder 2" in out
@@ -169,12 +170,9 @@ def test_freeze_names_the_generator_hash_and_its_stages_not_a_cell(flags, capsys
     assert "arm B1" not in out and "encoder" not in out
     assert "prereg bar — built (#199)" in out
     assert "geomorphon labels — built (#201)" in out
-    for stage, ticket in (
-        ("iwahashi labels", "#203"),
-        ("dataset card", "#218"),
-    ):
-        assert f"{stage} — not built yet ({ticket})" in out
+    assert "iwahashi labels — built (#203)" in out
     assert "ladders — built (#200)" in out
+    assert "dataset card — not built yet (#218)" in out
 
 
 # --- A cell cannot be half one task and half the other ------------------------
@@ -297,10 +295,10 @@ def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zer
     monkeypatch.setattr(landform, "FREEZE_STAGES", pending)
     with pytest.raises(NotImplementedError) as exc:
         launch.main(["freeze", *flags])
-    for ticket in ("#203", "#218"):
-        assert ticket in str(exc.value)
-    assert "#199" not in str(exc.value), "the bar has a writer now (#199)"
-    assert "#201" not in str(exc.value), "the geomorphon labels have a writer now (#201)"
+    assert [stage.ticket for stage in pending] == ["#218"]
+    assert "#218" in str(exc.value)
+    for ticket in ("#199", "#200", "#201", "#203"):
+        assert ticket not in str(exc.value), f"{ticket}'s stage has a writer now"
 
 
 # --- Below the seam: §4.5's step-count function ------------------------------

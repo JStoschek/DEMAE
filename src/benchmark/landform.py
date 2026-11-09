@@ -35,7 +35,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import arms, artifacts, geomorphon_pass, ladders, landform_arms, landform_config, prereg
+from . import (
+    arms,
+    artifacts,
+    geomorphon_pass,
+    iwahashi,
+    ladders,
+    landform_arms,
+    landform_config,
+    prereg,
+)
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -99,7 +108,7 @@ def bar_for(cfg: LandformConfig) -> prereg.LandformBar:
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199", _freeze_bar),
     FreezeStage("geomorphon labels", "#201", geomorphon_pass.write),
-    FreezeStage("iwahashi labels", "#203"),
+    FreezeStage("iwahashi labels", "#203", iwahashi.freeze),
     FreezeStage("ladders", "#200", ladders.freeze),
     FreezeStage("dataset card", "#218"),
 )
@@ -107,7 +116,6 @@ FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
 #: What a cell reads that is not built yet. Story 4's whole cell is arm, encoder pin, rung,
 #: ladder, label set, frozen recipe line and bar; these are the parts with no artifact yet.
 PENDING_INPUTS: Final[tuple[Pending, ...]] = (
-    Pending("labels", "labels", "#201, #203"),
     Pending("recipe_line", "recipe line", "#207"),
 )
 
@@ -280,11 +288,16 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
             "builds; it is not Task 1's single A6 pass and does not run under that one's rules"
         )
     arm = landform_arms.get(cfg.arm)
+    inputs = (*_inputs(cfg), *_ladders(cfg, args.verb))
+    if cfg.label_set == "iwahashi":
+        # #203 built this label set: its fingerprint and rebuilt table print, and `run` refuses
+        # a table the fingerprint does not describe.
+        inputs += iwahashi.inputs(cfg, verb=args.verb)
     return LandformResolution(
         config=cfg,
         arm=arm,
         checkpoint=_checkpoint(arm, cfg),
-        inputs=(*_inputs(cfg), *_ladders(cfg, args.verb)),
+        inputs=inputs,
     )
 
 
