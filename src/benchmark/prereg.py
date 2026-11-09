@@ -55,6 +55,20 @@ That is the error [#139](https://github.com/JStoschek/DEMAE/issues/139) refused 
 a threshold on a scale-free statistic, and ADR-0013's Alternatives section refuses it again.
 Recording them as *present and unmechanised* rather than omitting them is what keeps the
 register countable: twelve rules, seven with a number, and the file says which is which.
+
+## Two tasks, one mechanism (#199)
+
+Task 2 has its own register — [ADR-0015](../../docs/adr/0015-task2-pre-registration-register.md)'s
+twenty rules, L1-L20, nine of them in the bar file — anchored in the Task 2 plan's §7 the way
+Task 1's is anchored in its §6. ADR-0015's Consequences ask that the two bars "load through one
+module and can't drift apart in mechanism", so everything above is a :class:`Register`: one
+object per task holding its artifact name, plan, section, ADR, rule tuple, anchors and
+cross-entry checks, and one :meth:`Register.check` that both bars pass through. :data:`TASK1`
+is the register this module always had, and its module-level names (:data:`BAR_NAME`,
+:data:`PLAN_PATH`, :data:`SECTION`, :data:`ADR`, :data:`REGISTER`, :func:`rule`,
+:func:`write_bar`, :func:`read_bar`) are kept as Task 1's, so no Task 1 caller and no Task 1
+byte moved. :data:`TASK2` is the new one, and its section further down says where §7 does not
+state a value the ADR put in the bar.
 """
 
 from __future__ import annotations
@@ -63,7 +77,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Mapping
 
 #: What `freeze` writes into ``paths.artifacts_dir``. Named here rather than at the call site
 #: so the artifact and the code that refuses it cannot be renamed apart.
@@ -115,6 +129,11 @@ class Rule:
     units: str | None = None
     #: Why this rule has no constant. Set for exactly the six that are not mechanised.
     unmechanised_because: str | None = None
+    #: Keys of a mechanised value that **no anchored-section phrase states** — recorded in the
+    #: file rather than passed off as anchored. Task 1 has none. Task 2 has a few, because
+    #: ADR-0015 put values in the bar that plan §7's index does not spell out (see :data:`TASK2`).
+    #: Such a field is tied to the other entries by the register's cross-checks only.
+    unanchored: list[str] | None = None
 
     @property
     def mechanised(self) -> bool:
@@ -354,41 +373,7 @@ _ANCHORS: Final[dict[str, Callable[[Any], tuple[str, ...]]]] = {
 }
 
 
-# --- §6, as the anchor sees it ------------------------------------------------
-
-
-def rule(name: str) -> Rule:
-    """One register row, by name — :data:`REGISTER`'s :func:`benchmark.arms.get`.
-
-    Distinct from :meth:`Bar.rule`, which reads the register a *committed bar file* carries. This
-    reads the one in code, which is what a caller wants when it needs a rule's statement or its
-    home rather than a value a run must clear — a discursive rule has no value either way.
-    """
-    for entry in REGISTER:
-        if entry.rule == name:
-            return entry
-    raise KeyError(f"{name} is not in the register — it holds {[e.rule for e in REGISTER]}")
-
-
-def section_text(plan: Path | str = PLAN_PATH) -> str:
-    """§6 of the plan, from its heading to the next one, in the form an anchor matches.
-
-    Normalization is two crudenesses, both deliberate and both bounded: Markdown emphasis is
-    stripped, so a rule that gains or loses a bold marker does not read as a moved threshold;
-    and whitespace is collapsed, so §6's hard wrapping is not part of what a phrase must match.
-    Neither can turn one number into another, which is the only failure the anchor is for.
-    """
-    text = Path(plan).read_text()
-    try:
-        start = text.index(SECTION)
-    except ValueError:  # pragma: no cover - a plan without §6 is not a plan
-        raise ValueError(
-            f"{plan}: no {SECTION!r} — the registered bar is anchored in §6, which is the copy "
-            f"that goes in the writeup verbatim (see {ADR})."
-        ) from None
-    end = text.find("\n## ", start + 1)
-    section = text[start:] if end < 0 else text[start:end]
-    return re.sub(r"\s+", " ", section.replace("*", ""))
+# --- The anchored section, as the anchor sees it -------------------------------
 
 
 def _reads(haystack: str, phrase: str) -> bool:
@@ -400,7 +385,7 @@ def _reads(haystack: str, phrase: str) -> bool:
     return re.search(rf"(?<![\w.]){re.escape(phrase)}(?![\w.])", haystack) is not None
 
 
-# --- The refusals -------------------------------------------------------------
+# --- Task 1's cross-entry ties ------------------------------------------------
 
 
 def _consistency(values: dict[str, Any]) -> None:
@@ -427,91 +412,16 @@ def _consistency(values: dict[str, Any]) -> None:
         raise ValueError("R6: the marked pairs are not distinct, so fewer than four are marked.")
 
 
-def _check_against_section(doc: dict, section: str) -> None:
-    """Every refusal, in one place, so `freeze` and `read_bar` refuse identically.
-
-    Called by :func:`write_bar` before a byte is written and by :func:`read_bar` before a value
-    is handed out — which is what makes the refusal fire **at load rather than at first use**.
-    A threshold that is only checked when something reads it is a threshold that passes on every
-    run that happens not to reach the line.
-    """
-    entries = doc["entries"]
-    seen = {entry["rule"]: entry for entry in entries}
-    if len(seen) != len(entries):
-        raise ValueError(f"{doc['artifact']}: a rule id appears twice in the register.")
-
-    # The register is *whole* or it is nothing. Checking only the entries the file happens to
-    # carry is the failure mode this whole module is against: a bar with R7 deleted would load
-    # clean, every anchor it still had would pass, and the first caller to ask for the seam bar
-    # would be the one to discover it — which is precisely "at first use".
-    registered = {rule.rule for rule in REGISTER}
-    if set(seen) != registered:
-        missing = sorted(registered - set(seen))
-        extra = sorted(set(seen) - registered)
-        raise ValueError(
-            f"{doc['artifact']} is not the register: "
-            + (f"{missing} missing. " if missing else "")
-            + (f"{extra} unregistered. " if extra else "")
-            + f"ADR-0013 registers {len(registered)} entries and a bar carrying any other set "
-            f"is not the one this benchmark is answerable to. Re-freeze, and if a rule really "
-            f"has entered or left, amend {ADR} and plan §6 first."
-        )
-
-    for entry in entries:
-        rule = entry["rule"]
-        # Link 3 — §6 is the index, and every rule is named on it. This says nothing about what
-        # the rule *states*; it is the countability ADR-0013 Decision 4 asks of §6, and it is the
-        # only tie the six unmechanised entries have, on purpose (see the module docstring).
-        if not _reads(section, rule):
-            raise ValueError(
-                f"§6 no longer names {rule} — the register's index in §6 item 8 and "
-                f"{doc['artifact']} have drifted. A rule leaving the index is a rule leaving "
-                f"the pre-registration; amend {ADR} in the same change."
-            )
-        phrase = entry.get("registered_in")
-        if phrase is None:
-            if not entry.get("unmechanised_because"):
-                raise ValueError(
-                    f"{rule} carries neither a registered phrase nor a reason it has none. "
-                    "An unmechanised rule is recorded as unmechanised, never omitted."
-                )
-            continue
-        # Link 1 — the value renders an anchor, and the anchor must read in the phrase the value
-        # was registered in. This is what a threshold moved in the file fails.
-        if rule not in _ANCHORS:
-            raise ValueError(
-                f"{rule} carries a registered value and no way to render it into a §6 fragment. "
-                f"A mechanised entry without an anchor is a number nothing checks — give it one "
-                f"in `_ANCHORS` or record it as unmechanised and say why."
-            )
-        for anchor in _ANCHORS[rule](entry["value"]):
-            if not _reads(phrase, anchor):
-                raise ValueError(
-                    f"{rule}: the registered value renders {anchor!r}, which no longer reads in "
-                    f"the phrase it was registered in ({phrase!r}). A value and its phrase "
-                    f"cannot be moved apart — amend §6 and {ADR}, then re-freeze."
-                )
-        # Link 2 — and that phrase must still be in the copy that ships.
-        if not _reads(section, phrase):
-            raise ValueError(
-                f"{rule} lost its anchor: §6 no longer states {phrase!r}. The committed bar and "
-                f"the plan have drifted, and §6 is the copy that leaves the building. Reconcile "
-                f"them — and {ADR} — in one dated commit before running an arm."
-            )
-
-    _consistency({rule: entry["value"] for rule, entry in seen.items()})
-
-
-# --- The artifact -------------------------------------------------------------
+# --- The loaded artifact ------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class Bar:
-    """The loaded bar: the register as the file carries it, checked against §6.
+class RegisteredBar:
+    """A loaded bar, either task's: the register as the file carries it, checked at load.
 
-    Every accessor reads the *file*, never :data:`REGISTER`. That is the whole arrangement — the
-    committed artifact is what a run is answerable to, and the module constant is only what
-    `freeze` wrote it from.
+    Every accessor reads the *file*, never the register in code. That is the whole arrangement —
+    the committed artifact is what a run is answerable to, and the module constant is only what
+    `freeze` wrote it from. :class:`Bar` and :class:`LandformBar` add each task's named readers.
     """
 
     doc: dict[str, Any]
@@ -524,17 +434,17 @@ class Bar:
 
     @property
     def mechanised(self) -> tuple[Rule, ...]:
-        """The seven that carry a number, in register order."""
+        """The entries that carry a number, in register order."""
         return tuple(entry for entry in self.entries if entry.mechanised)
 
     @property
     def unmechanised(self) -> tuple[Rule, ...]:
-        """The five discursive rules and the refusal — present, and recorded as unenforced."""
+        """The discursive rules (and Task 1's refusal) — present, and recorded as unenforced."""
         return tuple(entry for entry in self.entries if not entry.mechanised)
 
     @property
     def rules(self) -> int:
-        """How many rules the register reads. Twelve; R9b is a refusal within R9's topic."""
+        """How many rules the register reads. Task 1's R9b is a refusal within R9's topic."""
         return sum(1 for entry in self.entries if entry.counted)
 
     def rule(self, rule: str) -> Rule:
@@ -547,7 +457,7 @@ class Bar:
         )
 
     def value(self, rule: str) -> Any:
-        """The registered value, refusing the six that have none rather than returning ``None``.
+        """The registered value, refusing a rule that has none rather than returning ``None``.
 
         An unmechanised rule asked for its number is a caller that has misread the register, and
         ``None`` would let it measure against nothing. The refusal says why there is no number.
@@ -559,6 +469,11 @@ class Bar:
                 f"register so it can be counted and attributed, not so it can be enforced."
             )
         return entry.value
+
+
+@dataclass(frozen=True)
+class Bar(RegisteredBar):
+    """Task 1's loaded bar, checked against §6 — :class:`RegisteredBar` with R1-R11's readers."""
 
     # --- the four the build spec names as read-from-the-bar
 
@@ -623,67 +538,772 @@ class Bar:
         return (r5["printed_cells"], r5["printed_columns"], r5["printed_numbers"])
 
 
-def bar_document() -> dict[str, Any]:
-    """:data:`REGISTER` as the committed artifact — plain JSON, and self-describing.
+# --- One task's register, and the refusals every bar passes through -----------
 
-    The prose fields are here for the reader who arrives at the file rather than at the ADR: an
-    artifact that says only ``{"R7": 0.15}`` is one whose reader has to be told what it is.
 
-    A pure function of :data:`REGISTER`, and deliberately not of where the plan sits on this
-    box: ``anchored_in`` names §6's canonical home rather than the path this freeze happened to
-    read, on `benchmark.config`'s rule that a rented box mounting a file somewhere else must not
-    change what the artifact says. It is also what makes `freeze` byte-idempotent here.
+@dataclass(frozen=True)
+class Register:
+    """One task's pre-registration: what its bar is called, where it is anchored, what it holds.
+
+    Everything task-specific is a field; everything that refuses is a method. So the two tasks
+    share the *mechanism* — the three links, the whole-register floor, the at-load timing and the
+    wording of every refusal — and differ only in the data the mechanism is pointed at.
     """
-    return {
-        "artifact": BAR_NAME,
-        "asserted_in": ADR,
-        "anchored_in": f"{PLAN_PATH.as_posix()} {SECTION}",
-        "purpose": (
-            "The numeric subset of ADR-0013's register of twelve rules, committed by "
-            "`benchmark.launch freeze` before any arm runs. Every entry carries its value and "
-            "the exact §6 phrase it was registered in; `benchmark.prereg.read_bar` refuses a "
-            "bar whose phrase no longer appears in §6, and names the entry that lost its "
-            "anchor. Five discursive rules and one refusal are recorded here without values, "
-            "because mechanising them would look like enforcement while checking nothing."
-        ),
-        "rules": sum(1 for rule in REGISTER if rule.counted),
-        "mechanised": sum(1 for rule in REGISTER if rule.mechanised),
-        "entries": [
-            {k: v for k, v in vars(rule).items() if v is not None or k == "value"}
-            for rule in REGISTER
-        ],
-    }
+
+    #: What `freeze` writes into the task's ``paths.artifacts_dir``.
+    bar_name: str
+    #: The plan, relative to the repo root. Every entry point takes an explicit path too.
+    plan_path: Path
+    #: The anchored section's heading, verbatim. Its text runs to the next ``## ``.
+    section: str
+    #: How the refusals name the section: ``"§6"``, ``"§7"``.
+    mark: str
+    #: Where in the section the register's index is, for the refusal that a rule left it.
+    index: str
+    #: Where the rules are asserted, and the ADR's short name.
+    adr: str
+    adr_name: str
+    #: The ``purpose`` paragraph the artifact carries for a reader who arrives at the file.
+    purpose: str
+    #: The rules, in register order — the single home for every number the task registers.
+    entries: tuple[Rule, ...]
+    #: value → the section fragments it renders. The first of the three links.
+    anchors: Mapping[str, Callable[[Any], tuple[str, ...]]]
+    #: The ties between entries that no section phrase states.
+    consistency: Callable[[dict[str, Any]], None]
+    #: What :meth:`read_bar` hands back.
+    bar_type: type[RegisteredBar] = RegisteredBar
+
+    def rule(self, name: str) -> Rule:
+        """One register row, by name, from the register *in code* — see :func:`rule`."""
+        for entry in self.entries:
+            if entry.rule == name:
+                return entry
+        raise KeyError(
+            f"{name} is not in the register — it holds {[e.rule for e in self.entries]}"
+        )
+
+    def section_text(self, plan: Path | str | None = None) -> str:
+        """The anchored section, from its heading to the next one, in the form an anchor matches.
+
+        Normalization is two crudenesses, both deliberate and both bounded: Markdown emphasis is
+        stripped, so a rule that gains or loses a bold marker does not read as a moved threshold;
+        and whitespace is collapsed, so the section's hard wrapping is not part of what a phrase
+        must match. Neither can turn one number into another, which is the only failure the
+        anchor is for.
+        """
+        plan = self.plan_path if plan is None else plan
+        text = Path(plan).read_text()
+        try:
+            start = text.index(self.section)
+        except ValueError:  # pragma: no cover - a plan without its checklist is not a plan
+            raise ValueError(
+                f"{plan}: no {self.section!r} — the registered bar is anchored in {self.mark}, "
+                f"which is the copy that goes in the writeup verbatim (see {self.adr})."
+            ) from None
+        end = text.find("\n## ", start + 1)
+        section = text[start:] if end < 0 else text[start:end]
+        return re.sub(r"\s+", " ", section.replace("*", ""))
+
+    def check(self, doc: dict, section: str) -> None:
+        """Every refusal, in one place, so `freeze` and `read_bar` refuse identically.
+
+        Called by :meth:`write_bar` before a byte is written and by :meth:`read_bar` before a
+        value is handed out — which is what makes the refusal fire **at load rather than at first
+        use**. A threshold that is only checked when something reads it is a threshold that
+        passes on every run that happens not to reach the line.
+        """
+        mark, adr = self.mark, self.adr
+        entries = doc["entries"]
+        seen = {entry["rule"]: entry for entry in entries}
+        if len(seen) != len(entries):
+            raise ValueError(f"{doc['artifact']}: a rule id appears twice in the register.")
+
+        # The register is *whole* or it is nothing. Checking only the entries the file happens to
+        # carry is the failure mode this whole module is against: a bar with a rule deleted would
+        # load clean, every anchor it still had would pass, and the first caller to ask for the
+        # missing threshold would be the one to discover it — which is precisely "at first use".
+        registered = {rule.rule for rule in self.entries}
+        if set(seen) != registered:
+            missing = sorted(registered - set(seen))
+            extra = sorted(set(seen) - registered)
+            raise ValueError(
+                f"{doc['artifact']} is not the register: "
+                + (f"{missing} missing. " if missing else "")
+                + (f"{extra} unregistered. " if extra else "")
+                + f"{self.adr_name} registers {len(registered)} entries and a bar carrying any "
+                f"other set is not the one this benchmark is answerable to. Re-freeze, and if a "
+                f"rule really has entered or left, amend {adr} and plan {mark} first."
+            )
+
+        for entry in entries:
+            rule = entry["rule"]
+            # Link 3 — the section is the index, and every rule is named on it. This says
+            # nothing about what the rule *states*; it is the countability the ADR asks of the
+            # section, and it is the only tie the unmechanised entries have, on purpose.
+            if not _reads(section, rule):
+                raise ValueError(
+                    f"{mark} no longer names {rule} — the register's index in {self.index} and "
+                    f"{doc['artifact']} have drifted. A rule leaving the index is a rule leaving "
+                    f"the pre-registration; amend {adr} in the same change."
+                )
+            phrase = entry.get("registered_in")
+            if phrase is None:
+                if not entry.get("unmechanised_because"):
+                    raise ValueError(
+                        f"{rule} carries neither a registered phrase nor a reason it has none. "
+                        "An unmechanised rule is recorded as unmechanised, never omitted."
+                    )
+                continue
+            # Link 1 — the value renders an anchor, and the anchor must read in the phrase the
+            # value was registered in. This is what a threshold moved in the file fails.
+            if rule not in self.anchors:
+                raise ValueError(
+                    f"{rule} carries a registered value and no way to render it into a {mark} "
+                    f"fragment. A mechanised entry without an anchor is a number nothing checks "
+                    f"— give it one in the register's anchors or record it as unmechanised and "
+                    f"say why."
+                )
+            for anchor in self.anchors[rule](entry["value"]):
+                if not _reads(phrase, anchor):
+                    raise ValueError(
+                        f"{rule}: the registered value renders {anchor!r}, which no longer reads "
+                        f"in the phrase it was registered in ({phrase!r}). A value and its phrase "
+                        f"cannot be moved apart — amend {mark} and {adr}, then re-freeze."
+                    )
+            # Link 2 — and that phrase must still be in the copy that ships.
+            if not _reads(section, phrase):
+                raise ValueError(
+                    f"{rule} lost its anchor: {mark} no longer states {phrase!r}. The committed "
+                    f"bar and the plan have drifted, and {mark} is the copy that leaves the "
+                    f"building. Reconcile them — and {adr} — in one dated commit before running "
+                    f"an arm."
+                )
+            # A field declared unanchored must exist: a stale declaration would let the next
+            # reader believe a value is disclosed as unanchored when the value has moved shape.
+            value = entry["value"]
+            for key in entry.get("unanchored") or ():
+                if not isinstance(value, dict) or key not in value:
+                    raise ValueError(
+                        f"{rule} declares {key!r} unanchored in {mark}, and its value has no such "
+                        f"field. The declaration and the value have drifted; re-freeze."
+                    )
+
+        self.consistency({rule: entry.get("value") for rule, entry in seen.items()})
+
+    def document(self) -> dict[str, Any]:
+        """The register as the committed artifact — plain JSON, and self-describing.
+
+        The prose fields are here for the reader who arrives at the file rather than at the ADR:
+        an artifact that says only ``{"R7": 0.15}`` is one whose reader has to be told what it is.
+
+        A pure function of the register, and deliberately not of where the plan sits on this
+        box: ``anchored_in`` names the section's canonical home rather than the path this freeze
+        happened to read, on `benchmark.config`'s rule that a rented box mounting a file
+        somewhere else must not change what the artifact says. It is also what makes `freeze`
+        byte-idempotent here.
+        """
+        return {
+            "artifact": self.bar_name,
+            "asserted_in": self.adr,
+            "anchored_in": f"{self.plan_path.as_posix()} {self.section}",
+            "purpose": self.purpose,
+            "rules": sum(1 for rule in self.entries if rule.counted),
+            "mechanised": sum(1 for rule in self.entries if rule.mechanised),
+            "entries": [
+                {k: v for k, v in vars(rule).items() if v is not None or k == "value"}
+                for rule in self.entries
+            ],
+        }
+
+    def write_bar(self, path: Path | str, *, plan: Path | str | None = None) -> Path:
+        """Write the bar, having refused to write one that would not load.
+
+        Checked *before* the write rather than after it: a `freeze` that leaves a bar on disk and
+        then raises has committed the drift it was refusing.
+
+        **No content-hash guard, for either task**, unlike the drawn artifacts beside it, and the
+        difference is not an omission. That refusal protects a *draw* — a re-run that silently
+        re-rolled masks or a ladder a half-finished run was already reading would be
+        unrecoverable. A bar is a pure function of its register, so it has no draw to protect:
+        re-freezing either rewrites the same bytes or reflects an amendment that has already
+        passed all three links, and refusing the second case would block the one path an
+        amendment is supposed to take.
+        """
+        path = Path(path)
+        doc = self.document()
+        self.check(doc, self.section_text(plan))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+        return path
+
+    def read_bar(self, path: Path | str, *, plan: Path | str | None = None) -> Any:
+        """Load the committed bar, refusing one whose section phrases have moved.
+
+        Gate E's arrangement (:func:`dataset.validate.read_bar`), one link longer — see the
+        module docstring. The refusal is here, at load, so a run that reaches a threshold and a
+        run that does not fail the same way.
+        """
+        path = Path(path)
+        doc = json.loads(path.read_text())
+        self.check(doc, self.section_text(plan))
+        return self.bar_type(doc=doc, path=path)
+
+
+# --- Task 1: ADR-0013's register, anchored in plan §6 --------------------------
+
+#: Task 1's register. The module-level names below are its own, kept so no caller moves.
+TASK1: Final = Register(
+    bar_name=BAR_NAME,
+    plan_path=PLAN_PATH,
+    section=SECTION,
+    mark="§6",
+    index="§6 item 8",
+    adr=ADR,
+    adr_name="ADR-0013",
+    purpose=(
+        "The numeric subset of ADR-0013's register of twelve rules, committed by "
+        "`benchmark.launch freeze` before any arm runs. Every entry carries its value and "
+        "the exact §6 phrase it was registered in; `benchmark.prereg.read_bar` refuses a "
+        "bar whose phrase no longer appears in §6, and names the entry that lost its "
+        "anchor. Five discursive rules and one refusal are recorded here without values, "
+        "because mechanising them would look like enforcement while checking nothing."
+    ),
+    entries=REGISTER,
+    anchors=_ANCHORS,
+    consistency=_consistency,
+    bar_type=Bar,
+)
+
+
+def rule(name: str) -> Rule:
+    """One Task 1 register row, by name — :data:`REGISTER`'s :func:`benchmark.arms.get`.
+
+    Distinct from :meth:`Bar.rule`, which reads the register a *committed bar file* carries. This
+    reads the one in code, which is what a caller wants when it needs a rule's statement or its
+    home rather than a value a run must clear — a discursive rule has no value either way.
+    Task 2's is ``TASK2.rule``.
+    """
+    return TASK1.rule(name)
+
+
+def section_text(plan: Path | str = PLAN_PATH) -> str:
+    """Task 1's §6, as :meth:`Register.section_text` normalizes it."""
+    return TASK1.section_text(plan)
+
+
+def bar_document() -> dict[str, Any]:
+    """Task 1's :data:`REGISTER` as the committed artifact (:meth:`Register.document`)."""
+    return TASK1.document()
 
 
 def write_bar(path: Path | str, *, plan: Path | str = PLAN_PATH) -> Path:
-    """Write the bar, having refused to write one that would not load.
-
-    Checked *before* the write rather than after it: a `freeze` that leaves a bar on disk and
-    then raises has committed the drift it was refusing.
-
-    This artifact carries **no §3.4 hash guard**, unlike the four that will join it here, and the
-    difference is not an omission. §3.4's refusal protects a *draw* — a re-run that silently
-    re-rolled the masks a half-finished run was already scoring against would be unrecoverable.
-    The bar is a pure function of :data:`REGISTER`, so it has no draw to protect: re-freezing
-    either rewrites the same bytes or reflects an amendment that has already passed all three
-    links, and refusing the second case would block the one path an amendment is supposed to take.
-    """
-    path = Path(path)
-    doc = bar_document()
-    _check_against_section(doc, section_text(plan))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
-    return path
+    """Write Task 1's bar, having refused to write one that would not load."""
+    return TASK1.write_bar(path, plan=plan)
 
 
 def read_bar(path: Path | str, *, plan: Path | str = PLAN_PATH) -> Bar:
-    """Load the committed bar, refusing one whose §6 phrases have moved.
+    """Load Task 1's committed bar, refusing one whose §6 phrases have moved."""
+    return TASK1.read_bar(path, plan=plan)
 
-    Gate E's arrangement (:func:`dataset.validate.read_bar`), one link longer — see the module
-    docstring. The refusal is here, at load, so a run that reaches a threshold and a run that
-    does not fail the same way.
+
+# --- Task 2: ADR-0015's register, anchored in plan §7 --------------------------
+#
+# ADR-0015's "In bar file" column ticks **nine** rules: L1, L2, L3, L6, L12 and L15-L18. Its own
+# prose says "ten numeric rules" (the register's preamble and its Consequences); the table is the
+# itemised statement and the one this follows, so the file says ``"mechanised": 9``.
+#
+# **Where §7 does not state a value the ADR put in the bar.** §7 item 10 is the index, and it
+# names L1's metrics only as "claim metrics", L16's rungs not at all, and L17 only as "C3's two
+# halves". So L1's metric names (mIoU, macro-F1), L16's pair at 1% and 10%, and L17's 60% rule
+# and 15 groups have no §7 phrase to be anchored in. They are in the file, they are listed in
+# each entry's ``unanchored``, and they are tied to the other entries by
+# :func:`_task2_consistency` — the marked pairs' metrics to L1's, the L12 pairs' rungs to L12's —
+# and to nothing in the plan. Closing that takes an amendment to §7 item 10 and ADR-0015 that
+# states them, which is ADR-0013's prescribed route; inventing a phrase here would be the
+# workaround the spec rules out.
+
+TASK2_BAR_NAME: Final = "task2-prereg-bar.json"
+TASK2_PLAN_PATH: Final = Path("docs/research/task2-landform-plan.md")
+TASK2_SECTION: Final = "## 7. Fairness checklist (verbatim into the writeup)"
+TASK2_ADR: Final = "docs/adr/0015-task2-pre-registration-register.md"
+
+#: L11's opponent, resolved by `report` and never by a run: whichever of the TerraMind tokenizer
+#: (B4/B5) and backbone (B9) encoders has the higher seed-mean test score, per head and per label
+#: set. A marked pair names it as a token because which encoder it is cannot be known in advance.
+STRONGER_TERRAMIND: Final = "stronger-terramind"
+
+#: L1's claim metric for each label set: mIoU on the dense geomorphon labels, macro-F1 over the
+#: Iwahashi tile labels. The marked pairs carry theirs, and :func:`_task2_consistency` ties them.
+_CLAIM_METRICS: Final = {"geomorphon": "miou", "iwahashi": "macro_f1"}
+
+#: §3.3's full rung, and C2's two (L16).
+_FULL: Final = "100%"
+_C2_RUNGS: Final = ("1%", "10%")
+
+#: Counts as §7 spells them. §7 spells pairs and halves ("four pairs", "two halves", "eight
+#: marked pairs") and writes seeds and ladders as digits ("3 seeds", "2 of 3 ladders"), so the
+#: anchors choose per rule; only what an anchor renders spelled is here.
+_SPELLED: Final = {2: "two", 4: "four", 8: "eight"}
+
+
+def _spelled(n: int) -> str:
+    return _SPELLED.get(n, str(n))
+
+
+def _pair(a: str, b: str, *, claim: str, rungs: tuple[str, str], label_set: str) -> dict:
+    """One marked pair: first arm minus second, at those rungs, on that label set's claim metric.
+
+    A pair names B-arms, except C3a's, which names encoders: the Iwahashi tile classifier is a
+    fitted probe on each encoder's pooled embeddings (§4.5), not a trained B-row.
     """
-    path = Path(path)
-    doc = json.loads(path.read_text())
-    _check_against_section(doc, section_text(plan))
-    return Bar(doc=doc, path=path)
+    return {
+        "pair": [a, b],
+        "claim": claim,
+        "rungs": list(rungs),
+        "label_set": label_set,
+        "metric": _CLAIM_METRICS[label_set],
+    }
+
+
+#: L12's four: B1 and B2, each vs B6 and vs the stronger TerraMind, at 100%.
+_C1_PAIRS: Final = [
+    _pair("B1", "B6", claim="C1", rungs=(_FULL, _FULL), label_set="geomorphon"),
+    _pair("B1", STRONGER_TERRAMIND, claim="C1", rungs=(_FULL, _FULL), label_set="geomorphon"),
+    _pair("B2", "B6", claim="C1", rungs=(_FULL, _FULL), label_set="geomorphon"),
+    _pair("B2", STRONGER_TERRAMIND, claim="C1", rungs=(_FULL, _FULL), label_set="geomorphon"),
+]
+#: L16's one: B2 at 1% vs B7 at 10%.
+_C2_PAIR: Final = _pair("B2", "B7", claim="C2", rungs=_C2_RUNGS, label_set="geomorphon")
+#: L17's three: C3a's Iwahashi classifier, R5 vs ImageNet-MAE and vs the stronger TerraMind;
+#: C3b's fine-tune, B3 vs B7 at 100%.
+_C3_PAIRS: Final = [
+    _pair("demae-r5", "imagenet-mae", claim="C3a", rungs=(_FULL, _FULL), label_set="iwahashi"),
+    _pair("demae-r5", STRONGER_TERRAMIND, claim="C3a", rungs=(_FULL, _FULL),
+          label_set="iwahashi"),
+    _pair("B3", "B7", claim="C3b", rungs=(_FULL, _FULL), label_set="geomorphon"),
+]
+
+TASK2_REGISTER: Final = (
+    Rule(
+        rule="L1",
+        statement=(
+            "Claims are read on mIoU (geomorphons) and macro-F1 (Iwahashi tiles), on the pooled "
+            "test set only. Dense macro-F1, per-class IoU, overall accuracy, boundary-F1, "
+            "per-band metrics and C1's 1%/10% rows are printed and carry no claim."
+        ),
+        home="§6",
+        source="#192",
+        value={"claim_metrics": dict(_CLAIM_METRICS), "population": "pooled"},
+        registered_in="L1 claim metrics, pooled only",
+        units="metric keys per label set, and the test population claims are read on",
+        unanchored=["claim_metrics"],
+    ),
+    Rule(
+        rule="L2",
+        statement=(
+            "Paired bootstrap over test tiles, 10,000 resamples, confusion matrices summed per "
+            "resample, seed-paired differences averaged over seeds on one shared resample. "
+            "Registered caveat: the test set spans 13 geocells, so the tile CI is narrower than "
+            "a spatially honest one."
+        ),
+        home="§6",
+        source="#192",
+        value={"unit": "tile", "resamples": 10_000, "test_geocells": 13},
+        registered_in="L2 tile bootstrap, 10,000 resamples, 13 test geocells",
+        units="resamples of the test tiles; test geocells the caveat counts",
+    ),
+    Rule(
+        rule="L3",
+        statement=(
+            "3 seeds for every core cell, B3 and B7 included; seed i trains on ladder i. The "
+            "seed spread prints as mean ± std, separate from the CI and never folded into it."
+        ),
+        home="§3.3, §4.3, §6",
+        source="#189, #192",
+        value={"seeds": 3, "including": ["B3", "B7"]},
+        registered_in="L3 3 seeds, B3 and B7 included",
+        units="seeds per core cell",
+    ),
+    Rule(
+        rule="L4",
+        statement=(
+            "The pretraining-corpus caveat is symmetric: it can't explain a DEMAE loss unless "
+            "also priced as a discount on a DEMAE win (Task 1 R2)."
+        ),
+        home="§2, §7.4",
+        source="#122",
+        unmechanised_because=(
+            "symmetry is a property of how a sentence is used in an argument, not a quantity — "
+            "Task 1's R2 reason, unchanged"
+        ),
+    ),
+    Rule(
+        rule="L5",
+        statement=(
+            "R5 is C1's DEMAE number unconditionally; an R4 win is reported prominently and "
+            "never becomes C1's number (Task 1 R3)."
+        ),
+        home="§0, §1",
+        source="#122, #190",
+        unmechanised_because=(
+            "it governs which number a sentence is about; both rows are computed either way, so "
+            "there is no constant a run could read"
+        ),
+    ),
+    Rule(
+        rule="L6",
+        statement=(
+            "TerraMind's DEM tokenizer had 20 epochs, cited per modality, not the paper's 100 "
+            "(Task 1 R4)."
+        ),
+        home="§2",
+        source="#138",
+        value=20,
+        registered_in="L6 20 tokenizer epochs",
+        units="epochs over the DEM modality",
+    ),
+    Rule(
+        rule="L7",
+        statement=(
+            "The GSD caveat is symmetric, and stated as a bandwidth shift rather than a "
+            "resolution handicap (Task 1 R9)."
+        ),
+        home="§2, §7.3",
+        source="#139",
+        unmechanised_because=(
+            "same shape as L4 — it constrains how a caveat may be deployed in argument"
+        ),
+    ),
+    Rule(
+        rule="L8",
+        statement="A null is reported with the prominence of a win (Task 1 R10).",
+        home="§0",
+        source="plan §0",
+        unmechanised_because="prominence is a property of the memo's prose, not of a number",
+    ),
+    Rule(
+        rule="L9",
+        statement=(
+            "Insulated rows (B4-ALT/B5-ALT, B8, the concatenation row, B1-S/B2-S, B1-R4/B2-R4) "
+            "carry no claim and never stand in for a core row; an ALT row beating DEMAE at 100% "
+            "with lower > 0 is said in C1's paragraph."
+        ),
+        home="§1, §5.4",
+        source="#190, #192",
+        unmechanised_because=(
+            "it fixes what a row may stand in for in prose; its one trigger reads L2's CI and "
+            "adds no constant of its own"
+        ),
+    ),
+    Rule(
+        rule="L10",
+        statement=(
+            "A band's macro metric averages over the classes with ground truth in that band. "
+            "Class collapse (a class present in test truth with test IoU = 0) is flagged and "
+            "counted per cell, never excluded or rerun."
+        ),
+        home="§6",
+        source="ADR-0014, #192",
+        unmechanised_because=(
+            "it is a definition — how a macro metric averages and what counts as collapse — and "
+            "its one number, IoU = 0, is the definition rather than a threshold anyone could tune"
+        ),
+    ),
+    Rule(
+        rule="L11",
+        statement=(
+            "The stronger TerraMind encoder is whichever of the tokenizer (B4/B5) and the "
+            "backbone (B9) has the higher seed-mean test score, per head and per label set."
+        ),
+        home="§0, §1",
+        source="#190, #192",
+        unmechanised_because=(
+            "its trigger is an ordering between two encoders, not a level, so there is no "
+            "constant to hold; the marked pairs name it as a token `report` resolves"
+        ),
+    ),
+    Rule(
+        rule="L12",
+        statement=(
+            "C1 is read at the 100% rung on 4 pairs — B1 and B2, each vs B6 and vs the stronger "
+            "TerraMind — and holds if all four have lower > 0; one head's two clearing reports "
+            "C1 for that head only. Iwahashi gate: C1 is claimed only if R5's Iwahashi macro-F1 "
+            "point estimate exceeds both B6's and the stronger TerraMind's."
+        ),
+        home="§0",
+        source="#190, #192",
+        value={"rung": _FULL, "pairs": _C1_PAIRS},
+        registered_in="L12 C1's four pairs at 100% and the Iwahashi gate",
+        units="the rung C1 is read at, and its marked pairs",
+    ),
+    Rule(
+        rule="L13",
+        statement=(
+            "Depth-sweep reversal: a competitor's best point beating DEMAE's best with a CI "
+            "excluding zero qualifies C1's linear half to \"at the registered layer\" and never "
+            "withdraws it."
+        ),
+        home="§5.3",
+        source="#190, #192",
+        unmechanised_because=(
+            "its trigger is a CI excluding zero, which is not a tunable level, and what it "
+            "changes is a sentence rather than a number"
+        ),
+    ),
+    Rule(
+        rule="L14",
+        statement=(
+            "If B1 and B4 swap order under any of ADR-0014's sensitivity label sets, C1's "
+            "paragraph says so; C1 is read on the primary labels only."
+        ),
+        home="§7.7",
+        source="ADR-0014, #192",
+        unmechanised_because="its trigger is an ordering swap, not a level",
+    ),
+    Rule(
+        rule="L15",
+        statement=(
+            "δ = 1.0 mIoU point, the non-inferiority margin for C2's \"matches\" and C3b's "
+            "\"competitive\"."
+        ),
+        home="§0",
+        source="#192",
+        value=1.0,
+        registered_in="L15 a margin of 1.0 mIoU point",
+        units="mIoU points",
+    ),
+    Rule(
+        rule="L16",
+        statement=(
+            "C2: B2 at the 1% rung vs B7 at the 10% rung — beats if lower > 0, matches if lower "
+            "> −δ. The per-ladder difference must be ≥ −δ in at least 2 of 3 ladders, otherwise "
+            "C2 is region-dependent and not claimed."
+        ),
+        home="§0",
+        source="#189, #192",
+        value={"pair": _C2_PAIR, "ladders_required": 2, "ladders": 3},
+        registered_in="L16 C2's reading, 2 of 3 ladders",
+        units="C2's marked pair, and ladders that must clear −δ of those drawn",
+        unanchored=["pair"],
+    ),
+    Rule(
+        rule="L17",
+        statement=(
+            "C3a: R5's Iwahashi classifier vs B6's and the stronger TerraMind's, macro-F1 over "
+            "the 15 groups at the 60% rule, holding if both have lower > 0. C3b: B3 vs B7 at "
+            "100%, mIoU, competitive if lower > −δ."
+        ),
+        home="§0, §3.2",
+        source="#193, #192",
+        value={"pairs": _C3_PAIRS, "iwahashi_rule": 0.60, "iwahashi_groups": 15},
+        registered_in="L17 C3's two halves",
+        units="C3's marked pairs; the Iwahashi tile-majority fraction and group count",
+        unanchored=["iwahashi_rule", "iwahashi_groups"],
+    ),
+    Rule(
+        rule="L18",
+        statement=(
+            "Eight marked bootstrap pairs, named in L12 (4), L16 (1) and L17 (3); every other "
+            "pair is computed and left unmarked in print."
+        ),
+        home="§6",
+        source="#192",
+        value={"marked_pairs": [*_C1_PAIRS, _C2_PAIR, *_C3_PAIRS]},
+        registered_in="L18 eight marked pairs",
+        units="arm pairs marked in print",
+    ),
+    Rule(
+        rule="L19",
+        statement=(
+            "Val realism caveat: every rung selects its checkpoint on all 2,000 val tiles, which "
+            "a real 200-label user would not have; it costs realism, not fairness."
+        ),
+        home="§4.5",
+        source="#196",
+        unmechanised_because=(
+            "a caveat that applies equally to every arm; there is nothing for a run to clear"
+        ),
+    ),
+    Rule(
+        rule="L20",
+        statement=(
+            "A run may be rerun only for an infrastructure failure, with the same seed and "
+            "ladder and the reason in the run record; a finished run is never replaced, and "
+            "class collapse counts as finished."
+        ),
+        home="§4.4",
+        source="#192",
+        unmechanised_because=(
+            "it governs which runs may exist, which the results and the run record enforce; "
+            "there is no constant to hold"
+        ),
+    ),
+)
+
+#: Task 2's first link: value → the §7 fragments it renders.
+_TASK2_ANCHORS: Final[dict[str, Callable[[Any], tuple[str, ...]]]] = {
+    "L1": lambda v: (f"claim metrics, {v['population']} only",),
+    "L2": lambda v: (
+        f"{v['unit']} bootstrap",
+        f"{v['resamples']:,} resamples",
+        f"{v['test_geocells']} test geocells",
+    ),
+    "L3": lambda v: (f"{v['seeds']} seeds", f"{' and '.join(v['including'])} included"),
+    "L6": lambda v: (f"{v} tokenizer epochs",),
+    "L12": lambda v: (f"{_spelled(len(v['pairs']))} pairs at {v['rung']}",),
+    "L15": lambda v: (f"a margin of {v} mIoU point",),
+    "L16": lambda v: (f"{v['ladders_required']} of {v['ladders']} ladders",),
+    "L17": lambda v: (f"C3's {_spelled(len({p['claim'] for p in v['pairs']}))} halves",),
+    "L18": lambda v: (f"{_spelled(len(v['marked_pairs']))} marked pairs",),
+}
+
+
+def _task2_consistency(values: dict[str, Any]) -> None:
+    """The ties between Task 2's entries that §7 does not state — and the tie to Task 1.
+
+    These are what hold the unanchored fields: a marked pair's metric must be L1's for its label
+    set, so L1's metric names and the pairs cannot move apart; L12's pairs must sit at L12's
+    rung; L18 must be exactly L12's, L16's and L17's pairs; L16's ladders must be L3's seeds
+    (seed i trains on ladder i). And L6 must be Task 1's R4: one tokenizer, one citation.
+    """
+    l1, l3, l12, l16, l17, l18 = (values[k] for k in ("L1", "L3", "L12", "L16", "L17", "L18"))
+    named = [*l12["pairs"], l16["pair"], *l17["pairs"]]
+    if l18["marked_pairs"] != named:
+        raise ValueError(
+            "L18's marked pairs are not L12's, L16's and L17's, in that order — the register "
+            "names its pairs once, in the claims, and L18 counts them."
+        )
+    if len({(tuple(p["pair"]), tuple(p["rungs"]), p["label_set"]) for p in named}) != len(named):
+        raise ValueError("L18: the marked pairs are not distinct, so fewer than eight are marked.")
+    for owner, pairs, claims in (
+        ("L12", l12["pairs"], {"C1"}),
+        ("L16", [l16["pair"]], {"C2"}),
+        ("L17", l17["pairs"], {"C3a", "C3b"}),
+    ):
+        for p in pairs:
+            if p["claim"] not in claims:
+                raise ValueError(f"{owner} marks {p['pair']} for {p['claim']}, not {sorted(claims)}.")
+    for p in named:
+        want = l1["claim_metrics"].get(p["label_set"])
+        if p["metric"] != want:
+            raise ValueError(
+                f"L1 reads {p['label_set']} claims on {want!r}, and {p['claim']}'s pair "
+                f"{p['pair']} is marked on {p['metric']!r}."
+            )
+    for p in l12["pairs"]:
+        if p["rungs"] != [l12["rung"], l12["rung"]]:
+            raise ValueError(f"L12 reads C1 at {l12['rung']}, and {p['pair']} sits at {p['rungs']}.")
+    if l16["ladders"] != l3["seeds"]:
+        raise ValueError(
+            f"L16 counts {l16['ladders']} ladders and L3 registers {l3['seeds']} seeds — seed i "
+            "trains on ladder i, so the two are one number."
+        )
+    if not 0 < l16["ladders_required"] <= l16["ladders"]:
+        raise ValueError(
+            f"L16: {l16['ladders_required']} of {l16['ladders']} ladders is not a condition."
+        )
+    r4 = rule("R4").value
+    if values["L6"] != r4:
+        raise ValueError(
+            f"L6 registers {values['L6']} DEM-tokenizer epochs and Task 1's R4 registers {r4}. "
+            "It is one tokenizer and one per-modality citation; amend both registers together."
+        )
+
+
+@dataclass(frozen=True)
+class LandformBar(RegisteredBar):
+    """Task 2's loaded bar, checked against §7 — the readers a run and the report use.
+
+    Past :mod:`benchmark.prereg` no Task 2 threshold is typed: δ, the resample count, the seed
+    and ladder counts and the marked pairs are read here, off the committed file.
+    """
+
+    @property
+    def claim_metrics(self) -> dict[str, str]:
+        """L1: the metric each label set's claims are read on."""
+        return dict(self.value("L1")["claim_metrics"])
+
+    @property
+    def bootstrap_resamples(self) -> int:
+        """L2's 10,000 tile resamples."""
+        return self.value("L2")["resamples"]
+
+    @property
+    def test_geocells(self) -> int:
+        """L2's registered caveat: the test set's 13 geocells."""
+        return self.value("L2")["test_geocells"]
+
+    @property
+    def seeds(self) -> int:
+        """L3's seeds per core cell, B3 and B7 included."""
+        return self.value("L3")["seeds"]
+
+    @property
+    def terramind_dem_epochs(self) -> int:
+        """L6's 20, the per-modality figure Task 1's R4 also carries."""
+        return self.value("L6")
+
+    @property
+    def margin(self) -> float:
+        """L15's δ, in mIoU points."""
+        return self.value("L15")
+
+    @property
+    def c1_rung(self) -> str:
+        """L12's rung."""
+        return self.value("L12")["rung"]
+
+    @property
+    def ladders(self) -> int:
+        """L16's ladder count — L3's seeds, one ladder per seed."""
+        return self.value("L16")["ladders"]
+
+    @property
+    def ladders_required(self) -> int:
+        """L16's 2: ladders whose difference must be ≥ −δ for C2 to be claimed."""
+        return self.value("L16")["ladders_required"]
+
+    @property
+    def iwahashi_rule(self) -> float:
+        """L17's tile-majority fraction C3a is read at (unanchored in §7; see :data:`TASK2`)."""
+        return self.value("L17")["iwahashi_rule"]
+
+    @property
+    def iwahashi_groups(self) -> int:
+        """L17's Iwahashi group count (unanchored in §7; see :data:`TASK2`)."""
+        return self.value("L17")["iwahashi_groups"]
+
+    @property
+    def marked_pairs(self) -> tuple[dict[str, Any], ...]:
+        """L18's eight, in the order the claims name them."""
+        return tuple(dict(p) for p in self.value("L18")["marked_pairs"])
+
+
+#: Task 2's register, through the same :class:`Register` Task 1's bar loads through.
+TASK2: Final = Register(
+    bar_name=TASK2_BAR_NAME,
+    plan_path=TASK2_PLAN_PATH,
+    section=TASK2_SECTION,
+    mark="§7",
+    index="§7 item 10",
+    adr=TASK2_ADR,
+    adr_name="ADR-0015",
+    purpose=(
+        "The numeric subset of ADR-0015's register of twenty rules, committed by "
+        "`benchmark.launch freeze --task landform` before any head trains. Every entry carries "
+        "its value and the exact §7 phrase it was registered in; `benchmark.prereg` refuses a "
+        "bar whose phrase no longer appears in §7, by the same check Task 1's bar passes "
+        "against its §6, and names the entry that lost its anchor. Eleven discursive rules are "
+        "recorded here without values. A field listed under an entry's `unanchored` is a value "
+        "§7 does not state: it is tied to the other entries by the register's cross-checks and "
+        "to nothing in the plan, until §7 item 10 and ADR-0015 are amended to state it."
+    ),
+    entries=TASK2_REGISTER,
+    anchors=_TASK2_ANCHORS,
+    consistency=_task2_consistency,
+    bar_type=LandformBar,
+)
+
+#: Each task's register, keyed by `benchmark.launch`'s ``--task`` value.
+REGISTERS: Final = {"void-fill": TASK1, "landform": TASK2}

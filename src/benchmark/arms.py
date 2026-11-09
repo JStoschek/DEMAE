@@ -71,6 +71,16 @@ INPUT_CONVENTIONS: Final = (
 #: TerraMind encoder accepts either silently (p118 §7). ``none`` is an arm with no encoder.
 NORMALIZATIONS: Final = ("none", "per_tile", "terramind_v1")
 
+#: The diets an *encoder* can declare (:attr:`Encoder.normalization`) — every member of
+#: :data:`NORMALIZATIONS` but ``none``, which is an arm with no encoder.
+ENCODER_NORMALIZATIONS: Final = tuple(n for n in NORMALIZATIONS if n != "none")
+
+#: Which tensor ADR-0012's `output` is (:attr:`Encoder.output_tap`, #204). ``final`` is the
+#: encoder's own final tensor; ``pre_fsq_latent`` is the TerraMind tokenizer's post-`quant_proj`,
+#: pre-FSQ latent — B8, the row that shows why the 5-d bottleneck is not TerraMind's
+#: representation (Task 2 plan §1).
+OUTPUT_TAPS: Final = ("final", "pre_fsq_latent")
+
 #: How the position embedding the model *runs with* is derived from the one the checkpoint
 #: ships. Distinct from :attr:`Encoder.pos_encoding`, which names the closed form the shipped
 #: tensor is **checked against**: two encoders can agree on the form and disagree on the
@@ -173,6 +183,27 @@ class Encoder:
     pos_encoding: str
     #: The :class:`benchmark.config.Paths` field naming this encoder's checkpoint.
     checkpoint_field: str
+    #: §2.1's diet for this encoder — one of :data:`NORMALIZATIONS` other than ``none``.
+    #:
+    #: **Declared here, with no default, since #204.** It used to be read off the arms that eat
+    #: the encoder, which only works while every encoder has an arm: Task 2's B8 and ALT entries
+    #: are registered before the Task 2 arm table that reads them, and ALT's whole point is that
+    #: it feeds TerraMind's weights a diet that is *not* TerraMind's. Each arm still declares its
+    #: own `normalization`, and :class:`Arm` refuses one that disagrees with its encoder.
+    normalization: str
+    #: The terratorch modality key that **selects** this encoder's constant pair — ``None`` for
+    #: a ``per_tile`` diet, which uses no constants. ADR-0012 §7.2's "selected by name", made a
+    #: per-encoder declaration rather than a module constant (#204): the tokenizer reads
+    #: ``tok_dem@224`` and the backbone (B9) ``untok_dem@224``. Today both resolve to the same
+    #: pair, and that is the point of declaring it — the two encoders cannot share a diet by
+    #: accident, only by two reviewed lines that happen to agree, each value-checked at load.
+    modality: str | None
+    #: Whether this encoder's own final tensor is its last block's output put through a norm.
+    #: DEMAE norms after block twelve and the TerraMind tokenizer does not (ADR-0012 §3), which
+    #: is the whole reason `output` and `intermediates[11]` are separately named. **No default
+    #: since #204** — Amendment 2's backbone made it a per-encoder fact rather than a per-family
+    #: rule, and a default is a family rule written as a dataclass field.
+    output_is_normed: bool
     #: The :class:`benchmark.config.Paths` field naming this encoder's **pretraining**
     #: checkpoint — encoder *and* decoder — or ``None`` for a family that has none.
     #:
@@ -229,10 +260,6 @@ class Encoder:
     #: Decision 5 settles that (#156) — this field is what it settles *to*, and the ADR is where
     #: the reasoning lives, so the decision has one home.
     has_cls: bool = True
-    #: Whether this encoder's own final tensor is its last block's output put through a norm.
-    #: DEMAE norms after block twelve and TerraMind does not (ADR-0012 §3), which is the whole
-    #: reason `output` and `intermediates[11]` are separately named.
-    output_is_normed: bool = True
     #: How many epochs the *published* checkpoint was pretrained for, where the publisher states
     #: a figure this plan is obliged to quote. ADR-0013 **R4** is the whole reason this is a
     #: field: TerraMind's paper headlines 100 epochs, which is its S-2/S-1 figure, and the DEM
@@ -257,6 +284,24 @@ class Encoder:
     #: integer rather than derived from it, because what R4 governs is the *sentence*: a bare
     #: `20` in a record is a number a reader has no way to tell from the paper's headline.
     pretraining_epochs_citation: str | None = None
+    #: Which tensor ADR-0012's `output` is — one of :data:`OUTPUT_TAPS`. ``final`` is the
+    #: encoder's own final tensor, every entry but one. ``pre_fsq_latent`` is B8's: the
+    #: tokenizer's post-`quant_proj`, pre-FSQ latent, which is what terratorch's own
+    #: `return_type="latent"` returns. The twelve `intermediates` are the encoder's blocks either
+    #: way; only `output` moves, because only `output` is what a linear probe reads.
+    output_tap: str = "final"
+    #: The latent's width where :attr:`output_tap` is ``pre_fsq_latent`` — 5, the DEM tokenizer's
+    #: FSQ code dimension (p118: `quant_proj` returns `[1, 5, 14, 14]`) — and ``None`` otherwise.
+    latent_width: int | None = None
+
+    @property
+    def output_width(self) -> int:
+        """The width of ADR-0012's `output` — what a head reading it absorbs.
+
+        :attr:`width` for every encoder whose `output` is its own final tensor, and the latent's
+        width for B8. The blocks stay :attr:`width` wide either way.
+        """
+        return self.width if self.latent_width is None else self.latent_width
 
     def __post_init__(self) -> None:
         if self.pos_encoding not in POS_ENCODINGS:
@@ -279,6 +324,48 @@ class Encoder:
                 f"pos_emb_native_grid_px={self.pos_emb_native_grid_px!r}. An `as_published` "
                 f"derivation names no native grid because it is the run's; every other one names "
                 f"the grid it derives *from* (ADR-0011)"
+            )
+        # §2.1's diet and the key that selects its constants are one claim in two halves too
+        # (#204): a global affine with no key has nothing to pick its pair by — #138 found three
+        # DEM pairs across IBM's artifacts — and a per-tile diet with one names constants that
+        # nothing applies.
+        if self.normalization not in ENCODER_NORMALIZATIONS:
+            raise ValueError(
+                f"encoder {self.name}: unknown normalization {self.normalization!r}; an encoder "
+                f"declares one of {list(ENCODER_NORMALIZATIONS)} (`none` is an arm with no "
+                f"encoder, never an encoder's own diet)"
+            )
+        if self.normalization == "terramind_v1" and self.modality is None:
+            raise ValueError(
+                f"encoder {self.name}: the `terramind_v1` diet is a constant pair, and the "
+                f"modality key is what selects it (ADR-0012 §7.2). Declare the key this "
+                f"encoder's pair is published under"
+            )
+        if self.normalization == "per_tile" and self.modality is not None:
+            raise ValueError(
+                f"encoder {self.name}: a `per_tile` diet uses no constants, so the modality key "
+                f"{self.modality!r} would name a pair nothing applies"
+            )
+        if self.output_tap not in OUTPUT_TAPS:
+            raise ValueError(
+                f"encoder {self.name}: unknown output tap {self.output_tap!r}; registered: "
+                f"{list(OUTPUT_TAPS)}"
+            )
+        # B8's latent is a fact about the tokenizer's `quant_proj`, so it has a width of its own
+        # and only exists where there is a `quant_proj` to read. The width is declared rather than
+        # read off the file, and the load checks the file against it (`benchmark.extract`).
+        latent = self.output_tap == "pre_fsq_latent"
+        if latent != (self.latent_width is not None):
+            raise ValueError(
+                f"encoder {self.name}: output tap {self.output_tap!r} with "
+                f"latent_width={self.latent_width!r}. The pre-FSQ latent has a width of its own "
+                f"and the encoder's final tensor has none but `width`"
+            )
+        if latent and (self.checkpoint_format != "terratorch" or self.output_is_normed):
+            raise ValueError(
+                f"encoder {self.name}: the pre-FSQ latent is the TerraMind tokenizer's "
+                f"`quant_proj` over its un-normed block 12 — a `terratorch` checkpoint with "
+                f"`output_is_normed=False`"
             )
         # ADR-0013 R4's two halves, on the pair above's rule: what R4 governs is the *sentence*,
         # so a figure with no citation is a number a reader cannot tell from TerraMind's headline
@@ -386,6 +473,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d",
         checkpoint_field="demae_r5_checkpoint",
+        normalization="per_tile",
+        modality=None,
+        output_is_normed=True,
         mae_checkpoint_field="demae_r5_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R5_MD5,
@@ -398,6 +488,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         # *transpose* of MAE's (P102 §4). Every name and every shape matches under either.
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="demae_r4_checkpoint",
+        normalization="per_tile",
+        modality=None,
+        output_is_normed=True,
         mae_checkpoint_field="demae_r4_mae_checkpoint",
         params=85_254_144,
         checkpoint_md5=DEMAE_R4_MD5,
@@ -408,6 +501,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=384,
         pos_encoding="sincos2d",
         checkpoint_field="demae_vits_checkpoint",
+        normalization="per_tile",
+        modality=None,
+        output_is_normed=True,
         params=21_393_408,
         timm_model="vit_small_patch16_224",
         checkpoint_md5=DEMAE_VITS_MD5,
@@ -432,6 +528,10 @@ ENCODERS: Final[dict[str, Encoder]] = {
         params=90_172_416,
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        # The tokenizer's own pair, selected by the tokenizer's own key (ADR-0012 §7.2). #138's
+        # three DEM pairs are why it is a name; B9's `untok_dem@224` is why it is per encoder.
+        normalization="terramind_v1",
+        modality="tok_dem@224",
         # p118 §5.3 measured it: `return_intermediates=True` yields twelve tensors with no
         # separate post-norm entry, its last bit-identical to `encoder(x)`. So "the last layer"
         # means something different here than it does for DEMAE, which is ADR-0012 §3's subject.
@@ -463,6 +563,8 @@ ENCODERS: Final[dict[str, Encoder]] = {
         params=90_172_416,
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        normalization="terramind_v1",
+        modality="tok_dem@224",
         output_is_normed=False,
         has_cls=False,
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
@@ -474,6 +576,9 @@ ENCODERS: Final[dict[str, Encoder]] = {
         width=768,
         pos_encoding="sincos2d_rowfirst",
         checkpoint_field="imagenet_mae_checkpoint",
+        normalization="per_tile",
+        modality=None,
+        output_is_normed=True,
         # The published mmselfsup file, RGB and `backbone.`-prefixed. §8's collapse and P102's
         # key map turn it into the single-channel timm encoder A6 reads; `pretrain.init` owns
         # both, and `benchmark.extract` reuses them rather than writing a second map.
@@ -533,12 +638,135 @@ ENCODERS: Final[dict[str, Encoder]] = {
         params=286_316_821,
         checkpoint_format="terratorch",
         checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        normalization="terramind_v1",
+        modality="tok_dem@224",
+        output_is_normed=False,
+        has_cls=False,
+        pretraining_epochs=TERRAMIND_DEM_EPOCHS,
+        pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
+    ),
+    # Task 2's B8 (#204): the tokenizer's post-`quant_proj`, pre-FSQ 5-d latent — the row that
+    # shows, in one number, why the 5-d bottleneck is not "TerraMind's representation" and would
+    # have been a strawman as the primary target (Task 2 plan §1). Same file, same md5, same
+    # diet and same ADR-0011 crop as `terramind`; what moves is which tensor `output` is.
+    #
+    # An entry of its own on `terramind-bicubic`'s precedent, and for its reason: results replace
+    # rows by arm and `Extractor` caches models by encoder name, so a flag on B4 would let the
+    # control delete the row it sits beside.
+    #
+    # `params` is §2's capacity-table figure, 90,172,416, the encoder as published. What B8
+    # runs is that plus `quant_proj`'s 3,845 frozen weights (768x5 + 5; #163 counted them), which
+    # the plan's table does not list separately. Registered at the table's figure because the
+    # table is what `check_capacity` holds every encoder to.
+    "terramind-latent": Encoder(
+        name="terramind-latent",
+        family="terramind",
+        width=768,
+        pos_encoding="sincos2d_terramind",
+        pos_emb_derivation="rederived_14x14_crop",
+        pos_emb_native_grid_px=16,
+        checkpoint_field="terramind_checkpoint",
+        params=90_172_416,
+        checkpoint_format="terratorch",
+        checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        normalization="terramind_v1",
+        modality="tok_dem@224",
+        # `quant_proj` is a 1x1 convolution over block 12, so nothing norms the latent either.
+        output_is_normed=False,
+        has_cls=False,
+        output_tap="pre_fsq_latent",
+        latent_width=5,
+        pretraining_epochs=TERRAMIND_DEM_EPOCHS,
+        pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
+    ),
+    # Task 2's B4-ALT / B5-ALT (#204): TerraMind's weights fed DEMAE's per-tile-standardized
+    # diet — the altitude-passthrough control (Task 2 plan §2.1). Landform classes correlate with
+    # absolute altitude and only TerraMind's native diet lets absolute elevation through, so this
+    # row measures what that passthrough is worth. Same file, md5 and ADR-0011 crop as
+    # `terramind`; the diet is the one difference, and with no global affine there is no
+    # constant pair for a modality key to select.
+    #
+    # An entry rather than an arm field for B8's reason above — and :class:`Arm` now refuses an
+    # arm whose diet differs from its encoder's, so the flag version is not expressible.
+    "terramind-per-tile": Encoder(
+        name="terramind-per-tile",
+        family="terramind",
+        width=768,
+        pos_encoding="sincos2d_terramind",
+        pos_emb_derivation="rederived_14x14_crop",
+        pos_emb_native_grid_px=16,
+        checkpoint_field="terramind_checkpoint",
+        params=90_172_416,
+        checkpoint_format="terratorch",
+        checkpoint_md5=TERRAMIND_TOKENIZER_DEM_MD5,
+        normalization="per_tile",
+        modality=None,
         output_is_normed=False,
         has_cls=False,
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
         pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
 }
+
+
+#: Task 2 plan §2's capacity table ("Capacity, in full"), by registry name (#204, story 40).
+#:
+#: **Quoted rather than derived**, and pinned against the plan's own text by
+#: ``test_the_capacity_table_is_the_plans_own``, so a plan edit and a registry edit each fail
+#: there. :func:`check_capacity` holds every encoder's :attr:`Encoder.params` to it, and
+#: :meth:`benchmark.extract.ExtractorSpec.check` calls that on every load — which is every run —
+#: so the 5.8% claim (TerraMind's 90,172,416 over R5's 85,254,144) is a checked number.
+#:
+#: B9's row (`terramind-backbone`, 85,151,232) is added with its encoder by #205: an entry here
+#: for an encoder not yet registered would be a row nothing checks.
+CAPACITY_TABLE: Final[dict[str, int]] = {
+    "demae-r5": 85_254_144,
+    "demae-r4": 85_254_144,
+    "imagenet-mae": 85_405_440,
+    "terramind": 90_172_416,
+    "terramind-latent": 90_172_416,
+    "terramind-per-tile": 90_172_416,
+    "demae-vits": 21_393_408,
+}
+
+#: Registered encoders §2's table deliberately does not list, each with the reason. Task 1-only
+#: entries; a new encoder is in neither mapping until someone places it, and
+#: :func:`check_capacity` refuses it until then — a list that fails closed, on
+#: :data:`LABEL_SWEEP_ARMS`' rule.
+CAPACITY_EXEMPT: Final[dict[str, str]] = {
+    "terramind-bicubic": "Task 1's ADR-0011 D4 ablation (A5-BICUBIC); no Task 2 arm reads it",
+    "terramind-tokenizer": (
+        "Task 1's A9 runs the whole tokenizer (encoder, FSQ and diffusion decoder, counted by "
+        "#168); no Task 2 arm reads it"
+    ),
+}
+
+
+def check_capacity(encoder_name: str) -> int | None:
+    """This encoder's parameter count, held to plan §2's capacity table — or a refusal naming it.
+
+    Returns :attr:`Encoder.params`. Refuses an encoder whose count differs from §2's figure, and
+    an encoder the table neither lists nor exempts: §6 item 4 prints counts in every results
+    table, and a count nobody checked against the plan would print as though someone had.
+    """
+    encoder = ENCODERS[encoder_name]
+    if encoder_name in CAPACITY_EXEMPT:
+        return encoder.params
+    expected = CAPACITY_TABLE.get(encoder_name)
+    if expected is None:
+        raise ValueError(
+            f"encoder {encoder_name} is in neither Task 2 plan §2's capacity table nor its "
+            f"declared exemptions. Add its §2 figure to `benchmark.arms.CAPACITY_TABLE` (or, for "
+            f"an encoder no Task 2 arm reads, a reason to `CAPACITY_EXEMPT`)"
+        )
+    if encoder.params != expected:
+        shown = "None" if encoder.params is None else f"{encoder.params:,}"
+        raise ValueError(
+            f"encoder {encoder_name} declares {shown} parameters; Task 2 plan §2's capacity "
+            f"table gives {expected:,}. The capacity claim (every C1 pair within 5.8%) is read "
+            f"off these counts, so a mismatch is refused rather than printed"
+        )
+    return encoder.params
 
 
 @dataclass(frozen=True)
@@ -665,11 +893,25 @@ class Arm:
                 f"arm {self.name}: an arm with an encoder declares that encoder's diet and an "
                 f"arm without one declares 'none' (§2.1)"
             )
+        # The diet is the encoder's declaration since #204, and an arm restating another one is
+        # a control filed under the row it controls for — the thing `terramind-bicubic`'s
+        # precedent exists to prevent, since results replace rows by arm. A different diet is a
+        # different encoder entry (`terramind-per-tile`), never a moved arm field.
+        if self.encoder is not None and self.normalization != ENCODERS[self.encoder].normalization:
+            raise ValueError(
+                f"arm {self.name}: feeds {self.encoder} a {self.normalization!r} diet, and that "
+                f"encoder declares {ENCODERS[self.encoder].normalization!r}. A different diet is "
+                f"a registry entry of its own (§2.1, #204)"
+            )
 
     @property
     def width(self) -> int | None:
-        """The feature width the shared head's first projection absorbs — §4.1's only delta."""
-        return None if self.encoder is None else ENCODERS[self.encoder].width
+        """The feature width the shared head's first projection absorbs — §4.1's only delta.
+
+        The width of the encoder's `output` (:attr:`Encoder.output_width`), which is its block
+        width for every Task 1 encoder and the latent's 5 for B8 (#204).
+        """
+        return None if self.encoder is None else ENCODERS[self.encoder].output_width
 
     @property
     def is_inference_only(self) -> bool:
@@ -1001,20 +1243,23 @@ LABEL_SWEEP_ARMS: Final[tuple[str, ...]] = ("A4-R5", "A5", "A6", "A7")
 
 
 def normalization_for(encoder_name: str) -> str:
-    """§2.1's declared diet for an encoder, read off the arms that eat it.
+    """§2.1's declared diet for an encoder — its own declaration, checked against its arms.
 
-    Here rather than in :mod:`benchmark.extract` because it is a question about this table:
-    ``normalization`` is an *arm* field, since §2.1's whole point is that each model is fed its
-    native diet. Two arms on one encoder disagreeing about the diet is a contradiction, and one
-    the contract should surface rather than pick a side of.
+    It used to be *read off* the arms that eat the encoder, which stopped working the moment an
+    encoder was registered ahead of its arms: Task 2's B8 and ALT entries (#204) are in the
+    contract before the Task 2 arm table that reads them exists. So the encoder declares it
+    (:attr:`Encoder.normalization`) and every arm reading it must agree. :class:`Arm` already
+    refuses a disagreement when it is built; this re-asks because ``ARMS`` is a dict a caller can
+    reach into, and the contract should surface a contradiction rather than pick a side of it.
     """
+    declared = ENCODERS[encoder_name].normalization
     diets = {arm.normalization for arm in ARMS.values() if arm.encoder == encoder_name}
-    if len(diets) != 1:
+    if diets - {declared}:
         raise ValueError(
-            f"the arms reading {encoder_name} declare {sorted(diets)} — §2.1 feeds each model "
-            f"one native diet, and a contract cannot declare two"
+            f"the arms reading {encoder_name} declare {sorted(diets)} and the encoder declares "
+            f"{declared!r} — §2.1 feeds each model one diet, and a contract cannot declare two"
         )
-    return diets.pop()
+    return declared
 
 
 def parameter_counts(arm: Arm) -> dict[str, int | None]:

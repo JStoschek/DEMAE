@@ -46,9 +46,19 @@ def write_tile_strata(rows: Iterable[TileStratum], path: Path | str) -> Path:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [HEADER] + [f"{tile_id},{stratum}" for tile_id, stratum in rows]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text(render_tile_strata(rows))
     return path
+
+
+def render_tile_strata(rows: Iterable[TileStratum]) -> str:
+    """The artifact's text, exactly as :func:`write_tile_strata` writes it.
+
+    Split out for the writers that compare before they write (Task 2's ladders go through
+    :func:`benchmark.artifacts.write_committed`, which wants the bytes, not a path), so the
+    format still has one implementation.
+    """
+    lines = [HEADER] + [f"{tile_id},{stratum}" for tile_id, stratum in rows]
+    return "\n".join(lines) + "\n"
 
 
 def read_tile_strata(path: Path | str, *, what: str) -> list[TileStratum]:

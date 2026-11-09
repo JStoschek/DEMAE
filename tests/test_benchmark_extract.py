@@ -68,6 +68,9 @@ ENCODER = "demae-vits"
 ARM = "A4-S"
 WIDTH = arms.ENCODERS[ENCODER].width
 GRID = dataset_config.TILE_PX // dataset_config.PATCH_PX
+#: The tokenizer's declared modality key, which selects its constant pair (ADR-0012 §7.2). A
+#: per-encoder declaration since #204, read off the registry rather than a module constant.
+TOKENIZER_KEY = arms.ENCODERS["terramind"].modality
 
 #: The R5 release encoder, where a box mounts it. Its md5 is *published* (#156 settled that both
 #: the `-v2` and non-`-v2` bundles ship a byte-identical `encoder.pt`), so unlike the ViT-S it is
@@ -1309,7 +1312,8 @@ def test_the_installed_versions_are_the_pinned_ones():
 def test_the_constants_are_read_out_of_the_installed_package(monkeypatch):
     from benchmark.extract import TERRAMIND_MEAN, TERRAMIND_STD, terramind_constants
 
-    assert terramind_constants() == (TERRAMIND_MEAN, TERRAMIND_STD) == (670.665, 951.272)
+    assert terramind_constants(TOKENIZER_KEY) == (TERRAMIND_MEAN, TERRAMIND_STD)
+    assert (TERRAMIND_MEAN, TERRAMIND_STD) == (670.665, 951.272)
 
 
 def test_constants_that_resolve_by_name_to_another_value_are_refused(monkeypatch):
@@ -1318,11 +1322,11 @@ def test_constants_that_resolve_by_name_to_another_value_are_refused(monkeypatch
     otherwise silently rescale every A5 and A9 input and raise nothing (p118 §7)."""
     from terratorch.models.backbones.terramind.model import terramind_register
 
-    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+    from benchmark.extract import terramind_constants
 
-    monkeypatch.setitem(terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY, [651.663])
+    monkeypatch.setitem(terramind_register.v1_pretraining_mean, TOKENIZER_KEY, [651.663])
     with pytest.raises(ValueError, match="651.663"):
-        terramind_constants()
+        terramind_constants(TOKENIZER_KEY)
 
 
 def test_a_renamed_modality_is_refused_rather_than_falling_back_to_a_value(monkeypatch):
@@ -1331,23 +1335,23 @@ def test_a_renamed_modality_is_refused_rather_than_falling_back_to_a_value(monke
     refusal and not something to paper over with the hardcoded number."""
     from terratorch.models.backbones.terramind.model import terramind_register
 
-    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+    from benchmark.extract import terramind_constants
 
-    monkeypatch.delitem(terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY)
+    monkeypatch.delitem(terramind_register.v1_pretraining_mean, TOKENIZER_KEY)
     with pytest.raises(ValueError, match="publishes no v1 pretraining constants"):
-        terramind_constants()
+        terramind_constants(TOKENIZER_KEY)
 
 
 def test_multi_channel_constants_are_refused(monkeypatch):
     from terratorch.models.backbones.terramind.model import terramind_register
 
-    from benchmark.extract import TERRAMIND_MODALITY, terramind_constants
+    from benchmark.extract import terramind_constants
 
     monkeypatch.setitem(
-        terramind_register.v1_pretraining_mean, TERRAMIND_MODALITY, [670.665, 670.665]
+        terramind_register.v1_pretraining_mean, TOKENIZER_KEY, [670.665, 670.665]
     )
     with pytest.raises(ValueError, match="single-channel"):
-        terramind_constants()
+        terramind_constants(TOKENIZER_KEY)
 
 
 def test_the_terramind_diet_is_a_global_affine_over_metres(tile):
@@ -1358,12 +1362,13 @@ def test_the_terramind_diet_is_a_global_affine_over_metres(tile):
     tensors the encoder accepts either of, so what makes them different has to be asserted.
     """
     raw, valid = tile
-    out = normalize(raw[None], valid[None], normalization="terramind_v1")
+    diet = {"normalization": "terramind_v1", "modality": TOKENIZER_KEY}
+    out = normalize(raw[None], valid[None], **diet)
     expected = (raw.astype(np.float32) - np.float32(670.665)) / np.float32(951.272)
     np.testing.assert_array_equal(out[0], expected)
 
     offset = (raw + 1589).astype(np.int16)
-    shifted = normalize(offset[None], valid[None], normalization="terramind_v1")
+    shifted = normalize(offset[None], valid[None], **diet)
     assert (shifted[0] - out[0]).mean() == pytest.approx(1589 / 951.272, rel=1e-4)
 
 
@@ -1377,8 +1382,10 @@ def test_the_terramind_diet_ignores_the_mask_and_says_so(tile):
     raw, valid = tile
     everything = np.ones_like(valid)
     np.testing.assert_array_equal(
-        normalize(raw[None], valid[None], normalization="terramind_v1"),
-        normalize(raw[None], everything[None], normalization="terramind_v1"),
+        normalize(raw[None], valid[None], normalization="terramind_v1", modality=TOKENIZER_KEY),
+        normalize(
+            raw[None], everything[None], normalization="terramind_v1", modality=TOKENIZER_KEY
+        ),
     )
     # Where the per-tile diet moves with it, which is the contrast that makes the claim mean
     # something rather than being true of both.
@@ -1728,7 +1735,7 @@ def test_the_sequence_is_the_encoders_own_row_major_flatten(
     raw = rng.normal(1500.0, 400.0, size=(1, 224, 224)).astype(np.int16)
     out = extractor.extract(raw, land_mask(raw), arm="A5")
 
-    x = normalize(raw, land_mask(raw), normalization="terramind_v1")
+    x = normalize(raw, land_mask(raw), normalization="terramind_v1", modality=TOKENIZER_KEY)
     with torch.no_grad():
         spatial = model(torch.from_numpy(x).unsqueeze(1))
     assert tuple(spatial.shape) == (1, 768, 14, 14)
@@ -1787,7 +1794,7 @@ def test_the_constants_are_checked_when_the_encoder_loads_not_when_a_tile_arrive
 
     extractor = _terramind_extractor(tmp_path, synthetic_terramind, monkeypatch)
     monkeypatch.setitem(
-        terramind_register.v1_pretraining_mean, extract_module.TERRAMIND_MODALITY, [435.726]
+        terramind_register.v1_pretraining_mean, TOKENIZER_KEY, [435.726]
     )
     with pytest.raises(ValueError, match="435.726"):
         extractor.encoder("A5")
