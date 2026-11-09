@@ -307,16 +307,24 @@ def binary_sha256(binary: Path | str) -> str:
     return _sha256(str(Path(binary).resolve()), st.st_size, st.st_mtime_ns, st.st_ino)
 
 
+class WbtUnavailable(FileNotFoundError):
+    """WhiteboxTools is not on this box: a declared external (ADR-0014 D1), not a broken one.
+
+    Distinct from an unpinned binary (a :class:`ValueError`), which is a different build and
+    never skipped. ``freeze`` catches only this, to run the stages that read no label (#202).
+    """
+
+
 def check_pinned(binary: Path | str | None, pins: Iterable[str]) -> str:
     """Refuse a WBT binary that is missing or whose sha256 is not pinned; return the sha256."""
     if binary is None:
-        raise FileNotFoundError(
+        raise WbtUnavailable(
             "paths.wbt_binary is not set. WhiteboxTools v2.4.0 is a declared external, not a "
-            "Python dependency (ADR-0014 D1): fetch the platform build, put its sha256 in "
-            "geomorphon.wbt_sha256, and point paths.wbt_binary at it (#202)"
+            "Python dependency (ADR-0014 D1): fetch a build whose sha256 is in "
+            "geomorphon.wbt_sha256 and point paths.wbt_binary at it (#202)"
         )
     if not Path(binary).is_file():
-        raise FileNotFoundError(f"paths.wbt_binary {binary} is not a file")
+        raise WbtUnavailable(f"paths.wbt_binary {binary} is not a file (#202)")
     sha = binary_sha256(binary)
     pins = tuple(pins)
     if sha not in pins:

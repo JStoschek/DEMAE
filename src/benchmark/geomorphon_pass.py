@@ -533,6 +533,8 @@ def write(resolution: LandformResolution) -> list[str]:
     cfg = resolution.config
     g, paths = cfg.geomorphon, cfg.paths
     say = _say
+    # First, so a box without WBT is told so before anything else is read or checked.
+    labeller = make_labeller(cfg)
     lists = read_lists(paths.task1_artifacts_dir)
     source = gm.RasterioCogSource(paths.cog_frame, paths.cog_root)
     chash = label_config_hash(g)
@@ -543,7 +545,6 @@ def write(resolution: LandformResolution) -> list[str]:
     say(f"{'census':<16} L = {cen.search} over {cen.tiles:,} tiles: {len(cen.absent)} absent "
         f"COG(s) reached ({', '.join(f'{n} {t}' for t, n in treat.items()) or 'none'}); "
         f"{cen.wrapped} tile(s) wrap the antimeridian")
-    labeller = make_labeller(cfg)
     ids = [t for split_ids in lists.values() for t in split_ids]
     shards = TileStore(paths.corpus_dir, index=TileStore.index_for(paths.corpus_dir, ids))
     missing = [t for t in ids if t not in shards]

@@ -11,6 +11,10 @@ owns the parser and the three verbs; ``--task landform`` hands it this module's
   plan §4.4's order. Each is pending (``write`` is ``None``) until its ticket supplies the
   writer; ``freeze`` runs every built stage in order and then refuses to report success past a
   pending one, naming it and its ticket.
+* **A stage this box cannot run** because WhiteboxTools is absent (a declared external, ADR-0014
+  D1) is skipped, and so is every later stage that ``needs`` it; the rest still run, and
+  ``freeze`` then refuses, naming what it skipped and #202. A stage declares ``needs`` only on a
+  stage whose output it reads.
 * **An input a cell reads** that no ticket has built yet is a :class:`Pending` line in
   :data:`PENDING_INPUTS`. The ticket that builds it deletes the line and adds a
   :class:`benchmark.artifacts.Resolved` to :func:`_inputs`, so its path and md5 print instead.
@@ -45,6 +49,7 @@ from . import (
     landform_config,
     prereg,
 )
+from . import geomorphon as gm
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -72,6 +77,9 @@ class FreezeStage:
     label: str
     ticket: str
     write: Callable[[LandformResolution], list[str]] | None = None
+    #: The labels of earlier stages whose committed output this one reads. A stage skipped on
+    #: this box skips every stage that needs it.
+    needs: tuple[str, ...] = ()
 
 
 def _freeze_bar(resolution: LandformResolution) -> list[str]:
@@ -105,6 +113,10 @@ def bar_for(cfg: LandformConfig) -> prereg.LandformBar:
 #: later stages are drawn against is in it, Task 1's reason), then the labels (§4.4 steps 1-2),
 #: then the ladders (their coverage reports carry per-class pixel counts, so labels come first),
 #: then the card, which describes everything above it and so goes last.
+#:
+#: The ladders do not ``need`` the geomorphon stage yet: their per-class pixel counts are null
+#: until #202 measures them (:data:`benchmark.ladders.CLASS_PIXELS_NOTE`). The change that fills
+#: them in adds ``needs=("geomorphon labels",)`` to the ladder stage.
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199", _freeze_bar),
     FreezeStage("geomorphon labels", "#201", geomorphon_pass.write),
@@ -302,13 +314,43 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
 
 
 def _freeze(resolution: LandformResolution, args: argparse.Namespace) -> int:
-    """``freeze --task landform`` — every built stage, in order, then a refusal past a pending one."""
+    """``freeze --task landform`` — every built stage this box can run, in order, then a refusal
+    past a pending or skipped one.
+
+    A stage that raises :class:`benchmark.geomorphon.WbtUnavailable` is skipped, with every
+    later stage that ``needs`` it, and the stages that read none of its output still run: a box
+    without WhiteboxTools can freeze the bar, the Iwahashi labels and the ladders. It still
+    never exits 0 (ADR-0009): the refusal names what was skipped and #202.
+    """
+    skipped: dict[str, str] = {}  # stage label -> why
+    cause: Exception | None = None
     for stage in FREEZE_STAGES:
         if stage.write is None:
             continue
-        for line in stage.write(resolution):
+        blocked = [need for need in stage.needs if need in skipped]
+        if blocked:
+            skipped[stage.label] = f"needs {', '.join(blocked)}"
+            print(f"{'freeze':<16} {stage.label} — skipped: needs {', '.join(blocked)}")
+            continue
+        try:
+            lines = stage.write(resolution)
+        except gm.WbtUnavailable as exc:
+            skipped[stage.label] = str(exc)
+            cause = cause or exc
+            print(f"{'freeze':<16} {stage.label} — skipped: WhiteboxTools is not on this box "
+                  f"(#202)")
+            continue
+        for line in lines:
             print(line)
     pending = [f"{stage.label} ({stage.ticket})" for stage in FREEZE_STAGES if stage.write is None]
+    if skipped:
+        listing = "; ".join(f"{label}: {why}" for label, why in skipped.items())
+        raise FileNotFoundError(
+            f"`freeze --task landform` skipped {len(skipped)} stage(s) this box cannot run — "
+            f"{listing}. It wrote the stages that do not need WhiteboxTools (#202) and stops "
+            f"here rather than exit 0 as though Task 2 were frozen"
+            + (f"; no writer yet for: {', '.join(pending)}" if pending else "")
+        ) from cause
     if pending:
         raise NotImplementedError(
             f"`freeze --task landform` has no writer yet for: {', '.join(pending)}. It wrote "

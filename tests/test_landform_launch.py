@@ -324,3 +324,28 @@ def test_the_step_count_function_reproduces_section_four_five_s_table():
             for rung in RUNGS
         )
         assert got == want, head
+
+
+def test_freeze_without_wbt_runs_the_stages_that_do_not_need_it_and_still_refuses(
+    flags, monkeypatch, capsys
+):
+    """ADR-0009: the shipping command writes what this box can, then names #202, never exit 0.
+
+    WhiteboxTools is a declared external (ADR-0014 D1). A box without it must still reach the
+    Iwahashi and ladder stages, which do not read a geomorphon label.
+    """
+    geomorphon = next(s for s in landform.FREEZE_STAGES if s.label == "geomorphon labels")
+    ran = []
+    later = landform.FreezeStage("later", "#000", lambda resolution: ran.append(1) or ["later ran"])
+    reads_labels = landform.FreezeStage(
+        "reads labels", "#000", lambda resolution: ran.append(2) or [],
+        needs=("geomorphon labels",),
+    )
+    monkeypatch.setattr(landform, "FREEZE_STAGES", (geomorphon, later, reads_labels))
+    with pytest.raises(FileNotFoundError, match="paths.wbt_binary is not set") as exc:
+        launch.main(["freeze", *flags])
+    assert ran == [1], "a stage that reads no label ran; one that reads them did not"
+    assert "#202" in str(exc.value) and "geomorphon labels" in str(exc.value)
+    assert "reads labels" in str(exc.value)
+    out = capsys.readouterr().out
+    assert "later ran" in out
