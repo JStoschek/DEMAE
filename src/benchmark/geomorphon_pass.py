@@ -46,7 +46,7 @@ import numpy as np
 
 from . import artifacts
 from . import geomorphon as gm
-from .config import _hash
+from .config import canonical_hash
 
 if TYPE_CHECKING:
     from .landform import LandformResolution
@@ -100,7 +100,7 @@ def label_config(g: Geomorphon) -> dict:
 
 
 def label_config_hash(g: Geomorphon) -> str:
-    return _hash(label_config(g))
+    return canonical_hash(label_config(g))
 
 
 def _classes() -> tuple[str, ...]:

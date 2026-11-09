@@ -55,7 +55,7 @@ import numpy as np
 
 from . import artifacts
 from .artifacts import Resolved
-from .config import _to_dict
+from .config import group_to_dict
 
 if TYPE_CHECKING:
     from .landform import LandformResolution
@@ -444,7 +444,7 @@ def check(cfg: LandformConfig, table_md5: str | None) -> None:
     fp = committed(cfg)
     if fp is None:
         return
-    rule = _to_dict(cfg.iwahashi)
+    rule = group_to_dict(cfg.iwahashi)
     if fp["rule"] != rule:
         raise ValueError(
             f"{fingerprint_path(cfg)} was committed under a different rule ({fp['rule']}) from "
@@ -495,7 +495,7 @@ def freeze(resolution: LandformResolution) -> list[str]:
         "table_md5": table_md5,
         "table_columns": list(TABLE_COLUMNS),
         "rows": len(labels),
-        "rule": _to_dict(rule),
+        "rule": group_to_dict(rule),
         "overview": OVERVIEW,
         "survivors": counts,
     }

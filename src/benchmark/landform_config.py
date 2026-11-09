@@ -58,14 +58,14 @@ from . import landform_arms, prereg
 from .config import (
     ENVIRONMENT,
     Extract,
+    Frozen,
     Paths,
     Runtime,
-    _Frozen,
-    _hash,
-    _overlay,
+    canonical_hash,
     check_paths,
     config_from_dict,
     config_to_dict,
+    overlay,
     parse_override,
     recipe_of,
 )
@@ -115,7 +115,7 @@ def _lr_grid(where: str, grid: tuple[float, ...], points: int = 5) -> None:
 
 
 @dataclass(frozen=True)
-class Geomorphon(_Frozen):
+class Geomorphon(Frozen):
     """ADR-0014's label parameters — a measured choice on GLO-30, not a literature default.
 
     All four WBT parameters are passed explicitly on every call (#201), so none of these may be
@@ -192,7 +192,7 @@ class Geomorphon(_Frozen):
 
 
 @dataclass(frozen=True)
-class Iwahashi(_Frozen):
+class Iwahashi(Frozen):
     """#193's tile-label rule: whole-footprint majority, nodata and 0 counting against it."""
 
     #: The distributor's zip, pinned (§3.4).
@@ -229,7 +229,7 @@ class Iwahashi(_Frozen):
 
 
 @dataclass(frozen=True)
-class Linear(_Frozen):
+class Linear(Frozen):
     """§4.1's linear probe: LayerNorm on `output`, a 1x1 conv to ten classes, weighted CE."""
 
     optimizer: str = "adamw"
@@ -245,7 +245,7 @@ class Linear(_Frozen):
 
 
 @dataclass(frozen=True)
-class Upernet(_Frozen):
+class Upernet(Frozen):
     """§4.2's UperNet, PANGAEA's verbatim — neck, 512 channels, pool scales, layers (#196)."""
 
     channels: int = 512
@@ -267,7 +267,7 @@ class Upernet(_Frozen):
 
 
 @dataclass(frozen=True)
-class Unet(_Frozen):
+class Unet(Frozen):
     """§4.3's B7: Task 1's A7 UNet on one channel, at B2's batch and epochs, tuning itself."""
 
     in_channels: int = 1
@@ -283,7 +283,7 @@ class Unet(_Frozen):
 
 
 @dataclass(frozen=True)
-class Finetune(_Frozen):
+class Finetune(Frozen):
     """§4.3's B3: a literature recipe used as given and **not tuned** (#196)."""
 
     lr: float = 1e-4
@@ -302,7 +302,7 @@ class Finetune(_Frozen):
 
 
 @dataclass(frozen=True)
-class Schedule(_Frozen):
+class Schedule(Frozen):
     """§4.5, shared by every trained head (#196)."""
 
     #: The step floor: no rung trains fewer steps than a 2,000-tile rung would.
@@ -332,7 +332,7 @@ class Schedule(_Frozen):
 
 
 @dataclass(frozen=True)
-class Ladders(_Frozen):
+class Ladders(Frozen):
     """§3.3's geocell ladders (#200): how many, the seed each is walked under, the rung budgets.
 
     **Draw seeds.** The plan says only "ladder *i*'s draw seed", so the rule is this group's:
@@ -397,7 +397,7 @@ class Ladders(_Frozen):
 
 
 @dataclass(frozen=True)
-class LandformPaths(_Frozen):
+class LandformPaths(Frozen):
     """Every path Task 2 reads. Environment throughout, as Task 1's :class:`Paths` is.
 
     The encoder checkpoint fields carry Task 1's names and defaults, because an encoder's
@@ -447,7 +447,7 @@ class LandformPaths(_Frozen):
 
 
 @dataclass(frozen=True)
-class Labelling(_Frozen):
+class Labelling(Frozen):
     """How the label pass runs on this box (#201) — environment, outside every hash.
 
     #187 measured reads at 6.4 windows/s on 16 threads against ~6 h sequential, so the pass
@@ -494,7 +494,7 @@ ARTIFACT_GROUPS: Final = ("geomorphon", "iwahashi", "ladders")
 
 
 @dataclass(frozen=True)
-class LandformConfig(_Frozen):
+class LandformConfig(Frozen):
     """One Task 2 cell's whole recipe. Defaults are B1 at 100%, seed 0, on geomorphons."""
 
     arm: str = "B1"
@@ -580,32 +580,32 @@ class LandformConfig(_Frozen):
     @property
     def config_hash(self) -> str:
         """A stable fingerprint of this cell's recipe, Task 1's construction, its own value."""
-        return _hash(self.recipe_dict())
+        return canonical_hash(self.recipe_dict())
 
     @property
     def artifact_hash(self) -> str:
         """The generator hash of what ``freeze`` writes — it does not move with the cell."""
         recipe = self.recipe_dict()
-        return _hash({name: recipe[name] for name in ARTIFACT_GROUPS})
+        return canonical_hash({name: recipe[name] for name in ARTIFACT_GROUPS})
 
 
 # --- The override surface -----------------------------------------------------
 
 
-def _apply(cfg: LandformConfig, overlay: dict) -> LandformConfig:
+def _apply(cfg: LandformConfig, partial: dict) -> LandformConfig:
     """``cfg`` with a partial config merged in — the head following a moved arm unless named."""
     for name in SCALARS:
-        if isinstance(overlay.get(name), dict):
+        if isinstance(partial.get(name), dict):
             # `--set head.lr=3e-4` is Task 1's knob (its `head` is a recipe group). Here `head`
             # is the cell's scalar, and merging a group into it would fail as a TypeError that
             # names neither task.
             raise ValueError(
                 f"{name} is one of Task 2's cell scalars {list(SCALARS)}, not a group of knobs; "
-                f"got {overlay[name]!r}. Task 2's head recipes are the `linear`, `upernet` and "
+                f"got {partial[name]!r}. Task 2's head recipes are the `linear`, `upernet` and "
                 f"`unet` groups (e.g. linear.epochs=30)"
             )
-    merged = _overlay(cfg.to_dict(), overlay)
-    if "arm" in overlay and "head" not in overlay:
+    merged = overlay(cfg.to_dict(), partial)
+    if "arm" in partial and "head" not in partial:
         merged["head"] = None
     return LandformConfig.from_dict(merged)
 

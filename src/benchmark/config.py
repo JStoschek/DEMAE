@@ -89,12 +89,20 @@ LABEL_EFFICIENCY_SIZES: Final = ("1k", "5k", "20k")
 SIZE_TILES: Final = {"1k": 1_000, "5k": 5_000, "20k": 20_000}
 
 
-class _Frozen:
-    """What every frozen piece of the config shares: a re-validating :meth:`replace`."""
+class Frozen:
+    """What every frozen piece of the config shares: a re-validating :meth:`replace`.
+
+    Public, with :func:`group_to_dict`, :func:`canonical_hash` and :func:`overlay`, because Task
+    2's config and label modules build on them (#198); the underscored names are kept for Task 1's
+    own uses.
+    """
 
     def replace(self, **changes):
         """A copy with ``changes`` applied — re-validated, since ``__post_init__`` reruns."""
         return replace(self, **changes)
+
+
+_Frozen = Frozen
 
 
 def _plain(value: Any) -> Any:
@@ -102,9 +110,12 @@ def _plain(value: Any) -> Any:
     return list(value) if isinstance(value, tuple) else value
 
 
-def _to_dict(obj) -> dict:
+def group_to_dict(obj) -> dict:
     """One group as plain JSON types, field by field."""
     return {f.name: _plain(getattr(obj, f.name)) for f in fields(obj)}
+
+
+_to_dict = group_to_dict
 
 
 def _from_dict(cls: type, d: dict, *, where: str):
@@ -900,7 +911,7 @@ _SCALARS: Final = ("arm", "size", "seed")
 _ARTIFACT_GROUPS: Final = ("tiles", "masks")
 
 
-def _hash(payload: dict) -> str:
+def canonical_hash(payload: dict) -> str:
     """Canonical JSON through BLAKE2b — identical in every process and on every box.
 
     Sorted keys make it insensitive to the order a dict was built in; JSON, rather than
@@ -911,6 +922,9 @@ def _hash(payload: dict) -> str:
     return hashlib.blake2b(
         canonical.encode("utf-8"), digest_size=CONFIG_HASH_CHARS // 2
     ).hexdigest()
+
+
+_hash = canonical_hash
 
 
 def config_to_dict(cfg, *, scalars: Sequence[str], groups: dict[str, type]) -> dict:
@@ -1118,17 +1132,20 @@ def parse_override(text: str, *, scalars: Sequence[str] = _SCALARS) -> dict:
     return {path[0]: value} if len(path) == 1 else {path[0]: {path[1]: value}}
 
 
-def _overlay(base: dict, overlay: dict) -> dict:
-    """A full config dict with ``overlay``'s groups merged in, one level deep.
+def overlay(base: dict, partial: dict) -> dict:
+    """A full config dict with ``partial``'s groups merged in, one level deep.
 
     An unknown group passes straight through rather than raising here, so
     :meth:`BenchmarkConfig.from_dict` is the single place that names what a config may contain
     and the single message a typo produces.
     """
     merged = dict(base)
-    for key, value in overlay.items():
+    for key, value in partial.items():
         merged[key] = {**base.get(key, {}), **value} if isinstance(value, dict) else value
     return merged
+
+
+_overlay = overlay
 
 
 def build_config(
