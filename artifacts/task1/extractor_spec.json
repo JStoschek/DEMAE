@@ -135,6 +135,28 @@
       "timm_model": "vit_base_patch16_224",
       "width": 768
     },
+    "terramind-backbone": {
+      "checkpoint_format": "terramind_v1_base",
+      "checkpoint_md5": "690349bd1328e50b64979847d4f362e7",
+      "depth": 12,
+      "family": "terramind",
+      "has_cls": false,
+      "modality": "untok_dem@224",
+      "name": "terramind-backbone",
+      "normalization": "terramind_v1",
+      "note": "`output` is ADR-0012 \u00a73's own final tensor: block 12 put through this encoder's final norm. It is **not** `intermediates[11]`, and the two are separately named so nobody discovers the norm by reading tensors. terratorch's own `TerraMindViT` list overwrites its last entry with the normed tensor, so it never returns the raw block 12; this contract's `intermediates[11]` is that raw block, as it is for DEMAE (ADR-0012 Amendment 2).",
+      "output_is_normed": true,
+      "output_tap": "final",
+      "output_width": 768,
+      "pos_emb": {
+        "derivation": "as_published",
+        "grid_px": 14,
+        "native_grid_px": 14
+      },
+      "pos_encoding": "sincos2d_terramind",
+      "timm_model": "vit_base_patch16_224",
+      "width": 768
+    },
     "terramind-bicubic": {
       "checkpoint_format": "terratorch",
       "checkpoint_md5": "66b7fbcb81e04684df31873623d7a3de",

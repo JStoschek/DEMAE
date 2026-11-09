@@ -443,6 +443,14 @@ IMAGENET_MAE_MD5: Final = "91ecc0345a6d6ecefe9c59041841f180"
 #: artifacts, and the v0.1 tokenizer is a different file with the same shape and a different diet.
 TERRAMIND_TOKENIZER_DEM_MD5: Final = "66b7fbcb81e04684df31873623d7a3de"
 
+#: `TerraMind_v1_base.pt` — the whole 1,518,713,958-byte any-to-any TerraMind 1.0 base model, of
+#: which B9 reads the 85.2 M-parameter DEM encoder (ADR-0012 Amendment 2, #194). Published at
+#: `ibm-esa-geospatial/TerraMind-1.0-base` revision `fb96c70d0a5f68dcc44030b89cbfd8ec3fb0c67a`;
+#: the md5 is computed from that file, and HF's published sha256 `83c3a093…b847d7ec` matches it.
+#: The pin is ours to hold: terratorch's `pretrained=True` downloads with no revision and follows
+#: `main`, so a box that let the library fetch the weights would be running whatever `main` is.
+TERRAMIND_V1_BASE_MD5: Final = "690349bd1328e50b64979847d4f362e7"
+
 #: ADR-0013 **R4**'s epoch count, read out of the register rather than re-typed here.
 #:
 #: `benchmark.prereg` is explicit that past it "no threshold in the benchmark is typed as a
@@ -706,6 +714,46 @@ ENCODERS: Final[dict[str, Encoder]] = {
         pretraining_epochs=TERRAMIND_DEM_EPOCHS,
         pretraining_epochs_citation=TERRAMIND_DEM_EPOCHS_CITATION,
     ),
+    # Task 2's B9 (#205): the TerraMind backbone, `terramind_v1_base` on raw DEM — the actual
+    # foundation-model encoder, where the four entries above read the DEM *tokenizer*. ADR-0012
+    # Amendment 2 is the decision and #194 the measurement; every field below is a row of the
+    # Amendment's table.
+    "terramind-backbone": Encoder(
+        name="terramind-backbone",
+        family="terramind",
+        width=768,
+        # The checkpoint's `encoder_embeddings.untok_dem@224.pos_emb` is `tm_utils`'
+        # `build_2d_sincos_posemb(14, 14)`, a `(1, 196, 768)` buffer — the same closed form as
+        # the tokenizer's builder, flattened row-major (bit-identical), so the same oracle name.
+        pos_encoding="sincos2d_terramind",
+        # D7.4: already the native 14x14 grid of a 224 px tile, so ADR-0011's derivation does
+        # not apply and there is nothing to ablate.
+        pos_emb_derivation="as_published",
+        # Its own mount: a different 1.5 GB file from the tokenizer, under a different pin.
+        checkpoint_field="terramind_backbone_checkpoint",
+        # **As built, and that is the registry's rule for this entry** — `parameters()` of
+        # `terramind_v1_base(modalities=["DEM"])`: encoder 84,953,088 + the `untok_dem@224`
+        # embed 197,376 + `encoder_norm` 768 (#194 §6). The fixed sin-cos `pos_emb` is a buffer,
+        # as R5's is, so it is excluded the way R5's is; 0.12% under R5. The loader holds the
+        # built model to this number.
+        params=85_151_232,
+        # The full any-to-any file, of which the DEM encoder is a strict subset of keys —
+        # neither the tokenizer's `encoder.` half (`terratorch`) nor a timm export.
+        checkpoint_format="terramind_v1_base",
+        checkpoint_md5=TERRAMIND_V1_BASE_MD5,
+        # D1/D7.2: the tokenizer's pair, but looked up under the backbone's own key — the key
+        # `build_modality_embeddings` maps "DEM" to — and value-checked at load.
+        normalization="terramind_v1",
+        modality="untok_dem@224",
+        # D3: `output = encoder_norm(raw block 12)`, and `intermediates[11]` is the raw block 12.
+        # terratorch's returned list overwrites its last entry with the normed tensor, so this
+        # encoder has its own forward (`benchmark.extract._forward_terramind_backbone`).
+        output_is_normed=True,
+        has_cls=False,
+        # No epoch count: R4's 20 is the DEM *tokenizer's* recorded training args, and nothing
+        # this plan cites states one for the backbone's raw-DEM embed. `None` is "this plan
+        # states none", never an inherited figure.
+    ),
 }
 
 
@@ -717,7 +765,7 @@ ENCODERS: Final[dict[str, Encoder]] = {
 #: :meth:`benchmark.extract.ExtractorSpec.check` calls that on every load — which is every run —
 #: so the 5.8% claim (TerraMind's 90,172,416 over R5's 85,254,144) is a checked number.
 #:
-#: B9's row (`terramind-backbone`, 85,151,232) is added with its encoder by #205: an entry here
+#: B9's row (`terramind-backbone`, 85,151,232) arrived with its encoder (#205): an entry here
 #: for an encoder not yet registered would be a row nothing checks.
 CAPACITY_TABLE: Final[dict[str, int]] = {
     "demae-r5": 85_254_144,
@@ -727,6 +775,7 @@ CAPACITY_TABLE: Final[dict[str, int]] = {
     "terramind-latent": 90_172_416,
     "terramind-per-tile": 90_172_416,
     "demae-vits": 21_393_408,
+    "terramind-backbone": 85_151_232,
 }
 
 #: Registered encoders §2's table deliberately does not list, each with the reason. Task 1-only

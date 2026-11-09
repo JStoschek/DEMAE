@@ -306,6 +306,7 @@ class LandformPaths(_Frozen):
     demae_vits_checkpoint: str | None = Paths.demae_vits_checkpoint
     terramind_checkpoint: str | None = Paths.terramind_checkpoint
     imagenet_mae_checkpoint: str | None = Paths.imagenet_mae_checkpoint
+    terramind_backbone_checkpoint: str | None = Paths.terramind_backbone_checkpoint
 
     def __post_init__(self) -> None:
         check_paths(self)
