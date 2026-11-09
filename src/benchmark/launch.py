@@ -44,6 +44,13 @@ what "no thumb lands on the scale" is, as a mechanism.
 three figures, rendered from the results parquet and printing nothing R5 does not permit it to
 print. It re-runs no arm, which is what makes it free to re-render.
 
+#198 gave the command a second benchmark without a second command: ``--task landform`` selects
+Task 2 (:mod:`benchmark.landform`), whose config is a sibling object with its own hash
+(:mod:`benchmark.landform_config`) and whose arms are a sibling table keyed into the shared
+encoder registry (:mod:`benchmark.landform_arms`). ``--task`` defaults to ``void-fill``, so every
+Task 1 command, test and config hash is unchanged, and each task's cell flags are refused by
+name under the other (:data:`TASKS`).
+
 With the dataset card, **every verb finishes what it starts**. Up to #154 each one raised past
 the work it had and named the stage that was missing — deliberately, because a verb that quietly
 returned 0 having done part of its job is precisely the shape of failure this module exists to
@@ -66,8 +73,10 @@ beside the table they produced.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from . import (
     arms,
@@ -76,6 +85,9 @@ from . import (
     evaluate,
     extract,
     finetune,
+    landform,
+    landform_arms,
+    landform_config,
     masks,
     prereg,
     report,
@@ -693,16 +705,77 @@ def _report(resolution: Resolution, args: argparse.Namespace) -> int:
 VERBS: Final = {"freeze": _freeze, "run": _run, "report": _report}
 
 
+@dataclass(frozen=True)
+class Task:
+    """One benchmark the three verbs can act on (#198).
+
+    ``--task`` picks one of these, and it is everything the selector selects: the resolver (which
+    builds that task's config class and reads its arm table, bar and results path) and the three
+    verbs, which own that task's report. ``cell_flags`` are the ``run`` flags only this task's
+    cell has; one handed to the other task is refused by name in :func:`main`, so a cell cannot be
+    half one task and half the other.
+    """
+
+    name: str
+    resolve: Callable[[argparse.Namespace], Any]
+    verbs: Mapping[str, Callable[[Any, argparse.Namespace], int]]
+    cell_flags: tuple[str, ...]
+
+
+#: The two benchmarks, Task 1 first because it is the default: every command written before
+#: Task 2 existed still means what it meant, and resolves to the same config hash.
+TASKS: Final = {
+    "void-fill": Task("void-fill", resolve, VERBS, cell_flags=("--size",)),
+    "landform": Task(
+        "landform", landform.resolve, landform.VERBS,
+        cell_flags=("--rung", "--head", "--label-set"),
+    ),
+}
+DEFAULT_TASK: Final = "void-fill"
+
+
+def _dest(flag: str) -> str:
+    return flag.removeprefix("--").replace("-", "_")
+
+
+def refuse_foreign_cell_flags(args: argparse.Namespace) -> None:
+    """Refuse a cell flag that belongs to the other task, by name, before anything resolves.
+
+    Not left to the config: Task 2's config would refuse ``size`` as an unknown group, but
+    Task 1's has no ``rung`` field to refuse and ``--rung`` would otherwise be parsed and
+    silently dropped — the cell would run as a Task 1 cell and record nothing of the rung asked
+    for.
+    """
+    task = TASKS[args.task]
+    for other in TASKS.values():
+        if other is task:
+            continue
+        for flag in other.cell_flags:
+            if getattr(args, _dest(flag), None) is not None:
+                raise ValueError(
+                    f"`{flag}` is a {other.name} cell flag, and this is --task {task.name}, "
+                    f"whose cell flags are {list(task.cell_flags)} beside --arm and --seed. "
+                    f"A cell cannot be half one task and half the other"
+                )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command. Split out from :func:`main` so ``--help`` is one readable thing to review."""
     parser = argparse.ArgumentParser(
         prog="python -m benchmark.launch",
-        description="Freeze, run or report the Task 1 void-filling benchmark (#147).",
+        description="Freeze, run or report the Task 1 void-filling benchmark (#147) or, "
+        "under --task landform, the Task 2 landform benchmark (#198).",
     )
     verbs = parser.add_subparsers(dest="verb", required=True, metavar="{freeze,run,report}")
 
     def add(name: str, help_text: str) -> argparse.ArgumentParser:
         sub = add_config_arguments(verbs.add_parser(name, help=help_text))
+        sub.add_argument(
+            "--task",
+            choices=tuple(TASKS),
+            default=DEFAULT_TASK,
+            help=f"which benchmark the verb acts on (default: {DEFAULT_TASK}, Task 1)",
+        )
         sub.add_argument(
             "--dry-run",
             dest="dry_run",
@@ -719,12 +792,31 @@ def build_parser() -> argparse.ArgumentParser:
     # The cell, as flags — and they are config knobs rather than a second recipe: `--arm A5` is
     # `--set arm=A5`, applied in the same place, so an arm stays "this object with a knob moved".
     run.add_argument(
-        "--arm", default=None, help=f"one of {sorted(arms.ARMS)} (default: A4-R5)"
+        "--arm",
+        default=None,
+        help=f"Task 1: one of {sorted(arms.ARMS)} (default: A4-R5); "
+        f"Task 2: one of {sorted(landform_arms.ARMS)} (default: B1)",
     )
     run.add_argument(
-        "--size", default=None, help=f"label-efficiency subset: {list(LABEL_EFFICIENCY_SIZES)}"
+        "--size",
+        default=None,
+        help=f"Task 1's label-efficiency subset: {list(LABEL_EFFICIENCY_SIZES)}",
     )
-    run.add_argument("--seed", type=int, default=None, help="§4.1's seed for this cell")
+    run.add_argument("--seed", type=int, default=None, help="the seed for this cell")
+    # Task 2's cell flags (#198). Parsed for either task so that the wrong one can be refused by
+    # name (`refuse_foreign_cell_flags`) rather than as argparse's generic "unrecognized".
+    run.add_argument(
+        "--rung", default=None, help=f"Task 2's tile budget: {list(landform_config.RUNGS)}"
+    )
+    run.add_argument(
+        "--head", default=None, help=f"Task 2's head: {list(landform_arms.HEADS)} (default: the arm's)"
+    )
+    run.add_argument(
+        "--label-set",
+        dest="label_set",
+        default=None,
+        help=f"Task 2's label set: {list(landform_config.LABEL_SETS)}",
+    )
     # A mode rather than a knob: it does not change what a cell *is*, it changes whether this
     # command produces one. Only `run` has it, and only on `--arm A6` does it do anything but
     # refuse (§4.1, #159).
@@ -741,12 +833,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Resolve what this command would act on, say it, and then act on it."""
     args = build_parser().parse_args(argv)
-    resolution = resolve(args)
+    refuse_foreign_cell_flags(args)
+    task = TASKS[args.task]
+    resolution = task.resolve(args)
     print(format_resolution(resolution, verb=args.verb))
     if args.dry_run:
         print("\n--dry-run: nothing was written")
         return 0
-    return VERBS[args.verb](resolution, args)
+    return task.verbs[args.verb](resolution, args)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

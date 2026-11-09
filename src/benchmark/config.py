@@ -791,18 +791,26 @@ class Paths(_Frozen):
     # not its availability. See `benchmark.arms` and docs/research/p147-vit-s-mae-checkpoint.md.
 
     def __post_init__(self) -> None:
-        # Every field here is a path, and :func:`parse_override` reads a value as JSON before
-        # falling back to the string — which is what makes `head.epochs=50` an int and has to
-        # be, but which also turns `paths.corpus_dir=2024` into the *integer* 2024. Nothing
-        # downstream would notice until an `open()` deep inside a rented run, so the type is
-        # checked where the field is declared.
-        for f in fields(self):
-            value = getattr(self, f.name)
-            if value is not None and not isinstance(value, str):
-                raise ValueError(
-                    f"paths.{f.name} is a path; {value!r} has type {type(value).__name__}. "
-                    f"Quote it if it is meant literally (e.g. paths.{f.name}=\"2024\")"
-                )
+        check_paths(self)
+
+
+def check_paths(group) -> None:
+    """Refuse a non-string in a group whose every field is a path.
+
+    :func:`parse_override` reads a value as JSON before falling back to the string — which is
+    what makes `head.epochs=50` an int and has to be, but which also turns
+    `paths.corpus_dir=2024` into the *integer* 2024. Nothing downstream would notice until an
+    `open()` deep inside a rented run, so the type is checked where the field is declared. A
+    function rather than a method so Task 2's sibling paths group (:mod:`benchmark.landform_config`)
+    makes the same refusal in the same words.
+    """
+    for f in fields(group):
+        value = getattr(group, f.name)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(
+                f"paths.{f.name} is a path; {value!r} has type {type(value).__name__}. "
+                f"Quote it if it is meant literally (e.g. paths.{f.name}=\"2024\")"
+            )
 
 
 # --- The box this runs on -----------------------------------------------------
@@ -905,6 +913,60 @@ def _hash(payload: dict) -> str:
     ).hexdigest()
 
 
+def config_to_dict(cfg, *, scalars: Sequence[str], groups: dict[str, type]) -> dict:
+    """A whole config as plain JSON types — its scalars, then group by group.
+
+    Shared by both tasks' configs (#198), which differ in *which* scalars and groups they hold
+    and in nothing about how those serialize.
+    """
+    out: dict[str, Any] = {name: getattr(cfg, name) for name in scalars}
+    for name in groups:
+        out[name] = _to_dict(getattr(cfg, name))
+    return out
+
+
+def config_from_dict(cls: type, d: dict, *, scalars: Sequence[str], groups: dict[str, type]):
+    """Rebuild ``cls`` from :func:`config_to_dict`'s output, or from any subset of it.
+
+    An unknown group raises here, by name, for the reason the module docstring gives — and that
+    is also what refuses a Task 1 knob handed to Task 2's config, and the reverse.
+    """
+    unknown = sorted(set(d) - set(groups) - set(scalars))
+    if unknown:
+        raise ValueError(
+            f"unknown config group(s) {unknown}; known: {sorted({*groups, *scalars})}"
+        )
+    kwargs: dict[str, Any] = {name: d[name] for name in scalars if name in d}
+    for name, group_cls in groups.items():
+        if name in d:
+            kwargs[name] = _from_dict(group_cls, d[name], where=name)
+    return cls(**kwargs)
+
+
+def recipe_of(cfg) -> dict:
+    """A config's ``to_dict()`` minus every :data:`ENVIRONMENT` field — the view a hash covers.
+
+    Driven by the field metadata rather than by a name list, so marking a field environment is
+    the *only* way to leave it out of the hash. A second mechanism would be a second place to
+    forget. Shared by both tasks' configs (#198).
+    """
+    full = cfg.to_dict()
+    out: dict[str, Any] = {}
+    for f in fields(cfg):
+        if f.metadata.get(_ENVIRONMENT_KEY):
+            continue
+        value = getattr(cfg, f.name)
+        if is_dataclass(value):
+            out[f.name] = {
+                g.name: full[f.name][g.name]
+                for g in fields(value)
+                if not g.metadata.get(_ENVIRONMENT_KEY)
+            }
+        else:
+            out[f.name] = full[f.name]
+    return out
+
+
 @dataclass(frozen=True)
 class BenchmarkConfig(_Frozen):
     """One cell's whole recipe. Defaults are A4-R5 at 20k, seed 0 — C1's headline cell."""
@@ -983,24 +1045,12 @@ class BenchmarkConfig(_Frozen):
 
     def to_dict(self) -> dict:
         """The whole config as plain JSON types — three scalars, then group by group."""
-        out: dict[str, Any] = {name: getattr(self, name) for name in _SCALARS}
-        for name in _GROUPS:
-            out[name] = _to_dict(getattr(self, name))
-        return out
+        return config_to_dict(self, scalars=_SCALARS, groups=_GROUPS)
 
     @classmethod
     def from_dict(cls, d: dict) -> BenchmarkConfig:
         """Rebuild from :meth:`to_dict`'s output, or from any subset of it."""
-        unknown = sorted(set(d) - set(_GROUPS) - set(_SCALARS))
-        if unknown:
-            raise ValueError(
-                f"unknown config group(s) {unknown}; known: {sorted({*_GROUPS, *_SCALARS})}"
-            )
-        kwargs: dict[str, Any] = {name: d[name] for name in _SCALARS if name in d}
-        for name, group_cls in _GROUPS.items():
-            if name in d:
-                kwargs[name] = _from_dict(group_cls, d[name], where=name)
-        return cls(**kwargs)
+        return config_from_dict(cls, d, scalars=_SCALARS, groups=_GROUPS)
 
     # --- the hash
 
@@ -1011,21 +1061,7 @@ class BenchmarkConfig(_Frozen):
         environment is the *only* way to leave it out of the hash. A second mechanism would be
         a second place to forget.
         """
-        full = self.to_dict()
-        out: dict[str, Any] = {}
-        for f in fields(self):
-            if f.metadata.get(_ENVIRONMENT_KEY):
-                continue
-            value = getattr(self, f.name)
-            if is_dataclass(value):
-                out[f.name] = {
-                    g.name: full[f.name][g.name]
-                    for g in fields(value)
-                    if not g.metadata.get(_ENVIRONMENT_KEY)
-                }
-            else:
-                out[f.name] = full[f.name]
-        return out
+        return recipe_of(self)
 
     @property
     def config_hash(self) -> str:
@@ -1054,7 +1090,7 @@ class BenchmarkConfig(_Frozen):
 # --- The override surface -----------------------------------------------------
 
 
-def parse_override(text: str) -> dict:
+def parse_override(text: str, *, scalars: Sequence[str] = _SCALARS) -> dict:
     """``group.knob=value`` -> the one-key overlay dict it means.
 
     `pretrain.header.parse_override`'s twin, and the same escape hatch: an arm is
@@ -1073,7 +1109,7 @@ def parse_override(text: str) -> dict:
     if len(path) > 2:
         raise ValueError(
             f"override {text!r}: a config knob is `group.knob` or a top-level "
-            f"{list(_SCALARS)}, and {key.strip()!r} is deeper than that"
+            f"{list(scalars)}, and {key.strip()!r} is deeper than that"
         )
     try:
         value = json.loads(raw)
@@ -1165,7 +1201,8 @@ def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         "--artifacts-dir",
         dest="artifacts_dir",
         default=None,
-        help="where the committed Task 1 inputs live (default: artifacts/task1)",
+        help="where the committed inputs live (default: artifacts/task1, or artifacts/task2 "
+        "under --task landform)",
     )
     parser.add_argument(
         "--set",

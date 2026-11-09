@@ -1,0 +1,508 @@
+"""Task 2's frozen run object — the landform plan's knobs, serializable, hashable (#198).
+
+The sibling of :class:`benchmark.config.BenchmarkConfig`, and a sibling rather than more fields
+on it, for one measured reason: any field added to a shared Task 1 object moves every committed
+Task 1 config hash (#182 found it when one ``Head`` field moved fourteen). So this is its own
+frozen object with its own :attr:`LandformConfig.config_hash`, and it reuses Task 1's machinery
+through functions rather than through inheritance — the frozen base, the partial-dict round
+trip, the canonical hash, the override parser and the paths check all come from
+:mod:`benchmark.config`, so the two tasks cannot disagree about *how* a config behaves, only
+about *what* it holds.
+
+[The Task 2 plan](../../docs/research/task2-landform-plan.md) is the source of every number
+here. Structure follows its sections: §3.1's geomorphon parameters, §3.2's Iwahashi rule, §4.1
+to §4.3's head recipes, §4.5's schedule and tuning discipline. **An arm is this object with a
+knob moved**, as in Task 1.
+
+## The cell
+
+Five scalars, all recipe: ``arm``, ``rung``, ``seed``, ``head`` and ``label_set``. They are
+what the Task 2 results parquet is keyed on. ``rung`` is §3.3's tile budget (1% = 200, 10% =
+2,000, 100% = 20,000 tiles), not a fraction of geocells.
+
+``head`` **follows the arm unless it is named.** Every arm declares the heads it trains
+(:attr:`benchmark.landform_arms.LandformArm.heads`); a config built without a head takes the
+arm's first, and one naming a head the arm does not train is refused. The head is filled in at
+construction, so a cell's hash is the same whether ``--head linear`` was typed or implied — one
+computation, one hash. Moving the arm without naming a head (by flag, file or ``--set``) lets
+the head follow the new arm, which is what :func:`build_config` arranges.
+
+## What is not here yet, and where it goes
+
+The frozen per-rung lr lines (§4.5) are a committed artifact that ``run --tune`` writes (#207),
+not a knob, so only the grids are here. The geomorphon class weights and the verified-ocean list
+are measured by the label pass (#202) and committed in the geomorphon config file, not in this
+object. Ladder draw seeds arrive with the ladders (#200). Each of those tickets adds its group to
+:data:`GROUPS` and, if ``freeze`` writes from it, to :data:`ARTIFACT_GROUPS`. No Task 2 hash is
+committed yet, so adding a group here moves nothing anyone has recorded.
+
+Numbers registered by [ADR-0015](../../docs/adr/0015-task2-pre-registration-register.md) are
+**not** here: they belong in ``task2-prereg-bar.json`` (#199), for Task 1's reason — a second home
+for a registered number is how a threshold moves without anything failing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Final
+
+from . import landform_arms
+from .config import (
+    ENVIRONMENT,
+    Extract,
+    Paths,
+    Runtime,
+    _Frozen,
+    _hash,
+    _overlay,
+    check_paths,
+    config_from_dict,
+    config_to_dict,
+    parse_override,
+    recipe_of,
+)
+
+#: §3.3's rungs, smallest first. Tile budgets, nested by construction (#189).
+RUNGS: Final = ("1%", "10%", "100%")
+
+#: What each rung is, in tiles: an exact budget, whole geocells plus at most one partial one.
+RUNG_TILES: Final = {"1%": 200, "10%": 2_000, "100%": 20_000}
+
+#: The two label sets: §3.1's geomorphons (primary) and §3.2's Iwahashi & Pike groups
+#: (the independence check).
+LABEL_SETS: Final = ("geomorphon", "iwahashi")
+
+#: WhiteboxTools ``Geomorphons --forms``' ten classes, in its output order (1..10).
+GEOMORPHON_CLASSES: Final = (
+    "flat", "peak", "ridge", "shoulder", "spur", "slope", "hollow", "footslope", "valley", "pit",
+)
+
+
+def steps(*, epochs: int, batch_size: int, n_train: int, floor: int) -> int:
+    """§4.5's run length: ``epochs x ceil(max(n_train, floor) / batch)`` optimizer steps.
+
+    The floor is the 10% rung's 2,000 tiles, so the 1% rung trains as many steps as the 10% rung
+    (ten times the epochs over its 200 tiles) and measures the representation rather than
+    under-training. 240 / 240 / 2,370 for the linear probe, 1,280 / 1,280 / 12,520 for UperNet
+    and B7 (§4.5's table).
+    """
+    return epochs * math.ceil(max(n_train, floor) / batch_size)
+
+
+def _positive(where: str, **values: float) -> None:
+    for name, value in values.items():
+        if value <= 0:
+            raise ValueError(f"{where}.{name} {value} must be > 0")
+
+
+def _lr_grid(where: str, grid: tuple[float, ...], points: int = 5) -> None:
+    """§4.5: five log-spaced points, ascending. An edge winner widens it, so it may grow."""
+    if len(grid) < points or list(grid) != sorted(set(grid)) or grid[0] <= 0:
+        raise ValueError(
+            f"{where}.lr_grid {grid} must be at least {points} ascending positive points (§4.5)"
+        )
+
+
+# --- §3.1 Geomorphon labels ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Geomorphon(_Frozen):
+    """ADR-0014's label parameters — a measured choice on GLO-30, not a literature default.
+
+    All four WBT parameters are passed explicitly on every call (#201), so none of these may be
+    left to a WBT default.
+    """
+
+    wbt_version: str = "2.4.0"
+    #: The per-platform sha256 pin list for the WBT binary. Empty until #202 fetches and pins the
+    #: macOS build; #201's one narrow call refuses a binary whose hash is not in it.
+    wbt_sha256: tuple[str, ...] = ()
+    #: Outer search radius L, in cells (1.5 km at 30 m). WBT's default, chosen by #188's sweep.
+    search: int = 50
+    #: Flatness threshold, degrees. #188: under 0.5° erases flat, shoulder and footslope.
+    threshold: float = 1.0
+    skip: int = 0
+    fdist: int = 0
+    #: Ocean (exact-zero fill) and windows reaching data absent from the GLO-30 release.
+    ignore_label: int = 255
+    #: §3.1's sensitivity variants, test tiles only, one parameter at a time.
+    variant_search: tuple[int, ...] = (25, 100)
+    variant_threshold: tuple[float, ...] = (0.75, 1.25)
+
+    def __post_init__(self) -> None:
+        _positive("geomorphon", search=self.search, threshold=self.threshold)
+        if self.skip < 0 or self.fdist < 0:
+            raise ValueError(f"geomorphon skip {self.skip} / fdist {self.fdist} must be >= 0")
+        if not len(GEOMORPHON_CLASSES) < self.ignore_label <= 255:
+            raise ValueError(
+                f"geomorphon.ignore_label {self.ignore_label} must be a uint8 outside the "
+                f"{len(GEOMORPHON_CLASSES)} classes"
+            )
+        if self.search in self.variant_search or self.threshold in self.variant_threshold:
+            raise ValueError("a sensitivity variant cannot equal the primary parameter it varies")
+
+    @property
+    def widest_search(self) -> int:
+        """The L a test tile is read at once, every variant cropped from that read (§3.1)."""
+        return max(self.search, *self.variant_search)
+
+
+# --- §3.2 Iwahashi & Pike tile labels -----------------------------------------
+
+
+@dataclass(frozen=True)
+class Iwahashi(_Frozen):
+    """#193's tile-label rule: whole-footprint majority, nodata and 0 counting against it."""
+
+    #: The distributor's zip, pinned (§3.4).
+    zip_md5: str = "5ae98dc7782c13384a1df4d8d609418f"
+    groups: int = 15
+    #: Primary; C3 is read here only.
+    threshold: float = 0.60
+    #: A pre-registered sensitivity row, never used to decide C3.
+    sensitivity_threshold: float = 0.50
+
+    def __post_init__(self) -> None:
+        for name in ("threshold", "sensitivity_threshold"):
+            if not 0 < getattr(self, name) <= 1:
+                raise ValueError(f"iwahashi.{name} {getattr(self, name)} must be in (0, 1]")
+        if self.threshold == self.sensitivity_threshold:
+            raise ValueError("iwahashi's sensitivity row must differ from the primary threshold")
+
+
+# --- §4.1-§4.3 The head recipes -----------------------------------------------
+
+
+@dataclass(frozen=True)
+class Linear(_Frozen):
+    """§4.1's linear probe: LayerNorm on `output`, a 1x1 conv to ten classes, weighted CE."""
+
+    optimizer: str = "adamw"
+    weight_decay: float = 0.0
+    batch_size: int = 256
+    epochs: int = 30
+    #: Task 1's grid; tuned per rung on B6 (§4.5).
+    lr_grid: tuple[float, ...] = (3e-4, 1e-3, 3e-3, 1e-2, 3e-2)
+
+    def __post_init__(self) -> None:
+        _positive("linear", batch_size=self.batch_size, epochs=self.epochs)
+        _lr_grid("linear", self.lr_grid)
+
+
+@dataclass(frozen=True)
+class Upernet(_Frozen):
+    """§4.2's UperNet, PANGAEA's verbatim — neck, 512 channels, pool scales, layers (#196)."""
+
+    channels: int = 512
+    pool_scales: tuple[int, ...] = (1, 2, 3, 6)
+    #: ``intermediates[3, 5, 7, 11]`` under ADR-0012 — blocks 4, 6, 8 and 12 of 12.
+    layers: tuple[int, ...] = (3, 5, 7, 11)
+    optimizer: str = "adamw"
+    weight_decay: float = 0.05
+    batch_size: int = 64
+    epochs: int = 40
+    #: Brackets PANGAEA's 1e-4 and the plan's earlier 6e-4; tuned per rung on B6 (§4.5).
+    lr_grid: tuple[float, ...] = (3e-5, 1e-4, 3e-4, 1e-3, 3e-3)
+
+    def __post_init__(self) -> None:
+        _positive("upernet", channels=self.channels, batch_size=self.batch_size, epochs=self.epochs)
+        _lr_grid("upernet", self.lr_grid)
+        if any(not 0 <= i < 12 for i in self.layers):
+            raise ValueError(f"upernet.layers {self.layers} must index ADR-0012's 12 blocks")
+
+
+@dataclass(frozen=True)
+class Unet(_Frozen):
+    """§4.3's B7: Task 1's A7 UNet on one channel, at B2's batch and epochs, tuning itself."""
+
+    in_channels: int = 1
+    batch_size: int = 64
+    epochs: int = 40
+    #: Centred on the 3e-3 A7 shared with Task 1's head.
+    lr_grid: tuple[float, ...] = (1e-4, 3e-4, 1e-3, 3e-3, 1e-2)
+
+    def __post_init__(self) -> None:
+        _positive("unet", in_channels=self.in_channels, batch_size=self.batch_size,
+                  epochs=self.epochs)
+        _lr_grid("unet", self.lr_grid)
+
+
+@dataclass(frozen=True)
+class Finetune(_Frozen):
+    """§4.3's B3: a literature recipe used as given and **not tuned** (#196)."""
+
+    lr: float = 1e-4
+    layer_decay: float = 0.75
+    head_lr: float = 1e-3
+    epochs: int = 50
+    precision: str = "bf16"
+
+    def __post_init__(self) -> None:
+        _positive("finetune", lr=self.lr, head_lr=self.head_lr, epochs=self.epochs)
+        if not 0 < self.layer_decay <= 1:
+            raise ValueError(f"finetune.layer_decay {self.layer_decay} must be in (0, 1]")
+
+
+# --- §4.5 Schedule, val and tuning --------------------------------------------
+
+
+@dataclass(frozen=True)
+class Schedule(_Frozen):
+    """§4.5, shared by every trained head (#196)."""
+
+    #: The step floor: no rung trains fewer steps than a 2,000-tile rung would.
+    step_floor: int = 2_000
+    warmup_frac: float = 0.05
+    decay: str = "cosine"
+    #: All val tiles, read at each tenth of the steps, the last step included; best val mIoU kept.
+    val_reads: int = 10
+    #: Tuning: this many log-spaced lr points ...
+    tune_points: int = 5
+    #: ... each trained for this fraction of its rung's schedule ...
+    tune_fraction: float = 0.2
+    #: ... at one seed, on this ladder.
+    tune_seed: int = 0
+    tune_ladder: int = 0
+
+    def __post_init__(self) -> None:
+        _positive("schedule", step_floor=self.step_floor, val_reads=self.val_reads,
+                  tune_points=self.tune_points)
+        if not 0 <= self.warmup_frac < 1 or not 0 < self.tune_fraction <= 1:
+            raise ValueError("schedule.warmup_frac must be in [0, 1), tune_fraction in (0, 1]")
+        if self.decay != "cosine":
+            raise ValueError(f"schedule.decay {self.decay!r}: §4.5 is warmup then cosine to zero")
+
+
+# --- Where it all is, on this box ---------------------------------------------
+
+
+@dataclass(frozen=True)
+class LandformPaths(_Frozen):
+    """Every path Task 2 reads. Environment throughout, as Task 1's :class:`Paths` is.
+
+    The encoder checkpoint fields carry Task 1's names and defaults, because an encoder's
+    :attr:`benchmark.arms.Encoder.checkpoint_field` is looked up on whichever task's paths group
+    is in hand — one registry, one field name per checkpoint.
+    """
+
+    corpus_dir: str = Paths.corpus_dir
+    #: Task 1's committed inputs Task 2 reuses unchanged: the tile lists (with #150's land
+    #: filter) and ADR-0012's extractor spec.
+    task1_artifacts_dir: str = Paths.artifacts_dir
+    #: Task 2's own committed inputs: the bar, the ladders, the label fingerprints, the card.
+    artifacts_dir: str = "artifacts/task2"
+    #: Task 2's own parquet, so Task 1's schema and its cast-on-read are not touched.
+    results_path: str = "data/task2/results.parquet"
+    #: The plan, whose §7 Task 2's bar is anchored in (#199).
+    plan_path: str = "docs/research/task2-landform-plan.md"
+    demae_r5_checkpoint: str | None = Paths.demae_r5_checkpoint
+    demae_r4_checkpoint: str | None = Paths.demae_r4_checkpoint
+    demae_vits_checkpoint: str | None = Paths.demae_vits_checkpoint
+    terramind_checkpoint: str | None = Paths.terramind_checkpoint
+    imagenet_mae_checkpoint: str | None = Paths.imagenet_mae_checkpoint
+
+    def __post_init__(self) -> None:
+        check_paths(self)
+
+
+def _runtime() -> Runtime:
+    """Task 1's runtime group, with Task 2's per-step checkpoints kept apart from Task 1's."""
+    return Runtime(checkpoint_dir="data/task2/heads")
+
+
+# --- The config ---------------------------------------------------------------
+
+#: Every group, in the order ``to_dict`` writes them. A later ticket adds its group here.
+GROUPS: Final = {
+    "geomorphon": Geomorphon,
+    "iwahashi": Iwahashi,
+    "linear": Linear,
+    "upernet": Upernet,
+    "unet": Unet,
+    "finetune": Finetune,
+    "schedule": Schedule,
+    "extract": Extract,
+    "runtime": Runtime,
+    "paths": LandformPaths,
+}
+
+#: The cell. Recipe, all five.
+SCALARS: Final = ("arm", "rung", "seed", "head", "label_set")
+
+#: The groups ``freeze``'s committed inputs are a function of, and so the ones
+#: :attr:`LandformConfig.artifact_hash` covers. Not the cell, and not the head recipes.
+ARTIFACT_GROUPS: Final = ("geomorphon", "iwahashi")
+
+
+@dataclass(frozen=True)
+class LandformConfig(_Frozen):
+    """One Task 2 cell's whole recipe. Defaults are B1 at 100%, seed 0, on geomorphons."""
+
+    arm: str = "B1"
+    rung: str = "100%"
+    seed: int = 0
+    #: ``None`` means "the arm's first head" and is filled in at construction — see the module
+    #: docstring. After ``__post_init__`` it is always a name.
+    head: str | None = None
+    label_set: str = "geomorphon"
+    geomorphon: Geomorphon = field(default_factory=Geomorphon)
+    iwahashi: Iwahashi = field(default_factory=Iwahashi)
+    linear: Linear = field(default_factory=Linear)
+    upernet: Upernet = field(default_factory=Upernet)
+    unet: Unet = field(default_factory=Unet)
+    finetune: Finetune = field(default_factory=Finetune)
+    schedule: Schedule = field(default_factory=Schedule)
+    extract: Extract = field(default_factory=Extract)
+    runtime: Runtime = field(default_factory=_runtime, metadata=ENVIRONMENT)
+    paths: LandformPaths = field(default_factory=LandformPaths, metadata=ENVIRONMENT)
+
+    def __post_init__(self) -> None:
+        arm = landform_arms.get(self.arm)  # refuses, naming the table
+        if self.rung not in RUNGS:
+            raise ValueError(f"unknown rung {self.rung!r} (§3.3's tile budgets: {list(RUNGS)})")
+        if self.seed < 0:
+            raise ValueError(f"seed {self.seed} must be >= 0")
+        if self.label_set not in LABEL_SETS:
+            raise ValueError(f"unknown label set {self.label_set!r}; known: {list(LABEL_SETS)}")
+        head = arm.heads[0] if self.head is None else self.head
+        if head not in landform_arms.HEADS:
+            raise ValueError(f"unknown head {head!r}; known: {list(landform_arms.HEADS)}")
+        if head not in arm.heads:
+            raise ValueError(
+                f"arm {arm.name} trains {list(arm.heads)}, so head {head!r} is not a cell it "
+                f"has — name an arm that trains it"
+            )
+        object.__setattr__(self, "head", head)
+
+    # --- derived numbers (computed, never stored, so they cannot drift)
+
+    @property
+    def train_tiles(self) -> int:
+        """How many head-train tiles this cell's rung holds."""
+        return RUNG_TILES[self.rung]
+
+    @property
+    def recipe(self) -> Linear | Upernet | Unet:
+        """The recipe group of the head this cell trains."""
+        return getattr(self, self.head)
+
+    @property
+    def steps(self) -> int:
+        """This cell's run length under §4.5's floor — see :func:`steps`."""
+        return steps(
+            epochs=self.recipe.epochs,
+            batch_size=self.recipe.batch_size,
+            n_train=self.train_tiles,
+            floor=self.schedule.step_floor,
+        )
+
+    # --- serialization and the hash, through Task 1's functions
+
+    def to_dict(self) -> dict:
+        """The whole config as plain JSON types — five scalars, then group by group."""
+        return config_to_dict(self, scalars=SCALARS, groups=GROUPS)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> LandformConfig:
+        """Rebuild from :meth:`to_dict`'s output, or from any subset of it."""
+        return config_from_dict(cls, d, scalars=SCALARS, groups=GROUPS)
+
+    def recipe_dict(self) -> dict:
+        """:meth:`to_dict` minus every environment field — the view the hash covers."""
+        return recipe_of(self)
+
+    @property
+    def config_hash(self) -> str:
+        """A stable fingerprint of this cell's recipe, Task 1's construction, its own value."""
+        return _hash(self.recipe_dict())
+
+    @property
+    def artifact_hash(self) -> str:
+        """The generator hash of what ``freeze`` writes — it does not move with the cell."""
+        recipe = self.recipe_dict()
+        return _hash({name: recipe[name] for name in ARTIFACT_GROUPS})
+
+
+# --- The override surface -----------------------------------------------------
+
+
+def _apply(cfg: LandformConfig, overlay: dict) -> LandformConfig:
+    """``cfg`` with a partial config merged in — the head following a moved arm unless named."""
+    for name in SCALARS:
+        if isinstance(overlay.get(name), dict):
+            # `--set head.lr=3e-4` is Task 1's knob (its `head` is a recipe group). Here `head`
+            # is the cell's scalar, and merging a group into it would fail as a TypeError that
+            # names neither task.
+            raise ValueError(
+                f"{name} is one of Task 2's cell scalars {list(SCALARS)}, not a group of knobs; "
+                f"got {overlay[name]!r}. Task 2's head recipes are the `linear`, `upernet` and "
+                f"`unet` groups (e.g. linear.epochs=30)"
+            )
+    merged = _overlay(cfg.to_dict(), overlay)
+    if "arm" in overlay and "head" not in overlay:
+        merged["head"] = None
+    return LandformConfig.from_dict(merged)
+
+
+def build_config(
+    *,
+    config_path: Path | str | None = None,
+    arm: str | None = None,
+    rung: str | None = None,
+    seed: int | None = None,
+    head: str | None = None,
+    label_set: str | None = None,
+    corpus: str | None = None,
+    artifacts_dir: str | None = None,
+    overrides: Sequence[str] | None = None,
+) -> LandformConfig:
+    """The plan's defaults, a partial config file, the cell flags, then ``--set`` — Task 1's order.
+
+    Every layer goes through :meth:`LandformConfig.from_dict`, so an unknown group or knob
+    raises before anything is resolved, and a Task 1 knob (``size``, ``head.lr``) is refused as
+    an unknown group here exactly as a typo is.
+    """
+    cfg = LandformConfig()
+    if config_path is not None:
+        cfg = _apply(cfg, json.loads(Path(config_path).read_text()))
+    cell = {
+        name: value
+        for name, value in (
+            ("arm", arm), ("rung", rung), ("seed", seed), ("head", head), ("label_set", label_set)
+        )
+        if value is not None
+    }
+    if cell:
+        cfg = _apply(cfg, cell)
+    moved: dict[str, Any] = {}
+    if corpus is not None:
+        moved["corpus_dir"] = corpus
+    if artifacts_dir is not None:
+        moved["artifacts_dir"] = artifacts_dir
+    if moved:
+        cfg = cfg.replace(paths=cfg.paths.replace(**moved))
+    for override in overrides or ():
+        cfg = _apply(cfg, parse_override(override, scalars=SCALARS))
+    return cfg
+
+
+def config_from_args(args: argparse.Namespace) -> LandformConfig:
+    """:func:`build_config` off the namespace ``benchmark.launch`` parsed — the one call."""
+    return build_config(
+        config_path=args.config,
+        arm=getattr(args, "arm", None),
+        rung=getattr(args, "rung", None),
+        seed=getattr(args, "seed", None),
+        head=getattr(args, "head", None),
+        label_set=getattr(args, "label_set", None),
+        corpus=args.corpus,
+        artifacts_dir=args.artifacts_dir,
+        overrides=args.overrides,
+    )
+
