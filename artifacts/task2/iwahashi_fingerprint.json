@@ -1,0 +1,167 @@
+{
+  "overview": {
+    "10": "Plain",
+    "11": "Plain",
+    "12": "Plain",
+    "1a": "Bedrock mountain",
+    "1b": "Bedrock mountain",
+    "2a": "Bedrock mountain",
+    "2b": "Bedrock mountain",
+    "3a": "Hills",
+    "3b": "Hills",
+    "4": "Large highland slope",
+    "5": "Large highland slope",
+    "6": "Plateau, terrace, large lowland slope",
+    "7": "Plateau, terrace, large lowland slope",
+    "8": "Plateau, terrace, large lowland slope",
+    "9": "Plateau, terrace, large lowland slope"
+  },
+  "rows": 27000,
+  "rule": {
+    "groups": 15,
+    "sensitivity_threshold": 0.5,
+    "test_survivors": [
+      1985,
+      2712
+    ],
+    "threshold": 0.6,
+    "zip_md5": "5ae98dc7782c13384a1df4d8d609418f"
+  },
+  "source_zip_md5": "5ae98dc7782c13384a1df4d8d609418f",
+  "survivors": {
+    "test": {
+      "R1": {
+        "land": 1127,
+        "land>=50%": 652,
+        "land>=60%": 544,
+        "tiles": 1264,
+        "tiles>=50%": 757,
+        "tiles>=60%": 624
+      },
+      "R2": {
+        "land": 1127,
+        "land>=50%": 617,
+        "land>=60%": 450,
+        "tiles": 1275,
+        "tiles>=50%": 731,
+        "tiles>=60%": 539
+      },
+      "R3": {
+        "land": 1158,
+        "land>=50%": 735,
+        "land>=60%": 523,
+        "tiles": 1295,
+        "tiles>=50%": 832,
+        "tiles>=60%": 593
+      },
+      "R4": {
+        "land": 1111,
+        "land>=50%": 708,
+        "land>=60%": 468,
+        "tiles": 1166,
+        "tiles>=50%": 733,
+        "tiles>=60%": 484
+      },
+      "all": {
+        "land": 4523,
+        "land>=50%": 2712,
+        "land>=60%": 1985,
+        "tiles": 5000,
+        "tiles>=50%": 3053,
+        "tiles>=60%": 2240
+      }
+    },
+    "train": {
+      "R1": {
+        "land": 5088,
+        "land>=50%": 2499,
+        "land>=60%": 1917,
+        "tiles": 5318,
+        "tiles>=50%": 2672,
+        "tiles>=60%": 2050
+      },
+      "R2": {
+        "land": 4496,
+        "land>=50%": 2711,
+        "land>=60%": 1952,
+        "tiles": 4836,
+        "tiles>=50%": 2937,
+        "tiles>=60%": 2115
+      },
+      "R3": {
+        "land": 4218,
+        "land>=50%": 2867,
+        "land>=60%": 2063,
+        "tiles": 4565,
+        "tiles>=50%": 3087,
+        "tiles>=60%": 2215
+      },
+      "R4": {
+        "land": 5041,
+        "land>=50%": 3461,
+        "land>=60%": 2349,
+        "tiles": 5281,
+        "tiles>=50%": 3598,
+        "tiles>=60%": 2420
+      },
+      "all": {
+        "land": 18843,
+        "land>=50%": 11538,
+        "land>=60%": 8281,
+        "tiles": 20000,
+        "tiles>=50%": 12294,
+        "tiles>=60%": 8800
+      }
+    },
+    "val": {
+      "R1": {
+        "land": 523,
+        "land>=50%": 234,
+        "land>=60%": 187,
+        "tiles": 548,
+        "tiles>=50%": 254,
+        "tiles>=60%": 202
+      },
+      "R2": {
+        "land": 480,
+        "land>=50%": 272,
+        "land>=60%": 191,
+        "tiles": 515,
+        "tiles>=50%": 293,
+        "tiles>=60%": 205
+      },
+      "R3": {
+        "land": 382,
+        "land>=50%": 241,
+        "land>=60%": 173,
+        "tiles": 421,
+        "tiles>=50%": 270,
+        "tiles>=60%": 190
+      },
+      "R4": {
+        "land": 479,
+        "land>=50%": 337,
+        "land>=60%": 221,
+        "tiles": 516,
+        "tiles>=50%": 354,
+        "tiles>=60%": 233
+      },
+      "all": {
+        "land": 1864,
+        "land>=50%": 1084,
+        "land>=60%": 772,
+        "tiles": 2000,
+        "tiles>=50%": 1171,
+        "tiles>=60%": 830
+      }
+    }
+  },
+  "table_columns": [
+    "tile_id",
+    "split",
+    "group",
+    "frac_ppm"
+  ],
+  "table_md5": "822340c601a730694404c3ee5a46421d",
+  "what": "The Iwahashi & Pike (2018) tile-label table's fingerprint (plan §3.2, #193's rule, #203). The table itself is not committed (§3.4): `freeze --task landform` rebuilds it from the zip, and `run` refuses one whose md5 is not table_md5."
+}

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import arms, artifacts, landform_arms, landform_config
+from . import arms, artifacts, iwahashi, landform_arms, landform_config
 from .artifacts import Resolved
 from .landform_config import LandformConfig
 
@@ -72,7 +72,7 @@ class FreezeStage:
 FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("prereg bar", "#199"),
     FreezeStage("geomorphon labels", "#201"),
-    FreezeStage("iwahashi labels", "#203"),
+    FreezeStage("iwahashi labels", "#203", iwahashi.freeze),
     FreezeStage("ladders", "#200"),
     FreezeStage("dataset card", "#218"),
 )
@@ -219,8 +219,14 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
             "builds; it is not Task 1's single A6 pass and does not run under that one's rules"
         )
     arm = landform_arms.get(cfg.arm)
+    inputs, pending = _inputs(cfg), PENDING_INPUTS
+    if cfg.label_set == "iwahashi":
+        # #203 built this label set: its fingerprint and rebuilt table print in place of the
+        # pending line, and `run` refuses a table the fingerprint does not describe.
+        inputs += iwahashi.inputs(cfg, verb=args.verb)
+        pending = tuple(item for item in pending if item.key != "labels")
     return LandformResolution(
-        config=cfg, arm=arm, checkpoint=_checkpoint(arm, cfg), inputs=_inputs(cfg)
+        config=cfg, arm=arm, checkpoint=_checkpoint(arm, cfg), inputs=inputs, pending=pending
     )
 
 

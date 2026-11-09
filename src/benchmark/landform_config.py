@@ -167,6 +167,11 @@ class Iwahashi(_Frozen):
     threshold: float = 0.60
     #: A pre-registered sensitivity row, never used to decide C3.
     sensitivity_threshold: float = 0.50
+    #: #193's surviving test tiles after #150's land filter, at ``threshold`` then
+    #: ``sensitivity_threshold`` (§3.2: 1,985 and 2,712 of 4,523). ``freeze`` refuses a rebuild
+    #: that does not reproduce them (#203), so a footprint or land-filter bug stops there rather
+    #: than in a fitted classifier. A check on the labels, so it sits beside the rule it checks.
+    test_survivors: tuple[int, ...] = (1_985, 2_712)
 
     def __post_init__(self) -> None:
         for name in ("threshold", "sensitivity_threshold"):
@@ -174,6 +179,13 @@ class Iwahashi(_Frozen):
                 raise ValueError(f"iwahashi.{name} {getattr(self, name)} must be in (0, 1]")
         if self.threshold == self.sensitivity_threshold:
             raise ValueError("iwahashi's sensitivity row must differ from the primary threshold")
+        if len(self.test_survivors) != 2 or any(
+            not isinstance(n, int) or n < 0 for n in self.test_survivors
+        ):
+            raise ValueError(
+                f"iwahashi.test_survivors {self.test_survivors} must be two counts, at the "
+                f"primary threshold then the sensitivity row"
+            )
 
 
 # --- §4.1-§4.3 The head recipes -----------------------------------------------
@@ -301,6 +313,12 @@ class LandformPaths(_Frozen):
     results_path: str = "data/task2/results.parquet"
     #: The plan, whose §7 Task 2's bar is anchored in (#199).
     plan_path: str = "docs/research/task2-landform-plan.md"
+    #: The distributor's zip, as downloaded from gisstar.gsi.go.jp/terrain2018 (§3.2). Read in
+    #: place, never committed; its md5 is ``iwahashi.zip_md5``, which is recipe (#203).
+    iwahashi_zip: str = "data/iwahashi2018/7.5_arc_second_compressedGeoTIFF.zip"
+    #: The tile-label table ``freeze`` rebuilds from it. Gitignored under §3.4's licence
+    #: position; only its fingerprint is committed, in ``artifacts_dir`` (#203).
+    iwahashi_table: str = "data/task2/iwahashi_labels.csv"
     demae_r5_checkpoint: str | None = Paths.demae_r5_checkpoint
     demae_r4_checkpoint: str | None = Paths.demae_r4_checkpoint
     demae_vits_checkpoint: str | None = Paths.demae_vits_checkpoint

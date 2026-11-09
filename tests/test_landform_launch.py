@@ -165,11 +165,11 @@ def test_freeze_names_the_generator_hash_and_its_stages_not_a_cell(flags, capsys
     for stage, ticket in (
         ("prereg bar", "#199"),
         ("geomorphon labels", "#201"),
-        ("iwahashi labels", "#203"),
         ("ladders", "#200"),
         ("dataset card", "#218"),
     ):
         assert f"{stage} — not built yet ({ticket})" in out
+    assert "iwahashi labels — built (#203)" in out
 
 
 # --- A cell cannot be half one task and half the other ------------------------
@@ -281,11 +281,25 @@ def test_past_the_dry_run_a_verb_names_its_ticket_rather_than_returning_zero(ver
         launch.main([verb, *flags])
 
 
-def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(flags):
+def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(
+    flags, monkeypatch
+):
+    """The built stages are made no-ops here — each has its own tests, and this box holds none
+    of their inputs — so what is left is the refusal past the pending ones."""
+    from dataclasses import replace
+
+    from benchmark import landform
+
+    stages = tuple(
+        stage if stage.write is None else replace(stage, write=lambda resolution: [])
+        for stage in landform.FREEZE_STAGES
+    )
+    monkeypatch.setattr(landform, "FREEZE_STAGES", stages)
     with pytest.raises(NotImplementedError) as exc:
         launch.main(["freeze", *flags])
-    for ticket in ("#199", "#200", "#201", "#203", "#218"):
-        assert ticket in str(exc.value)
+    for stage in stages:
+        assert (stage.ticket in str(exc.value)) == (stage.write is None), stage.label
+    assert "#203" not in str(exc.value)
 
 
 # --- Below the seam: §4.5's step-count function ------------------------------
