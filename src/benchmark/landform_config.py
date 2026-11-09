@@ -345,7 +345,9 @@ class Ladders(Frozen):
     ``tiles.draw_seed``, the order the 20,000-tile head-train list was apportioned in. A ladder
     walked under it would rank train cells by the key that sorted cells *out* of train, and
     tiles by the order they entered the list. Each ladder's coverage report records its seed,
-    and the resolver checks it.
+    and the resolver checks it. The project owner ratified this rule on 2026-11-09, before any
+    Task 2 result existed, and the three ladders were committed under it then (#200). Moving it
+    redraws every ladder, so it needs an amendment, not a ``--set``.
 
     **Budgets** are §3.3's 200 / 2,000 / 20,000 tiles, one per rung in :data:`RUNGS` order, and
     knobs only so the fixture corpus can walk the same rule at a scale it holds. The top one
