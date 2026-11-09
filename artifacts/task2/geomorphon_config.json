@@ -1,0 +1,165 @@
+{
+  "label_config_hash": "9dbb4bb3bec31b95",
+  "label_config": {
+    "tool": "WhiteboxTools v2.4.0 Geomorphons --forms",
+    "wbt_sha256": [
+      "63ce77174e2abc32590df2b4868b6fb4123d8598a540290ef9669b2cb919647b"
+    ],
+    "params": {
+      "search": 50,
+      "threshold": 1.0,
+      "skip": 0,
+      "fdist": 0
+    },
+    "variants": {
+      "primary": {
+        "search": 50,
+        "threshold": 1.0,
+        "skip": 0,
+        "fdist": 0,
+        "splits": [
+          "train",
+          "val",
+          "test"
+        ]
+      },
+      "L25": {
+        "search": 25,
+        "threshold": 1.0,
+        "skip": 0,
+        "fdist": 0,
+        "splits": [
+          "test"
+        ]
+      },
+      "L100": {
+        "search": 100,
+        "threshold": 1.0,
+        "skip": 0,
+        "fdist": 0,
+        "splits": [
+          "test"
+        ]
+      },
+      "flat0.75": {
+        "search": 50,
+        "threshold": 0.75,
+        "skip": 0,
+        "fdist": 0,
+        "splits": [
+          "test"
+        ]
+      },
+      "flat1.25": {
+        "search": 50,
+        "threshold": 1.25,
+        "skip": 0,
+        "fdist": 0,
+        "splits": [
+          "test"
+        ]
+      }
+    },
+    "buffer_rule": "L rows and ceil(L*dy/dx) columns of buffer per side, mosaicked on the tile COG's own grid (pixel-is-point, nearest across a column-width band); a tile is read once at the widest L its variants need and each variant crops its input from that read; the centre 224x224 is cropped after WBT runs; no ring mask",
+    "spacing_rule": "unresampled elevations under a projected EPSG:3857 header whose cell size is the WGS84 (pyproj.Geod) ground spacing (dx, dy) of one pixel at the tile's centre; never EPSG:4326",
+    "ignore_rule": "255 where the shard tile is exact-zero ocean (normalize.land_mask), or where the (2L+1)-row x (2*ceil(L*dy/dx)+1)-column rectangle centred on the pixel reaches data absent from the GLO-30 release; absent COGs on verified_ocean read as 0 m; COGs on antimeridian_wrap read across 180 degrees; every other absent COG must be on absent_land",
+    "ignore_label": 255,
+    "classes": [
+      "flat",
+      "peak",
+      "ridge",
+      "shoulder",
+      "spur",
+      "slope",
+      "hollow",
+      "footslope",
+      "valley",
+      "pit"
+    ],
+    "verified_ocean": [
+      "Copernicus_DSM_COG_10_S45_00_E172_00_DEM"
+    ],
+    "absent_land": [
+      "Copernicus_DSM_COG_10_N41_00_E043_00_DEM",
+      "Copernicus_DSM_COG_10_N41_00_E044_00_DEM",
+      "Copernicus_DSM_COG_10_N41_00_E045_00_DEM",
+      "Copernicus_DSM_COG_10_N41_00_E046_00_DEM",
+      "Copernicus_DSM_COG_10_N41_00_E047_00_DEM"
+    ],
+    "antimeridian_wrap": [
+      "Copernicus_DSM_COG_10_S85_00_E179_00_DEM",
+      "Copernicus_DSM_COG_10_S86_00_E179_00_DEM"
+    ]
+  },
+  "census": {
+    "search": 100,
+    "tiles": 27000,
+    "tiles_wrapping_the_antimeridian": 2,
+    "absent": {
+      "Copernicus_DSM_COG_10_N41_00_E043_00_DEM": {
+        "tiles": 1,
+        "treated_as": "land, absent from the release: its reach is ignored (255)"
+      },
+      "Copernicus_DSM_COG_10_N41_00_E046_00_DEM": {
+        "tiles": 1,
+        "treated_as": "land, absent from the release: its reach is ignored (255)"
+      },
+      "Copernicus_DSM_COG_10_S45_00_E172_00_DEM": {
+        "tiles": 1,
+        "treated_as": "verified ocean, read as 0 m"
+      }
+    }
+  },
+  "variants": {
+    "primary": {
+      "tiles": 27000,
+      "set_fingerprint": "93f794119b305d6f80e1df5b2f4b6508",
+      "fingerprints_md5": "54bac5dba57ff63860adf4b4b71c5026"
+    },
+    "L25": {
+      "tiles": 5000,
+      "set_fingerprint": "e02da89663b61846cf6faa7c4f2a7d5d",
+      "fingerprints_md5": "04d1d198476038b2e7a5bc6f2edd11a0"
+    },
+    "L100": {
+      "tiles": 5000,
+      "set_fingerprint": "cdf53b9ecb5aa8f8abfdcc8e5b016b81",
+      "fingerprints_md5": "32c5d8661a4fda716b9d941f38fd0e6b"
+    },
+    "flat0.75": {
+      "tiles": 5000,
+      "set_fingerprint": "a90984d83b0e9d9b43f8dc9c733ab73a",
+      "fingerprints_md5": "051b6f70d52ec99e0acf7a468aa20364"
+    },
+    "flat1.25": {
+      "tiles": 5000,
+      "set_fingerprint": "b4debad124a086ee71c25936b6efea9b",
+      "fingerprints_md5": "d5e2ffaa37aafe836d0981dc66de347a"
+    }
+  },
+  "class_pixel_counts_train": {
+    "flat": 138323893,
+    "peak": 30305305,
+    "ridge": 112268364,
+    "shoulder": 36353943,
+    "spur": 121636945,
+    "slope": 241392340,
+    "hollow": 105734863,
+    "footslope": 51490076,
+    "valley": 131730648,
+    "pit": 31949785
+  },
+  "class_weights": {
+    "flat": 0.7189762047089341,
+    "peak": 1.5360444702493488,
+    "ridge": 0.7980579380984643,
+    "shoulder": 1.4024499065244995,
+    "spur": 0.7667086567497792,
+    "slope": 0.5442536827950685,
+    "hollow": 0.8223449226912326,
+    "footslope": 1.1784233855078048,
+    "valley": 0.7367492539039316,
+    "pit": 1.495991578770938
+  },
+  "class_weights_rule": "inverse-sqrt frequency over the primary labels' non-ignore pixels on the full train list, scaled to mean 1 over the ten classes; used unchanged at every rung"
+}

@@ -10,7 +10,10 @@
     ],
     "pool_n": 13538
   },
-  "class_pixels_note": "not computed yet: per-class train-pixel counts need the geomorphon labels, which the label pass adds (#201, #202)",
+  "class_pixels_from": {
+    "md5": "54bac5dba57ff63860adf4b4b71c5026",
+    "path": "geomorphon_fingerprints/primary.csv"
+  },
   "draw_seed": 57008,
   "head_train_md5": "7180fb2e0a08c2a34a10a159bfc45b6d",
   "ladder": 1,
@@ -27,7 +30,19 @@
           "R4": 39
         }
       },
-      "class_pixels": null,
+      "class_pixels": {
+        "flat": 2206849,
+        "footslope": 871574,
+        "hollow": 735653,
+        "peak": 185601,
+        "pit": 201198,
+        "ridge": 1023377,
+        "shoulder": 827410,
+        "slope": 1956166,
+        "spur": 878959,
+        "valley": 1128514
+      },
+      "ignored_pixels": 19899,
       "partial_cell": {
         "geocell_id": "-170_+060",
         "of": 52,
@@ -75,7 +90,19 @@
           "R4": 568
         }
       },
-      "class_pixels": null,
+      "class_pixels": {
+        "flat": 14235946,
+        "footslope": 5231608,
+        "hollow": 10747897,
+        "peak": 2682608,
+        "pit": 2765768,
+        "ridge": 10803782,
+        "shoulder": 3792949,
+        "slope": 24497518,
+        "spur": 12511190,
+        "valley": 12747085
+      },
+      "ignored_pixels": 335649,
       "partial_cell": {
         "geocell_id": "-040_+060",
         "of": 45,
@@ -157,7 +184,19 @@
           "R4": 5281
         }
       },
-      "class_pixels": null,
+      "class_pixels": {
+        "flat": 138323893,
+        "footslope": 51490076,
+        "hollow": 105734863,
+        "peak": 30305305,
+        "pit": 31949785,
+        "ridge": 112268364,
+        "shoulder": 36353943,
+        "slope": 241392340,
+        "spur": 121636945,
+        "valley": 131730648
+      },
+      "ignored_pixels": 2333838,
       "partial_cell": null,
       "rung": "100%",
       "strata": {
