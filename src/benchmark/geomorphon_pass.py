@@ -38,6 +38,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -139,6 +140,20 @@ def _read_search(g: Geomorphon, split: str) -> int:
 # --- 1. The census --------------------------------------------------------------------------------
 
 
+class Treatment(Enum):
+    """How D5 treats an absent COG a window reaches: a short name, and the committed prose."""
+
+    VERIFIED_OCEAN = ("verified ocean", "verified ocean, read as 0 m")
+    ABSENT_LAND = ("land", "land, absent from the release: its reach is ignored (255)")
+    UNCLASSIFIED = ("unclassified", "unclassified")
+
+    def __init__(self, short: str, prose: str) -> None:
+        #: What the census line counts it under.
+        self.short = short
+        #: What ``geomorphon_config.json`` records as ``treated_as``.
+        self.prose = prose
+
+
 @dataclass(frozen=True)
 class Census:
     """Every absent COG the windows reach at the widest L, and how D5 treats it."""
@@ -150,15 +165,15 @@ class Census:
     #: Tiles whose window wraps across the antimeridian.
     wrapped: int
 
-    def treatment(self, g: Geomorphon) -> dict[str, str]:
+    def treatment(self, g: Geomorphon) -> dict[str, Treatment]:
         out = {}
         for stem in self.absent:
             if stem in g.verified_ocean:
-                out[stem] = "verified ocean, read as 0 m"
+                out[stem] = Treatment.VERIFIED_OCEAN
             elif stem in g.absent_land:
-                out[stem] = "land, absent from the release: its reach is ignored (255)"
+                out[stem] = Treatment.ABSENT_LAND
             else:
-                out[stem] = "unclassified"
+                out[stem] = Treatment.UNCLASSIFIED
         return out
 
     def to_dict(self, g: Geomorphon) -> dict:
@@ -167,7 +182,7 @@ class Census:
             "search": self.search,
             "tiles": self.tiles,
             "tiles_wrapping_the_antimeridian": self.wrapped,
-            "absent": {s: {"tiles": self.absent[s], "treated_as": treat[s]}
+            "absent": {s: {"tiles": self.absent[s], "treated_as": treat[s].prose}
                        for s in sorted(self.absent)},
         }
 
@@ -196,7 +211,7 @@ def census(lists: Mapping[str, Iterable[str]], frame: frozenset[str], g: Geomorp
         )
     result = Census(search=search, tiles=tiles, absent=dict(sorted(reached.items())),
                     wrapped=wrapped)
-    unclassified = [s for s, t in result.treatment(g).items() if t == "unclassified"]
+    unclassified = [s for s, t in result.treatment(g).items() if t is Treatment.UNCLASSIFIED]
     if unclassified:
         listing = "\n".join(f"  {s}  ({reached[s]:,} tiles)" for s in unclassified)
         raise ValueError(
@@ -524,7 +539,7 @@ def write(resolution: LandformResolution) -> list[str]:
     say(f"{'geomorphon':<16} label config {chash}: WBT v{g.wbt_version} --forms, search "
         f"{g.search}, threshold {g.threshold}, skip {g.skip}, fdist {g.fdist}")
     cen = census(lists, source.frame(), g)
-    treat = Counter(t.split(",")[0] for t in cen.treatment(g).values())
+    treat = Counter(t.short for t in cen.treatment(g).values())
     say(f"{'census':<16} L = {cen.search} over {cen.tiles:,} tiles: {len(cen.absent)} absent "
         f"COG(s) reached ({', '.join(f'{n} {t}' for t, n in treat.items()) or 'none'}); "
         f"{cen.wrapped} tile(s) wrap the antimeridian")

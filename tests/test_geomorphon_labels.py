@@ -266,6 +266,7 @@ def test_freeze_labels_every_listed_tile_and_commits_fingerprints_per_variant(
     absent = body["census"]["absent"]
     assert absent[stem(*ABSENT_LAND)]["treated_as"].startswith("land")
     assert all(absent[stem(*c)]["treated_as"].startswith("verified ocean") for c in OCEAN)
+    assert "3 absent COG(s) reached (1 land, 2 verified ocean)" in out
     assert "byte-identical" in out
 
 
