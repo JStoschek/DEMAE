@@ -409,9 +409,10 @@ def resolved(
 ) -> Resolved:
     """Ladder ``index`` as this box has it, refusing a walk filed under the wrong ladder.
 
-    The check reads the coverage report committed beside the walk: it must name this ladder and
-    the draw seed this config gives it, and quote the walk's md5. A copy of another ladder over
-    this one fails the md5, and a copy of both files fails the index and seed.
+    The check reads the coverage report committed beside the walk: it must be there, name this
+    ladder and the draw seed this config gives it, and quote the walk's md5. A copy of another
+    ladder over this one fails the md5, a copy of both files fails the index and seed, and a walk
+    whose report was deleted is refused rather than trusted.
 
     ``freeze`` passes ``verify=False``: it re-walks every ladder and
     :func:`benchmark.artifacts.write_committed` refuses any file that differs from the walk, which
@@ -421,7 +422,14 @@ def resolved(
     path = directory / ladder_name(index)
     md5 = artifacts.file_md5(path)
     report_path = directory / coverage_name(index)
-    if verify and md5 is not None and report_path.is_file():
+    if verify and md5 is not None:
+        if not report_path.is_file():
+            raise ValueError(
+                f"{report_path} is absent, so nothing says {path} (md5 {md5}) is ladder {index}: "
+                f"a walk is checked against the coverage report committed beside it, and a seed "
+                f"paired with another ladder's walk is refused. Re-freeze rather than copy "
+                f"(`python -m benchmark.launch freeze --task landform`)"
+            )
         report = json.loads(report_path.read_text())
         seed = cfg.ladders.draw_seed(index)
         if (report.get("ladder"), report.get("draw_seed")) != (index, seed):

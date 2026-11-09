@@ -428,3 +428,23 @@ def test_the_real_ladders_land_on_200_2000_and_20000_with_at_most_one_partial_ce
         assert [len(r.tile_id) for r in ladder.rungs] == [200, 2_000, 20_000]
         top = ladder.rungs[-1]
         assert top.partial_cell is None and len(top.whole_cells) == 376
+
+
+def test_a_ladder_whose_coverage_report_is_missing_is_refused_by_name(box, flags, frozen, capsys):
+    """Seed 0 paired with ladder 1's walk, its report deleted so nothing can contradict it."""
+    task2 = box / "task2"
+    (task2 / "ladder_0.csv").write_bytes((task2 / "ladder_1.csv").read_bytes())
+    (task2 / "ladder_0_coverage.json").unlink()
+    with pytest.raises(ValueError, match="ladder_0_coverage.json.*absent"):
+        launch.main(["run", "--dry-run", "--seed", "0", *flags])
+    assert capsys.readouterr().out == ""
+
+
+def test_the_ladder_count_is_l3_s_and_not_a_knob(flags, capsys):
+    """ADR-0015 L3 registers three seeds; a `--set` cannot make seed 3 resolvable."""
+    from benchmark import prereg
+
+    assert LandformConfig().ladders.count == prereg.TASK2.rule("L3").value["seeds"] == 3
+    with pytest.raises(ValueError, match="count"):
+        launch.main(["run", "--dry-run", "--seed", "3", *flags, "--set", "ladders.count=4"])
+    assert capsys.readouterr().out == ""

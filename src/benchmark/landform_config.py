@@ -348,16 +348,25 @@ class Ladders(_Frozen):
     must be the whole head-train list ("at 100% every ladder is the whole list"); ``freeze``
     refuses a list of any other length rather than draw a 100% rung that is not 100%.
 
-    ``count`` is how many ladders ``freeze`` writes. ADR-0015 L3 registers three seeds and binds
-    seed *i* to ladder *i*, so a seed at or past ``count`` has no ladder and is refused.
+    :attr:`count` is how many ladders ``freeze`` writes. ADR-0015 L3 registers three seeds and
+    binds seed *i* to ladder *i*, so a seed at or past ``count`` has no ladder and is refused. It
+    is read off the register rather than held as a knob: a second home for a registered number
+    is how one moves without anything failing (#199), and a ``--set ladders.count`` would make a
+    fourth seed resolvable.
+
+    The tile budgets are not in the register: L16 registers C2's rungs by name (1% and 10%), and
+    its tile counts appear only in the statement's prose, so they stay knobs here.
     """
 
-    count: int = 3
     first_draw_seed: int = dataset_config.RANDOM_SEED + 1
     budgets: tuple[int, ...] = tuple(RUNG_TILES[rung] for rung in RUNGS)
 
+    @property
+    def count(self) -> int:
+        """L3's seeds, one ladder per seed (ADR-0015 L3; L16 counts the same ladders)."""
+        return prereg.TASK2.rule("L3").value["seeds"]
+
     def __post_init__(self) -> None:
-        _positive("ladders", count=self.count)
         if len(self.budgets) != len(RUNGS):
             raise ValueError(
                 f"ladders.budgets {self.budgets} must hold one tile budget per rung {list(RUNGS)}"
