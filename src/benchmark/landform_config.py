@@ -134,9 +134,38 @@ class Geomorphon(_Frozen):
     #: §3.1's sensitivity variants, test tiles only, one parameter at a time.
     variant_search: tuple[int, ...] = (25, 100)
     variant_threshold: tuple[float, ...] = (0.75, 1.25)
+    #: D5's named exceptions, by COG stem (#201). An absent COG verified to be open ocean reads
+    #: as 0 m: S45 E172 is the absent corner neighbour #187 found for the S44 E171 tile. The
+    #: census at the widest buffer extends this list, each entry checked (#202).
+    verified_ocean: tuple[str, ...] = ("Copernicus_DSM_COG_10_S45_00_E172_00_DEM",)
+    #: Absent COGs on land, whose reach is ignored. D5 names "the N41 neighbours of N42 E043 and
+    #: N42 E046"; these are the ones `data/cog_frame.json` lacks. Listed rather than defaulted, so
+    #: the census refuses any absence nobody has classified.
+    absent_land: tuple[str, ...] = (
+        "Copernicus_DSM_COG_10_N41_00_E043_00_DEM",
+        "Copernicus_DSM_COG_10_N41_00_E044_00_DEM",
+        "Copernicus_DSM_COG_10_N41_00_E045_00_DEM",
+        "Copernicus_DSM_COG_10_N41_00_E046_00_DEM",
+        "Copernicus_DSM_COG_10_N41_00_E047_00_DEM",
+    )
+    #: Tile COGs whose windows wrap across the antimeridian to W180 (D5).
+    antimeridian_wrap: tuple[str, ...] = (
+        "Copernicus_DSM_COG_10_S85_00_E179_00_DEM",
+        "Copernicus_DSM_COG_10_S86_00_E179_00_DEM",
+    )
+    #: How many test tiles every `freeze` regenerates from the COGs and requires byte-identical
+    #: to the committed fingerprints, every variant (story 18). The lowest in `tie_rank` order.
+    fixed_sample: int = 8
 
     def __post_init__(self) -> None:
-        _positive("geomorphon", search=self.search, threshold=self.threshold)
+        _positive("geomorphon", search=self.search, threshold=self.threshold,
+                  fixed_sample=self.fixed_sample)
+        for name in ("verified_ocean", "absent_land", "antimeridian_wrap"):
+            listed = getattr(self, name)
+            if list(listed) != sorted(set(listed)):
+                raise ValueError(f"geomorphon.{name} {listed} must be sorted COG stems, once each")
+        if set(self.verified_ocean) & set(self.absent_land):
+            raise ValueError("an absent COG is either verified ocean or land, not both")
         if self.skip < 0 or self.fdist < 0:
             raise ValueError(f"geomorphon skip {self.skip} / fdist {self.fdist} must be >= 0")
         if not len(GEOMORPHON_CLASSES) < self.ignore_label <= 255:
@@ -306,9 +335,35 @@ class LandformPaths(_Frozen):
     demae_vits_checkpoint: str | None = Paths.demae_vits_checkpoint
     terramind_checkpoint: str | None = Paths.terramind_checkpoint
     imagenet_mae_checkpoint: str | None = Paths.imagenet_mae_checkpoint
+    #: The WhiteboxTools v2.4.0 binary (#201). Its path is where it is on this box; its sha256
+    #: is recipe and lives in ``geomorphon.wbt_sha256``.
+    wbt_binary: str | None = None
+    #: The GLO-30 release's present COG stems (gitignored, main checkout only).
+    cog_frame: str = "data/cog_frame.json"
+    #: Where the source COGs are read from: ``None`` is the public bucket, a directory holds
+    #: ``{stem}/{stem}.tif`` on the same grid.
+    cog_root: str | None = None
+    #: The label rasters and the pass's resume log: rebuilt, gitignored, fingerprinted.
+    labels_dir: str = "data/task2/labels"
 
     def __post_init__(self) -> None:
         check_paths(self)
+
+
+@dataclass(frozen=True)
+class Labelling(_Frozen):
+    """How the label pass runs on this box (#201) — environment, outside every hash.
+
+    #187 measured reads at 6.4 windows/s on 16 threads against ~6 h sequential, so the pass
+    reads and labels tiles on a thread pool and writes them from one thread.
+    """
+
+    threads: int = 16
+    #: A progress line every this many tiles.
+    report_every: int = 250
+
+    def __post_init__(self) -> None:
+        _positive("labelling", threads=self.threads, report_every=self.report_every)
 
 
 def _runtime() -> Runtime:
@@ -330,6 +385,7 @@ GROUPS: Final = {
     "extract": Extract,
     "runtime": Runtime,
     "paths": LandformPaths,
+    "labelling": Labelling,
 }
 
 #: The cell. Recipe, all five.
@@ -361,6 +417,7 @@ class LandformConfig(_Frozen):
     extract: Extract = field(default_factory=Extract)
     runtime: Runtime = field(default_factory=_runtime, metadata=ENVIRONMENT)
     paths: LandformPaths = field(default_factory=LandformPaths, metadata=ENVIRONMENT)
+    labelling: Labelling = field(default_factory=Labelling, metadata=ENVIRONMENT)
 
     def __post_init__(self) -> None:
         arm = landform_arms.get(self.arm)  # refuses, naming the table

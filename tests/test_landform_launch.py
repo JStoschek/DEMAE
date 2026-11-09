@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmark import launch
+from benchmark import landform, launch
 from benchmark.config import BenchmarkConfig
 from benchmark.landform_config import RUNG_TILES, RUNGS, LandformConfig, steps
 
@@ -169,7 +169,8 @@ def test_freeze_names_the_generator_hash_and_its_stages_not_a_cell(flags, capsys
         ("ladders", "#200"),
         ("dataset card", "#218"),
     ):
-        assert f"{stage} — not built yet ({ticket})" in out
+        built = next(s for s in landform.FREEZE_STAGES if s.label == stage).write is not None
+        assert f"{stage} — {'built' if built else 'not built yet'} ({ticket})" in out
 
 
 # --- A cell cannot be half one task and half the other ------------------------
@@ -281,11 +282,21 @@ def test_past_the_dry_run_a_verb_names_its_ticket_rather_than_returning_zero(ver
         launch.main([verb, *flags])
 
 
-def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(flags):
+def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(
+    flags, monkeypatch
+):
+    # The built stages write real inputs off a real corpus; here they write nothing, so what is
+    # under test is only the refusal past the pending ones.
+    stages = tuple(
+        s if s.write is None else landform.FreezeStage(s.label, s.ticket, lambda r: [])
+        for s in landform.FREEZE_STAGES
+    )
+    monkeypatch.setattr(landform, "FREEZE_STAGES", stages)
     with pytest.raises(NotImplementedError) as exc:
         launch.main(["freeze", *flags])
-    for ticket in ("#199", "#200", "#201", "#203", "#218"):
-        assert ticket in str(exc.value)
+    for stage in stages:
+        assert (stage.ticket in str(exc.value)) == (stage.write is None), stage.label
+    assert any(s.write is None for s in stages)
 
 
 # --- Below the seam: §4.5's step-count function ------------------------------
