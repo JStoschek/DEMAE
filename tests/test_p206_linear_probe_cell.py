@@ -428,7 +428,7 @@ def test_task_two_rows_go_to_their_own_parquet_and_task_one_s_file_is_refused(bo
     task1 = box / "task1-results.parquet"
     results.append_rows([], task1, metrics=["rmse"])
     before = task1.read_bytes()
-    with pytest.raises(ValueError, match="not Task 2's"):
+    with pytest.raises(ValueError, match="schema mismatch against Task 2.s"):
         launch.main([*cell(), *flags, "--set", f'paths.results_path="{task1}"'])
     assert task1.read_bytes() == before
 
