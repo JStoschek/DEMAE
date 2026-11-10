@@ -190,3 +190,11 @@ def test_b7_trains_under_the_optimizer_its_config_names_and_refuses_any_but_adam
         launch.main(["run", "--tune", "--head", "unet", "--rung", "1%", *flags,
                      "--set", 'unet.optimizer="sgd"'])
     assert not (bare / "task2" / landform_recipes.RECIPE_LINES_NAME).exists()
+
+
+def test_every_head_a_cell_can_name_has_a_trainer():
+    """The config holds a cell's head to `HEADS`, so this is what keeps `_run` from needing its
+    own no-trainer refusal (#197 review)."""
+    from benchmark import landform
+
+    assert set(landform.TRAINERS) == set(landform_arms.HEADS)

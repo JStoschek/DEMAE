@@ -576,10 +576,6 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
             "the Iwahashi tile classifier and its fitted probe are #212; `run --task landform` "
             "trains the dense geomorphon cells"
         )
-    if cfg.head not in TRAINERS:
-        raise NotImplementedError(
-            f"the {cfg.head} head has no trainer; built: {sorted(TRAINERS)}"
-        )
     rerun_reason = getattr(args, "rerun_reason", None)
     found = _preflight(resolution, rerun_reason)
     tiles = landform_train.CellTiles.read(cfg)
@@ -687,7 +683,8 @@ def precision_line(precision: dict) -> str:
     )
 
 
-#: The trainer for each built head, looked up when the cell runs (so a test's stand-in is seen).
+#: The trainer for each head, looked up when the cell runs (so a test's stand-in is seen). It
+#: covers :data:`benchmark.landform_arms.HEADS`, which the config already holds a cell's head to.
 TRAINERS: Final = {
     "linear": lambda: landform_train.train_head,
     "upernet": lambda: landform_train.train_head,

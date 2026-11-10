@@ -338,17 +338,14 @@ def build_head(cfg: LandformConfig, encoder: arms.Encoder) -> Head:
     if cfg.head == "linear":
         built = probe.build(encoder.output_width, seed=cfg.seed)
         return Head(built.module, built.parameters, built.width, lambda f: f.output)
-    if cfg.head == "upernet":
-        recipe = cfg.upernet
-        built = upernet.build(width, channels=recipe.channels, pool_scales=recipe.pool_scales,
-                              seed=cfg.seed)
-        layers = tuple(recipe.layers)
-        return Head(built.module, built.parameters, built.width,
-                    lambda f: upernet.read(f, layers))
-    raise NotImplementedError(
-        f"the {cfg.head} head reads no frozen encoder; B7's UNet trains in "
-        f"benchmark.landform_unet"
-    )
+    # Otherwise UperNet. The unet head is B7's, which has no encoder for train_head to read,
+    # and goes to benchmark.landform_unet.
+    recipe = cfg.upernet
+    built = upernet.build(width, channels=recipe.channels, pool_scales=recipe.pool_scales,
+                          seed=cfg.seed)
+    layers = tuple(recipe.layers)
+    return Head(built.module, built.parameters, built.width,
+                lambda f: upernet.read(f, layers))
 
 
 # --- §4.3's B3: the encoder unfrozen under layer-wise decay -------------------
