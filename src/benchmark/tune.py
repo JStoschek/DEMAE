@@ -527,7 +527,8 @@ def search(
     ``score(value, pass_index)`` trains one point and returns ``(score, detail)``. The pass index
     is there so a trainer can keep each pass's checkpoints apart. Every pass is returned, the
     last one holding the winner, so a record can say which passes widened and why. A winner
-    still on an edge after ``max_widenings`` widenings is refused rather than returned.
+    still on an edge after ``max_widenings`` widenings is refused rather than returned, and so is a
+    pass whose every point scored the same.
     """
     passes: list[GridPass] = []
     grid = tuple(float(x) for x in grid)
@@ -543,6 +544,14 @@ def search(
         passes.append(done)
         if on_pass is not None:
             on_pass(done)
+        if len(set(done.scores)) == 1:
+            # The earliest-point tie rule would call this a low-edge win and widen downwards
+            # MAX_WIDENINGS times over a flat line. A pass with no preference has no winner.
+            raise TuningError(
+                f"every point of {list(grid)} scored {done.scores[0]:g}: a flat pass has no "
+                f"winner and no edge to widen towards (§4.5). Something upstream of the score "
+                f"is not training, or not reading val"
+            )
         if done.edge is None:
             return tuple(passes)
         if index >= max_widenings:

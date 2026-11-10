@@ -276,6 +276,14 @@ def test_search_minimizing_takes_the_lowest_score_and_a_tie_goes_to_the_first_po
     assert passes[-1].winner == 2.0
 
 
+def test_search_refuses_an_all_tied_pass_at_once_rather_than_widening_it():
+    seen: list = []
+    with pytest.raises(tune.TuningError, match="every point.*scored 0.25"):
+        tune.search((1.0, 2.0, 4.0), _scores({1.0: 0.25, 2.0: 0.25, 4.0: 0.25}, seen),
+                    maximize=True)
+    assert [i for i, _ in seen] == [0, 0, 0]  # one pass, no widening
+
+
 def test_search_refuses_an_optimum_it_cannot_bracket():
     def climbing(lr, pass_index):
         return lr, None
