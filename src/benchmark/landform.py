@@ -15,9 +15,6 @@ owns the parser and the three verbs; ``--task landform`` hands it this module's
   D1) is skipped, and so is every later stage that ``needs`` it; the rest still run, and
   ``freeze`` then refuses, naming what it skipped and #202. A stage declares ``needs`` only on a
   stage whose output it reads.
-* **An input a cell reads** that no ticket has built yet is a :class:`Pending` line in
-  :data:`PENDING_INPUTS`. The ticket that builds it deletes the line and adds a
-  :class:`benchmark.artifacts.Resolved` to :func:`_inputs`, so its path and md5 print instead.
 * **A refusal about the cell** (seed bound to ladder, frozen recipe line, tuning arm) goes in
   :func:`resolve`, upstream of ``--dry-run``, for Task 1's reason: a pre-flight that prints a
   drifted cell as a normal one is worse than none.
@@ -64,18 +61,6 @@ from . import (
 from . import geomorphon as gm
 from .artifacts import Resolved
 from .landform_config import LandformConfig
-
-
-@dataclass(frozen=True)
-class Pending:
-    """An input a Task 2 cell reads that no ticket has built yet — said, not omitted."""
-
-    key: str
-    label: str
-    ticket: str
-
-    def line(self) -> str:
-        return f"{self.label:<16} not built yet ({self.ticket})"
 
 
 @dataclass(frozen=True)
@@ -133,12 +118,6 @@ FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
     FreezeStage("dataset card", "#218"),
 )
 
-#: What a cell reads that is not built yet. Story 4's whole cell is arm, encoder pin, rung,
-#: ladder, label set, frozen recipe line and bar; these are the parts with no artifact yet.
-#: Empty since #206 resolved the recipe-lines file (which #207's ``--tune`` writes).
-PENDING_INPUTS: Final[tuple[Pending, ...]] = ()
-
-
 @dataclass(frozen=True)
 class LandformResolution:
     """Everything one Task 2 command resolved: the cell, the arm, and every input by content."""
@@ -148,7 +127,6 @@ class LandformResolution:
     #: The arm's encoder checkpoint, or ``None`` for an arm that runs no encoder.
     checkpoint: Resolved | None
     inputs: tuple[Resolved, ...]
-    pending: tuple[Pending, ...] = PENDING_INPUTS
     #: This cell's frozen recipe line, already checked against the cell, or ``None`` while
     #: #207's tuning pass has not frozen it. ``run`` refuses the ``None``.
     recipe_line: landform_recipes.RecipeLine | None = None
@@ -189,7 +167,6 @@ class LandformResolution:
             ]
         block += [item.line() for item in self.inputs]
         if verb == "run":
-            block += [item.line() for item in self.pending]
             if self.tuning:
                 block.append(
                     f"{'tuning':<16} {cfg.head} @ {cfg.rung} over {list(cfg.recipe.lr_grid)}, "
