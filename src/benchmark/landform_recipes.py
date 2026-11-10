@@ -45,9 +45,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
-from . import landform_arms
+from . import landform_arms, landform_config
 from .config import group_to_dict
-from .landform_config import Finetune, LandformConfig
+from .landform_config import LandformConfig
 
 #: The committed file, in Task 2's artifacts directory.
 RECIPE_LINES_NAME: Final = "recipe_lines.json"
@@ -117,13 +117,13 @@ def fine_tunes(arm: str) -> bool:
 
 
 def finetune_line(cfg: LandformConfig) -> str:
-    """The resolution's lr line for a fine-tuned cell: §4.3's three numbers, said as given."""
+    """The resolution's lr line for a fine-tuned cell: §4.3's recipe, said as given."""
     f = cfg.finetune
     return (
         f"{'lr':<16} encoder {f.lr:g} with {f.layer_decay:g} layer-wise decay, head lr "
         f"{f.head_lr:g}, {f.epochs} epochs, {f.precision} — §4.3's literature recipe, used as "
-        f"given and not tuned (#196); the frozen {cfg.head} line supplies the decoder, batch, "
-        f"weight decay and schedule, not its lr"
+        f"given and not tuned (#196); its own batch {f.batch_size} and weight decay "
+        f"{f.weight_decay:g}, no frozen line read (#197 decisions)"
     )
 
 
@@ -140,11 +140,12 @@ def assert_not_tuned(arm: str | None) -> None:
 def assert_literature_recipe(cfg: LandformConfig) -> None:
     """Refuse a fine-tuned cell whose ``finetune`` group is not §4.3's, naming every knob moved.
 
-    §4.3's recipe is the one place B3's optimizer comes from: lr 1e-4 under 0.75 layer-wise
-    decay, head lr 1e-3, 50 epochs, bf16. It has no frozen line because nothing tuned it; the
-    declared :class:`benchmark.landform_config.Finetune` is the line.
+    §4.3's recipe is the one place B3's optimizer, batch and schedule come from: lr 1e-4 under
+    0.75 layer-wise decay, head lr 1e-3, 50 epochs, bf16, AdamW at effective batch 64 and wd
+    0.05, 5% warmup then cosine, ten val reads. It has no frozen line because nothing tuned it;
+    :data:`benchmark.landform_config.DECLARED_FINETUNE` is the line.
     """
-    declared = group_to_dict(Finetune())
+    declared = group_to_dict(landform_config.DECLARED_FINETUNE)
     now = group_to_dict(cfg.finetune)
     moved = [
         f"finetune.{knob} {now.get(knob)!r} (§4.3: {declared.get(knob)!r})"

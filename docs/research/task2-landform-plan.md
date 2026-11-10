@@ -338,7 +338,9 @@ rungs, on §4.5's schedule; lr is tuned per rung (§4.5) over
 `{3e-4, 1e-3, 3e-3, 1e-2, 3e-2}`, Task 1's grid. The frozen encoder runs inline
 through the ADR-0012 extractor and the probe reads its `output`.
 The encoder runs at its declared compute dtype; the probe itself (LayerNorm and
-the 1x1 conv) trains in fp32, and the run record says so.
+the 1x1 conv) trains in fp32, and the run record says so. *(#197 decisions,
+2026-11-10: this fp32 ruling, from #197's review, is the linear probe's and
+stays here. It does not extend to B7, which trains bf16 like A7 (§4.3).)*
 Inline is what keeps the dihedral augmentation possible: the
 feature of a rotated tile is not the rotated feature of the tile, so a cache
 would have to hold all eight orientations or drop the augmentation. 3 seeds
@@ -384,7 +386,24 @@ and linear-probe grid run inline.
 - **B3:** encoder + §4.2's UperNet (same decoder, same layers), 100% labels
   only (budget), lr 1e-4 with 0.75 layer-wise decay, head lr 1e-3, 50 epochs,
   dihedral augmentation, bf16. A literature recipe, **used as given and not
-  tuned** (#196): B3 feeds only C3, at one rung. **3 seeds**, paired with
+  tuned** (#196): B3 feeds only C3, at one rung.
+  *(#197 decisions, 2026-11-10.)* **B3 declares its own batch, weight decay
+  and schedule**: AdamW at effective batch 64 and wd 0.05 (§4.2's values; 0.05
+  is also MAE's fine-tune weight decay), 5% linear warmup then cosine to zero,
+  val read 10 times with the best read kept. At 100% there is no step floor to
+  bind, so a run is 50 x ceil(20,000 / 64) = 15,650 steps. These were once read
+  off B6's frozen UperNet line at 100%, so a re-tune of B6 would have moved B3
+  without anything failing. They now sit on the declared `finetune` recipe,
+  B3 reads no frozen line and runs with none present, and a cell that moves any
+  `finetune` knob is refused, naming it. Only the decoder (512 channels, pool
+  scales, `intermediates[3, 5, 7, 11]`) comes from §4.2's `upernet` group. The
+  batch is the effective batch: `runtime.micro_batch` splits it into pieces
+  whose gradients accumulate to the whole batch's, for a box where an unfrozen
+  ViT-B and a 512-channel UperNet do not fit 64 tiles at once. It is a runtime
+  knob, outside the config hash, as in Task 1. **Decided, not defaults:** R5's
+  `pos_embed` stays frozen (it is fixed sin-cos, ADR-0011, never a learned
+  weight), and weight decay follows MAE's no-decay list (1-d tensors and the
+  CLS token do not decay). **3 seeds**, paired with
   B7's (*registered rule **L3***, [ADR-0015](../adr/0015-task2-pre-registration-register.md); this replaces "one seed
   plus a second if variance on val looks material", a seed count that would
   have been chosen after seeing the variance).
@@ -398,6 +417,12 @@ and linear-probe grid run inline.
   probe's: it is the bar for C2 and C3, and an untuned bar is the "you crippled
   the baseline" objection. This is the bar: PANGAEA says it is often not beaten,
   and the table must be able to say so plainly if it is not.
+  *(#197 decisions, 2026-11-10.)* **B7 trains under bf16 autocast, as A7
+  did**, falling back to fp32 on CPU as B3 does; the run record states the
+  precision declared and the precision used. B7 is A7's UNet, §8's ~298 h was
+  priced from A7's bf16 step time, and B3, which C3b sets against B7, runs
+  bf16. AdamW, wd 0.05 and torch's default output init are A7's, unchanged.
+  The fp32 ruling in §4.1 is the linear probe's alone.
 
 ### 4.4 Order of operations
 

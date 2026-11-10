@@ -141,6 +141,9 @@ def test_a_b7_cell_trains_from_scratch_and_appends_rows_and_a_run_record(
                                     "total": B7_PARAMETERS}
     assert record["recipe_line"]["tuned_on"]["arm"] == "B7"
     assert record["training"]["kind"] == "unet"
+    # A7 trained bf16 and B7 is A7's UNet: declared bf16, and CPU drops it and says so.
+    assert record["training"]["precision_declared"] == "bf16"
+    assert record["training"]["precision_used"] == "fp32"
     assert record["training"]["steps"] == STEPS
     assert len(record["training"]["val_reads"]) == 10
     # One naming rule for every Task 2 cell's checkpoint directory, the head included (#197 review).
@@ -167,7 +170,7 @@ def test_tune_head_unet_trains_b7_on_itself_and_freezes_its_line(bare, flags, ca
         tuple(line["grid"][-5:]) == (1e-4, 3e-4, 1e-3, 3e-3, 1e-2)
     assert line["lr"] in line["grid"]
     assert line["recipe"] == {"in_channels": 1, "optimizer": "adamw", "weight_decay": 0.05,
-                              "batch_size": 4, "epochs": 5}
+                              "batch_size": 4, "epochs": 5, "precision": "bf16"}
     record = json.loads(landform_recipes.tuning_record_path_for(bare / "task2", "unet", "1%")
                         .read_text())
     assert record["arm"] == "B7" and record["steps_per_point"] == STEPS // 5
@@ -198,3 +201,32 @@ def test_every_head_a_cell_can_name_has_a_trainer():
     from benchmark import landform
 
     assert set(landform.TRAINERS) == set(landform_arms.HEADS)
+
+
+# --- #197 decisions: B7 trains under bf16 autocast, like A7 ------------------------
+
+
+def test_b7_declares_a7_s_bf16_adamw_and_weight_decay():
+    b7 = LandformConfig(arm="B7")
+    assert (b7.unet.precision, b7.unet.optimizer, b7.unet.weight_decay) == ("bf16", "adamw", 0.05)
+
+
+@pytest.mark.skipif("not __import__('torch').backends.mps.is_available()",
+                    reason="bf16 autocast is dropped on CPU; MPS is where it is observable")
+def test_b7_s_training_forward_runs_the_trunk_in_bf16_where_the_box_has_it():
+    """On an accelerator the trunk's convolutions compute in bf16 and the logits come back fp32
+    for the loss; on CPU the same forward is fp32 throughout."""
+    import torch
+
+    from benchmark import landform_unet
+
+    cfg = LandformConfig(arm="B7")
+    raw = np.random.default_rng(0).integers(0, 3000, size=(2, 64, 64)).astype(np.int16)
+    for device, conv_dtype in (("mps", torch.bfloat16), ("cpu", torch.float32)):
+        module = landform_unet.build(cfg).module.to(device)
+        seen = []
+        first = next(m for m in module.modules() if isinstance(m, torch.nn.Conv2d))
+        first.register_forward_hook(lambda m, i, o: seen.append(o.dtype))
+        logits = landform_unet.ScratchForward(module, device, precision="bf16").logits(raw)
+        assert seen == [conv_dtype], device
+        assert logits.dtype == torch.float32

@@ -280,6 +280,11 @@ class Unet(Frozen):
     epochs: int = 40
     #: Centred on the 3e-3 A7 shared with Task 1's head.
     lr_grid: tuple[float, ...] = (1e-4, 3e-4, 1e-3, 3e-3, 1e-2)
+    #: A7's: Task 1 trained this UNet under bf16 autocast, §8 priced B7 from A7's bf16 step
+    #: time, and B3, its C3b comparison, runs bf16 (#197 decisions). Dropped to fp32 on CPU and
+    #: said (:func:`benchmark.train.precision_on`). The #197 review's fp32 ruling is the linear
+    #: probe's and does not reach here.
+    precision: str = "bf16"
 
     def __post_init__(self) -> None:
         _positive("unet", in_channels=self.in_channels, batch_size=self.batch_size,
@@ -289,18 +294,53 @@ class Unet(Frozen):
 
 @dataclass(frozen=True)
 class Finetune(Frozen):
-    """§4.3's B3: a literature recipe used as given and **not tuned** (#196)."""
+    """§4.3's B3: a literature recipe used as given and **not tuned** (#196).
+
+    Every number B3 trains under is here, its batch, weight decay and schedule included (#197
+    decisions). They were once read off B6's frozen UperNet line at 100%, so a re-tune of B6
+    would have moved B3 silently. Now no line is read: B3 runs with none present, and
+    :func:`benchmark.landform_recipes.assert_literature_recipe` refuses any knob here moved.
+    Only the decoder (``upernet.channels``, ``pool_scales``, ``layers``) comes off the
+    ``upernet`` group, which is §4.3's "same decoder, same layers".
+
+    ``batch_size`` is the **effective** batch, one optimizer step's worth of tiles. How many go
+    through the model at once is :attr:`benchmark.config.Runtime.micro_batch`, an environment
+    knob outside the hash, so a box short of memory accumulates gradients over pieces and trains
+    the same recipe.
+    """
 
     lr: float = 1e-4
     layer_decay: float = 0.75
     head_lr: float = 1e-3
     epochs: int = 50
     precision: str = "bf16"
+    #: AdamW, at §4.2's batch and weight decay (0.05 is also MAE's fine-tune value). Its
+    #: no-decay list is MAE's: 1-d tensors and the CLS token
+    #: (:data:`benchmark.landform_train.NO_DECAY_TENSORS`).
+    optimizer: str = "adamw"
+    batch_size: int = 64
+    weight_decay: float = 0.05
+    #: §4.5's shape and val reads, stated here rather than shared. B3 runs at 100% only, where
+    #: §4.5's step floor never binds, so it has none: 50 x ceil(20,000 / 64) = 15,650 steps.
+    warmup_frac: float = 0.05
+    decay: str = "cosine"
+    val_reads: int = 10
 
     def __post_init__(self) -> None:
-        _positive("finetune", lr=self.lr, head_lr=self.head_lr, epochs=self.epochs)
+        _positive("finetune", lr=self.lr, head_lr=self.head_lr, epochs=self.epochs,
+                  batch_size=self.batch_size, val_reads=self.val_reads)
         if not 0 < self.layer_decay <= 1:
             raise ValueError(f"finetune.layer_decay {self.layer_decay} must be in (0, 1]")
+        if self.weight_decay < 0 or not 0 <= self.warmup_frac < 1:
+            raise ValueError("finetune.weight_decay must be >= 0, warmup_frac in [0, 1)")
+        if self.decay != "cosine":
+            raise ValueError(f"finetune.decay {self.decay!r}: §4.3 is warmup then cosine to zero")
+
+
+#: **The** fine-tune recipe B3 is held to, Task 1's :data:`benchmark.config.DECLARED_FINETUNE`
+#: rule: a recipe stated rather than searched, so whether a cell has drifted from it has a
+#: definite answer.
+DECLARED_FINETUNE: Final = Finetune()
 
 
 # --- §4.5 Schedule, val and tuning --------------------------------------------
@@ -570,19 +610,34 @@ class LandformConfig(Frozen):
         return landform_arms.get(self.arm).trains == "encoder+head"
 
     @property
+    def trains_under(self) -> Linear | Upernet | Unet | Finetune:
+        """The group whose optimizer, weight decay, batch and epochs this cell trains under: its
+        head recipe, or §4.3's :attr:`finetune` for B3, which shares §4.2's decoder only."""
+        return self.finetune if self.fine_tunes else self.recipe
+
+    @property
+    def cell_schedule(self) -> Schedule:
+        """The schedule this cell trains under: §4.5's shared group, or for B3 §4.3's own warmup,
+        decay and val reads with no step floor (it runs at 100% only)."""
+        if not self.fine_tunes:
+            return self.schedule
+        f = self.finetune
+        return Schedule(step_floor=1, warmup_frac=f.warmup_frac, decay=f.decay,
+                        val_reads=f.val_reads)
+
+    @property
     def epochs(self) -> int:
-        """The cell's epochs: its head recipe's, or §4.3's 50 for the fine-tune (B3), which
-        shares §4.2's UperNet and batch but not its 40 epochs."""
-        return self.finetune.epochs if self.fine_tunes else self.recipe.epochs
+        """The cell's epochs: its head recipe's, or §4.3's 50 for the fine-tune (B3)."""
+        return self.trains_under.epochs
 
     @property
     def steps(self) -> int:
-        """This cell's run length under §4.5's floor — see :func:`steps`."""
+        """This cell's run length under its floor — see :func:`steps`."""
         return steps(
             epochs=self.epochs,
-            batch_size=self.recipe.batch_size,
+            batch_size=self.trains_under.batch_size,
             n_train=self.train_tiles,
-            floor=self.schedule.step_floor,
+            floor=self.cell_schedule.step_floor,
         )
 
     # --- serialization and the hash, through Task 1's functions

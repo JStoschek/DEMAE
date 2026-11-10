@@ -22,8 +22,11 @@ that have nothing to do with the comparison, and §4.3 asks for a bar that is no
 
 ## Precision
 
-fp32, as the linear probe trains (#197 review). A7 ran bf16 under Task 1's head recipe; the run
-record says fp32 so a reader comparing B7's seconds per step against A7's sees why.
+bf16 autocast, as A7 trained under Task 1's head recipe (#197 decisions): B7 is A7's UNet, §8
+priced its ~298 h from A7's bf16 step time, and B3, which C3b sets it against, runs bf16. CPU
+drops it to fp32, as it does for B3, and the run record says which was declared and which used.
+The #197 review's fp32 ruling was about the linear probe and stays there. AdamW, wd 0.05 and
+torch's default output init are A7's, unchanged.
 """
 
 from __future__ import annotations
@@ -73,13 +76,19 @@ class ScratchForward:
 
     module: Any
     device: str
+    #: The declared precision: the trunk runs under :func:`benchmark.train._autocast`, a no-op
+    #: where :func:`benchmark.train.precision_on` says the box cannot honour it. ``fp32`` (the
+    #: default) is no autocast at all.
+    precision: str = "fp32"
 
     def logits(self, raw: np.ndarray):
         import torch
 
         raw = np.asarray(raw)
         image, _ = unet.condition(raw.astype(np.float32), raw, land_mask(raw))
-        return self.module(torch.from_numpy(image).unsqueeze(1).to(self.device))
+        with train._autocast(self.device, self.precision):
+            out = self.module(torch.from_numpy(image).unsqueeze(1).to(self.device))
+        return out.float()
 
 
 def train_unet(
@@ -117,7 +126,7 @@ def train_unet(
     module = built.module.to(device)
     expected = trunk_parameters()
     train.assert_everything_trains(module, expected=expected)
-    forward = ScratchForward(module, device)
+    forward = ScratchForward(module, device, precision=recipe.precision)
     optimizer = optimizer_for(
         cfg, train.parameter_groups(module, weight_decay=recipe.weight_decay), lr=lr
     )
@@ -200,4 +209,6 @@ def train_unet(
         extractor=None,
         precision=None,
         forward=forward,
+        precision_declared=recipe.precision,
+        precision_used=train.precision_on(device, recipe.precision),
     )

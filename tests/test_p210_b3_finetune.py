@@ -1,10 +1,11 @@
 """B3 under `run --task landform`: R5 unfrozen with §4.2's UperNet, §4.3's recipe as given (#210).
 
-**Seam 1** is :func:`benchmark.launch.main`, on #206's fixture box with #208's UperNet line. A B3
-cell fine-tunes a small trainable stand-in for the encoder (named the way timm names a ViT, so
-the decay ladder has real layers to climb) together with the UperNet, and appends rows to the
+**Seam 1** is :func:`benchmark.launch.main`, on #206's fixture box with no recipe lines at all.
+A B3 cell fine-tunes a small trainable stand-in for the encoder (named the way timm names a ViT,
+so the decay ladder has real layers to climb) together with the UperNet, and appends rows to the
 same parquet. B3 is refused at any rung but 100%, under any recipe but §4.3's, and as a tuning
-arm.
+arm. Its batch, weight decay and schedule are its own declared recipe's, not B6's frozen UperNet
+line's, so a B6 line moving moves nothing about B3 (#197 decisions).
 
 **Below the seam**, as the spec allows: the per-layer learning rates, which the command cannot
 show. The expected values are written out as literals from §4.3's three numbers (lr 1e-4, 0.75
@@ -103,6 +104,10 @@ def test_b3_is_refused_at_any_rung_but_100_percent(rung, capsys):
     ("finetune.head_lr", "1e-4"),
     ("finetune.epochs", "30"),
     ("finetune.precision", '"fp32"'),
+    ("finetune.batch_size", "32"),
+    ("finetune.weight_decay", "0.1"),
+    ("finetune.warmup_frac", "0.1"),
+    ("finetune.val_reads", "5"),
 ])
 def test_a_b3_cell_under_any_recipe_but_section_4_3_s_is_refused(knob, value, capsys):
     """The literature recipe is used as given (#196): no knob of it moves, by `--set` or file."""
@@ -135,13 +140,14 @@ from tests.test_p206_linear_probe_cell import (  # noqa: E402,F401  (fixtures)
     corpus,
 )
 
-#: §4.2's UperNet at test scale, frozen as B6's line at 100%: batch 8 over the fixture's 8-tile
-#: floor is one step an epoch, so §4.3's 50 epochs are 50 steps. 32 channels keep it cheap.
-UPERNET_TEST = [
-    "--set", "upernet.batch_size=8",
-    "--set", "upernet.epochs=5",
-    "--set", "upernet.channels=32",
-]
+#: §4.2's decoder at test scale: 32 channels keep it cheap. B3 reads only the decoder off the
+#: ``upernet`` group; its batch, weight decay and schedule are ``finetune``'s.
+UPERNET_TEST = ["--set", "upernet.channels=32"]
+#: §4.3's recipe at test scale: batch 8 over the fixture's 6 train tiles is one step an epoch,
+#: so the 50 epochs are 50 steps. The declared recipe is patched to match (:func:`flags`), since
+#: any other ``finetune`` value is refused.
+TEST_FINETUNE = Finetune(batch_size=8)
+FINETUNE_TEST = ["--set", "finetune.batch_size=8"]
 B3_STEPS = 50
 WIDTH = arms.ENCODERS["demae-r5"].width
 
@@ -217,12 +223,14 @@ def trainable(monkeypatch):
 
 
 @pytest.fixture
-def flags(box, corpus):
-    """#206's box with B6's UperNet line at 100%, the decoder B3 must share."""
-    argv = [*_flags(box, corpus), *UPERNET_TEST]
-    cfg = build_config(arm="B6", head="upernet", overrides=argv[2:][1::2])
-    landform_recipes.write_line(cfg, lr=3e-4, scores={"0.0003": 0.5})
-    return argv
+def flags(box, corpus, monkeypatch):
+    """#206's box with no recipe lines at all: B3 reads none (#197 decisions), and §4.3's
+    declared recipe at test scale."""
+    from benchmark import landform_config
+
+    (box / "task2" / landform_recipes.RECIPE_LINES_NAME).unlink(missing_ok=True)
+    monkeypatch.setattr(landform_config, "DECLARED_FINETUNE", TEST_FINETUNE)
+    return [*_flags(box, corpus), *UPERNET_TEST, *FINETUNE_TEST]
 
 
 def b3(*argv: str) -> list[str]:
@@ -253,8 +261,13 @@ def test_a_b3_cell_fine_tunes_encoder_and_upernet_and_appends_rows(box, flags, t
     assert record["cell"]["arm"] == "B3"
     assert record["training"]["steps"] == B3_STEPS
     assert record["training"]["kind"] == "finetune"
-    assert record["finetune"] == {"lr": 1e-4, "layer_decay": 0.75, "head_lr": 1e-3,
-                                  "epochs": 50, "precision": "bf16"}
+    assert record["finetune"] == {
+        "lr": 1e-4, "layer_decay": 0.75, "head_lr": 1e-3, "epochs": 50, "precision": "bf16",
+        "optimizer": "adamw", "batch_size": 8, "weight_decay": 0.05, "warmup_frac": 0.05,
+        "decay": "cosine", "val_reads": 10,
+    }
+    assert record["recipe_line"] is None, "B3 trains under no frozen line"
+    assert not (box / "task2" / landform_recipes.RECIPE_LINES_NAME).exists()
     assert record["training"]["precision_declared"] == "bf16"
     assert record["training"]["precision_used"] == "fp32", "CPU drops bf16 and says so"
 
@@ -276,12 +289,6 @@ def test_a_b3_cell_fine_tunes_encoder_and_upernet_and_appends_rows(box, flags, t
     assert torch.equal(now["pos_embed"], start["pos_embed"])
     assert True in trainable.grads and False in trainable.grads, \
         "a graph through the encoder in training, none in val and test"
-
-
-def test_a_b3_cell_whose_decoder_drifts_from_the_upernet_line_is_refused(box, flags, trainable):
-    """'Same decoder, same layers' (§4.3) is B6's frozen UperNet line at 100%, not a copy."""
-    with pytest.raises(ValueError, match="recipe drifted from its frozen line.*upernet.channels"):
-        launch.main([*b3("--dry-run"), *flags, "--set", "upernet.channels=64"])
 
 
 def test_the_optimizer_steps_each_layer_at_its_own_lr_under_the_one_cosine(
@@ -313,3 +320,119 @@ def test_the_optimizer_steps_each_layer_at_its_own_lr_under_the_one_cosine(
         assert factor <= 1.0 + 1e-12
         for key, lr in step.items():
             assert lr == pytest.approx(peak[key] * factor, rel=1e-9, abs=1e-15), key
+
+
+# --- #197 decisions: B3's batch, weight decay and schedule are its own ------------------
+
+
+def test_b3_declares_its_own_batch_weight_decay_and_schedule():
+    """§4.3's recipe states every number B3 trains under: effective batch 64, wd 0.05, 50 epochs,
+    5% warmup then cosine to zero, val read ten times. 100% only, so 50 x ceil(20,000 / 64)."""
+    from benchmark.landform_config import LandformConfig
+
+    cfg = LandformConfig(arm="B3")
+    assert cfg.trains_under is cfg.finetune
+    assert (cfg.finetune.batch_size, cfg.finetune.weight_decay) == (64, 0.05)
+    assert (cfg.finetune.warmup_frac, cfg.finetune.decay, cfg.finetune.val_reads) == (
+        0.05, "cosine", 10)
+    assert cfg.steps == 15_650
+
+
+def test_moving_b6_s_upernet_recipe_or_the_shared_schedule_moves_nothing_about_b3():
+    """A re-tune of B6 (its batch, weight decay, epochs) or an amendment to §4.5's shared
+    schedule would once have moved B3 with it. §4.3's recipe is used as given (#196)."""
+    from benchmark.landform_config import LandformConfig
+
+    plain = LandformConfig(arm="B3")
+    moved = build_config(arm="B3", overrides=[
+        "upernet.batch_size=16", "upernet.weight_decay=0.1", "upernet.epochs=20",
+        "schedule.warmup_frac=0.2", "schedule.val_reads=5", "schedule.step_floor=40000",
+    ])
+    assert moved.trains_under == plain.trains_under
+    assert moved.cell_schedule == plain.cell_schedule
+    assert moved.steps == plain.steps == 15_650
+
+
+def test_a_b3_cell_trains_its_own_recipe_whatever_b6_s_frozen_line_says(
+    box, flags, trainable, monkeypatch
+):
+    """B6's UperNet line at 100% frozen under a moved batch, weight decay and schedule: B3 runs
+    beside it at §4.3's 50 steps of batch 8 (test scale), wd 0.05, ten val reads."""
+    moved = ["--set", "upernet.batch_size=4", "--set", "upernet.weight_decay=0.1",
+             "--set", "upernet.epochs=5", "--set", "schedule.val_reads=5"]
+    b6 = build_config(arm="B6", head="upernet", overrides=[*flags, *moved][2:][1::2])
+    landform_recipes.write_line(b6, lr=3e-4, scores={"0.0003": 0.5})
+    decays: set[float] = set()
+
+    class SpyAdamW(torch.optim.AdamW):
+        def step(self, closure=None):
+            decays.update(g["weight_decay"] for g in self.param_groups)
+            return super().step(closure)
+
+    monkeypatch.setattr(torch.optim, "AdamW", SpyAdamW)
+    assert launch.main([*b3(), *flags, *moved]) == 0
+    (record,) = records_of(box)
+    assert record["recipe_line"] is None
+    assert record["training"]["steps"] == B3_STEPS
+    assert len(record["training"]["val_reads"]) == 10
+    assert decays == {0.0, 0.05}
+
+
+def test_gradient_accumulation_gives_the_whole_batch_s_gradient():
+    """Below the seam: weighted CE ignoring 255 over a batch of 8, in one piece and in four
+    pieces of 2. Each piece's summed loss over the whole batch's weight total is the batch
+    mean's share, so the accumulated gradient is the unsplit one."""
+    torch.manual_seed(0)
+    module = torch.nn.Conv2d(1, 10, 3, padding=1)
+    raw = np.random.default_rng(0).normal(size=(8, 6, 6)).astype(np.float32)
+    label = np.random.default_rng(1).integers(0, 10, size=(8, 6, 6)).astype(np.uint8)
+    label[:3] = 255                     # pieces with no valid pixel at all
+    label[5, :2] = 255
+    weights = torch.linspace(0.5, 2.0, 10)
+
+    def logits(piece):
+        return module(torch.from_numpy(piece).unsqueeze(1))
+
+    grads = []
+    for micro in (0, 2):
+        module.zero_grad()
+        landform_train.accumulate(logits, raw, label, weights=weights, ignore=255,
+                                  micro_batch=micro, device="cpu")
+        grads.append([p.grad.clone() for p in module.parameters()])
+    module.zero_grad()
+    target = torch.from_numpy(label.astype(np.int64))
+    torch.nn.functional.cross_entropy(logits(raw), target, weight=weights,
+                                      ignore_index=255).backward()
+    whole = [p.grad.clone() for p in module.parameters()]
+    for got in grads:
+        for g, w in zip(got, whole):
+            assert torch.allclose(g, w, atol=1e-6)
+
+
+def test_a_micro_batched_b3_cell_steps_once_per_effective_batch_of_the_same_size(
+    box, flags, trainable, monkeypatch
+):
+    """`runtime.micro_batch` is memory, not recipe: four pieces of 2 per optimizer step, the
+    same 50 steps of 8 tiles, the same config hash."""
+    steps: list[int] = []
+
+    class SpyAdamW(torch.optim.AdamW):
+        def step(self, closure=None):
+            steps.append(len(trainable.grads))
+            return super().step(closure)
+
+    sizes: list[int] = []
+    real = TrainableExtractor.extract
+
+    def extract(self, raw_i16, valid_mask, **kw):
+        if kw.get("grad"):
+            sizes.append(len(raw_i16))
+        return real(self, raw_i16, valid_mask, **kw)
+
+    monkeypatch.setattr(TrainableExtractor, "extract", extract)
+    monkeypatch.setattr(torch.optim, "AdamW", SpyAdamW)
+    assert launch.main([*b3(), *flags, "--set", "runtime.micro_batch=2"]) == 0
+    (record,) = records_of(box)
+    assert len(steps) == B3_STEPS == record["training"]["steps"]
+    assert sizes == [2] * (4 * B3_STEPS)
+    assert record["config_hash"] == build_config(arm="B3", overrides=flags[2:][1::2]).config_hash

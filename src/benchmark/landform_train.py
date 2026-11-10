@@ -294,7 +294,7 @@ class Fitted:
     #: Encoder weights this pass trained: 0 for a frozen encoder, R5's less its sin-cos for B3.
     encoder_trained: int = 0
     #: The precision the head trained in, as declared and as this box could honour it
-    #: (:func:`benchmark.train.precision_on`). The probes train in fp32; B3 declares bf16.
+    #: (:func:`benchmark.train.precision_on`). The probes train in fp32; B3 and B7 declare bf16.
     precision_declared: str = "fp32"
     precision_used: str = "fp32"
 
@@ -416,21 +416,50 @@ def finetune_groups(encoder, head, recipe, *, weight_decay: float) -> list[dict]
 
 
 def optimizer_for(cfg: LandformConfig, groups, *, lr: float):
-    """The head recipe's optimizer over ``groups``: AdamW, the one every Task 2 recipe names.
+    """The cell's optimizer over ``groups``: AdamW, the one every Task 2 recipe names.
 
     The recipe's ``optimizer`` is read rather than stated beside a hard-coded AdamW, so a line
     frozen under another name is refused here instead of trained under AdamW and recorded as
-    whatever it said (#197 review).
+    whatever it said (#197 review). B3's is §4.3's own (:attr:`LandformConfig.trains_under`).
     """
     import torch
 
-    recipe = cfg.recipe
+    recipe = cfg.trains_under
+    group = "finetune" if cfg.fine_tunes else cfg.head
     if recipe.optimizer != "adamw":
         raise ValueError(
-            f"{cfg.head}.optimizer {recipe.optimizer!r}: Task 2's heads train under AdamW "
+            f"{group}.optimizer {recipe.optimizer!r}: Task 2's heads train under AdamW "
             f"(Task 1's §4.1 optimizer block), and no other optimizer is built"
         )
     return torch.optim.AdamW(groups, lr=lr, weight_decay=recipe.weight_decay)
+
+
+def accumulate(logits: Callable[[np.ndarray], Any], raw: np.ndarray, label: np.ndarray, *,
+               weights, ignore: int, micro_batch: int, device: str) -> None:
+    """One optimizer step's backward: weighted cross-entropy ignoring ``ignore``, over the batch
+    in pieces of ``micro_batch`` tiles (0, or the batch or more, is one piece).
+
+    Task 1's accumulation rule (:func:`benchmark.train.micro_batches`, #159) for a weighted mean:
+    the batch's loss is the sum of each valid pixel's weighted NLL over the sum of their
+    weights, so each piece backs its own sum over the **whole batch's** weight total. The
+    accumulated gradient is then the unsplit batch's, exactly in arithmetic (float summation
+    order aside), however the ignored pixels fall across the pieces. A piece with no valid pixel
+    contributes nothing and runs no forward.
+    """
+    import torch
+
+    total = float(weights.cpu()[torch.from_numpy(label[label != ignore].astype(np.int64))].sum())
+    size = len(raw) if micro_batch <= 0 else micro_batch
+    for start in range(0, len(raw), size):
+        piece = label[start:start + size]
+        if not bool((piece != ignore).any()):
+            continue
+        target = torch.from_numpy(piece.astype(np.int64)).to(device)
+        loss = torch.nn.functional.cross_entropy(
+            logits(raw[start:start + size]), target, weight=weights, ignore_index=ignore,
+            reduction="sum",
+        )
+        (loss / total).backward()
 
 
 def _to(value, device: str):
@@ -469,7 +498,8 @@ def _val_miou(forward: _Forward, cfg: LandformConfig, val: Sequence[str], index:
 
     total = np.zeros(CLASSES * CLASSES, dtype=np.int64)
     forward.module.eval()
-    if getattr(forward, "precision", None) is not None:  # B3's encoder reads val in eval
+    # B3's encoder reads val in eval. B7's ScratchForward has a precision too, and no encoder.
+    if isinstance(forward, _Forward) and forward.precision is not None:
         forward.extractor.encoder(encoder_name=forward.encoder).eval()
     with torch.no_grad():
         for raw, label in _loader(cfg, [(t, 0) for t in val], index, batch_size):
@@ -512,7 +542,10 @@ def train_head(
     started = time.perf_counter()
     arm = landform_arms.get(cfg.arm)
     encoder = arms.ENCODERS[arm.encoder]
-    recipe = cfg.recipe
+    # B3's optimizer, batch and schedule are §4.3's own; a frozen head's are its recipe's and
+    # §4.5's (#197 decisions).
+    recipe = cfg.trains_under
+    plan = cfg.cell_schedule
     device = train.resolve_device(cfg)
     ignore = cfg.geomorphon.ignore_label
     weights = torch.tensor(geomorphon_pass.committed_class_weights(cfg), dtype=torch.float32,
@@ -551,11 +584,10 @@ def train_head(
     # scales every group's; a frozen head's one lr is the curve itself, as Task 1's was.
     schedule = train.Cosine(
         peak_lr=1.0 if fine_tunes else lr, total_steps=steps,
-        warmup_steps=max(1, int(round(steps * cfg.schedule.warmup_frac))),
+        warmup_steps=max(1, int(round(steps * plan.warmup_frac))),
     )
     peaks = [group["lr"] for group in optimizer.param_groups]
-    reads_at = set(val_read_steps(steps, cfg.schedule.val_reads if val_reads is None
-                                  else val_reads))
+    reads_at = set(val_read_steps(steps, plan.val_reads if val_reads is None else val_reads))
     index = TileStore.index_for(cfg.paths.corpus_dir, [*tiles.train, *tiles.val])
 
     rng = np.random.default_rng(cfg.seed)
@@ -593,13 +625,11 @@ def train_head(
         # A batch of all-ignored pixels teaches nothing (and CE's mean over it is NaN). It takes
         # no optimizer step, since AdamW would still decay the weights and advance its moments,
         # but it keeps its step: the count and the cosine stay those of the cell's schedule.
+        # `runtime.micro_batch` splits it for memory, outside the recipe (#197 decisions).
         if bool((label != ignore).any()):
             optimizer.zero_grad(set_to_none=True)
-            target = torch.from_numpy(label.astype(np.int64)).to(device)
-            loss = torch.nn.functional.cross_entropy(
-                forward.logits(raw), target, weight=weights, ignore_index=ignore
-            )
-            loss.backward()
+            accumulate(forward.logits, raw, label, weights=weights, ignore=ignore,
+                       micro_batch=cfg.runtime.micro_batch, device=device)
             optimizer.step()
         step += 1
         train_seconds += mark() - tick
@@ -679,7 +709,8 @@ def score_test(cfg: LandformConfig, fitted: Fitted, tiles: CellTiles) -> list[Sc
     fitted.module.eval()
     order = iter(ids)
     with torch.no_grad():
-        for raw, label in _loader(cfg, [(t, 0) for t in ids], index, cfg.recipe.batch_size):
+        for raw, label in _loader(cfg, [(t, 0) for t in ids], index,
+                                  cfg.trains_under.batch_size):
             pred = forward.logits(raw).argmax(1).cpu().numpy()
             for i in range(len(pred)):
                 tile_id = next(order)

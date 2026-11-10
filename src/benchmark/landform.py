@@ -132,7 +132,8 @@ class LandformResolution:
     checkpoint: Resolved | None
     inputs: tuple[Resolved, ...]
     #: This cell's frozen recipe line, already checked against the cell, or ``None`` while
-    #: #207's tuning pass has not frozen it. ``run`` refuses the ``None``.
+    #: #207's tuning pass has not frozen it. ``run`` refuses the ``None``, except for B3, which
+    #: trains under §4.3's declared recipe and reads no line (#197 decisions).
     recipe_line: landform_recipes.RecipeLine | None = None
     #: ``run --tune``: this resolution is §4.5's tuning pass for the cell's head and rung (#207).
     tuning: bool = False
@@ -179,6 +180,9 @@ class LandformResolution:
                     f"{landform_tune.VAL_READS} val reads; the winner is frozen as this head's "
                     f"line at this rung (§4.5)"
                 )
+            elif cfg.fine_tunes:
+                block.append(f"{'recipe line':<16} none read: {cfg.arm} trains under §4.3's "
+                             f"declared recipe (#197 decisions)")
             else:
                 block.append(
                     self.recipe_line.line() if self.recipe_line is not None else
@@ -213,12 +217,17 @@ class LandformResolution:
                     f"a core row; it prints beside the core grid"
                 )
         recipe = cfg.recipe
-        schedule = cfg.schedule
+        schedule = cfg.cell_schedule
         lines += [
             f"{'trains':<16} {self.arm.trains} — the {cfg.head} head",
             f"{'schedule':<16} {cfg.steps:,} steps = {cfg.epochs} epochs x "
-            f"ceil(max({cfg.train_tiles:,} tiles, {schedule.step_floor:,} floor) / batch "
-            f"{recipe.batch_size}); {schedule.warmup_frac:.0%} warmup then {schedule.decay} to "
+            + (f"ceil({cfg.train_tiles:,} tiles / batch {cfg.trains_under.batch_size}"
+               + (f", micro-batches of {cfg.runtime.micro_batch}"
+                  if 0 < cfg.runtime.micro_batch < cfg.trains_under.batch_size else "")
+               + ")" if cfg.fine_tunes else
+               f"ceil(max({cfg.train_tiles:,} tiles, {schedule.step_floor:,} floor) / batch "
+               f"{recipe.batch_size})")
+            + f"; {schedule.warmup_frac:.0%} warmup then {schedule.decay} to "
             f"zero; val read {schedule.val_reads}x, best val mIoU kept",
             landform_recipes.finetune_line(cfg) if cfg.fine_tunes else
             f"{'lr':<16} "
@@ -305,6 +314,8 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
             path=str(landform_recipes.path_for(cfg)),
             md5=artifacts.file_md5(landform_recipes.path_for(cfg)),
             absent_note="not frozen yet (`run --task landform --tune`, #207)",
+            # B3 trains under §4.3's declared recipe and reads no line (#197 decisions).
+            required=not cfg.fine_tunes,
         ),
     )
 
@@ -360,7 +371,9 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
     # §4.5's frozen line, checked here rather than in `run`, for Task 1's reason: a pre-flight
     # that prints a drifted recipe as a normal one is worse than none. An absent line is said,
     # and `run` refuses it. A tuning pass has no line yet: it is what writes one.
-    recipe_line = landform_recipes.lookup(cfg) if args.verb == "run" and not tuning else None
+    # B3 reads none: its batch, weight decay and schedule are §4.3's own (#197 decisions).
+    recipe_line = (landform_recipes.lookup(cfg)
+                   if args.verb == "run" and not tuning and not cfg.fine_tunes else None)
     if recipe_line is not None:
         landform_recipes.check(cfg, recipe_line)
     inputs = (*_inputs(cfg), *_ladders(cfg, args.verb))
@@ -433,7 +446,7 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     """
     cfg = resolution.config
     line = resolution.recipe_line
-    if line is None:
+    if line is None and not cfg.fine_tunes:
         landform_recipes.line_for(cfg)  # raises, naming #207
     params, spec_item, checkpoint = _preflight_encoder(resolution)
     encoder = resolution.encoder
@@ -446,9 +459,10 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
     for text in (
         *_encoder_lines(cfg, encoder, checkpoint, params, spec_item),
-        f"recipe line {line.head} @ {line.rung}: "
-        + ("its decoder, batch, weight decay and schedule, as frozen; §4.3's lrs, not its "
-           f"lr {line.lr:g}" if cfg.fine_tunes else f"lr {line.lr:g}, the recipe as frozen"),
+        (f"recipe: §4.3's declared fine-tune, batch {cfg.finetune.batch_size}, weight decay "
+         f"{cfg.finetune.weight_decay:g}, its own schedule; no frozen line read"
+         if cfg.fine_tunes else
+         f"recipe line {line.head} @ {line.rung}: lr {line.lr:g}, the recipe as frozen"),
         f"ladder {cfg.ladder} md5 {ladder.md5}, as its coverage report quotes",
         f"write-once: attempt {attempt}"
         + (f", a rerun for {rerun_reason} (L20)" if rerun_reason else ", a new cell"),
@@ -588,7 +602,7 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
 
     line = found["line"]
     fitted = TRAINERS[cfg.head]()(
-        cfg, lr=line.lr, tiles=tiles, on_read=lambda read: print(f"{'':<16} {read.line()}")
+        cfg, lr=cfg.finetune.lr if cfg.fine_tunes else line.lr, tiles=tiles, on_read=lambda read: print(f"{'':<16} {read.line()}")
     )
     # B3 trains R5 too: its trainable count is the encoder's weights it moved plus the head's.
     trainable = fitted.encoder_trained + fitted.parameters
@@ -628,7 +642,7 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
         "extractor_spec_md5": found["spec_md5"],
         "labels": labels,
         "ladder_md5": found["ladder_md5"],
-        "recipe_line": line.to_dict(),
+        "recipe_line": None if line is None else line.to_dict(),
         **({"finetune": group_to_dict(cfg.finetune)} if cfg.fine_tunes else {}),
         "inputs": {item.key: item.to_dict() for item in resolution.inputs},
         "parameters": {
@@ -670,8 +684,9 @@ def precision_line(precision: dict) -> str:
     """ADR-0012 §6's measured agreement, as the run record carries it, with #134's verdict.
 
     Every encoder measures its own figure on its run's first batch (:meth:`benchmark.extract.
-    Extractor.precision_agreement`), and the run record keeps it. B9's is the one Amendment 2
-    leaves unmeasured until its first run, so this line is where that number is first read.
+    Extractor.precision_agreement`), and the run record keeps it. B9's falls below the bar
+    (0.937 on MPS, #211) and B9 runs bf16 regardless: ADR-0012 Amendment 3 makes this line, the
+    row's columns and the results memo the disclosure that costs.
     """
     verdict = ("immaterial" if precision["immaterial"]
                else "BELOW the bar: the declared compute dtype is not immaterial for this encoder")
