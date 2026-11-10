@@ -136,7 +136,8 @@ def train_unet(
     sampler = cycling_batches(tiles.train, recipe.batch_size, rng)
     items = [(t, int(rng.integers(DIHEDRAL))) for _ in range(steps) for t in next(sampler)]
 
-    directory = (Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.rung}-seed{cfg.seed}"
+    directory = (Path(cfg.runtime.checkpoint_dir)
+                 / f"{cfg.arm}-{cfg.head}-{cfg.rung}-seed{cfg.seed}"
                  if checkpoint_dir is None else Path(checkpoint_dir))
     directory.mkdir(parents=True, exist_ok=True)
     best_path = directory / "best.pt"

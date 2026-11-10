@@ -143,6 +143,9 @@ def test_a_b7_cell_trains_from_scratch_and_appends_rows_and_a_run_record(
     assert record["training"]["kind"] == "unet"
     assert record["training"]["steps"] == STEPS
     assert len(record["training"]["val_reads"]) == 10
+    # One naming rule for every Task 2 cell's checkpoint directory, the head included (#197 review).
+    assert record["training"]["checkpoint"] == str(
+        b7_lines / "heads" / "B7-unet-1%-seed0" / "best.pt")
 
 
 @pytest.fixture
