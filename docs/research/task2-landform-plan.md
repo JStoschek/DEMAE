@@ -339,8 +339,8 @@ rungs, on §4.5's schedule; lr is tuned per rung (§4.5) over
 through the ADR-0012 extractor and the probe reads its `output`.
 The encoder runs at its declared compute dtype; the probe itself (LayerNorm and
 the 1x1 conv) trains in fp32, and the run record says so. *(#197 decisions,
-2026-11-10: this fp32 ruling, from #197's review, is the linear probe's and
-stays here. It does not extend to B7, which trains bf16 like A7 (§4.3).)*
+2026-11-10: this fp32 ruling, from #197's review, covers the frozen-encoder
+heads (this one and §4.2's UperNet). It does not extend to B7, which trains bf16 like A7 (§4.3).)*
 Inline is what keeps the dihedral augmentation possible: the
 feature of a rotated tile is not the rotated feature of the tile, so a cache
 would have to hold all eight orientations or drop the augmentation. 3 seeds
@@ -376,7 +376,11 @@ batch, length and schedule are ours and lr is tuned. The decoder and layers
 are theirs.
 
 The encoder runs inline and the head reads the extractor's `intermediates` at
-those indices; nothing is cached (#184). A cache would cost 32.5 GB per ViT-B
+those indices; nothing is cached (#184). As in §4.1, the encoder runs at its
+declared compute dtype and the head trains in fp32, and the run record says so.
+*(#197 decisions, 2026-11-10: this records what #208 built. The fp32 ruling
+covers both frozen-encoder heads, but not B3 or B7, which train bf16, §4.3.)*
+A cache would cost 32.5 GB per ViT-B
 encoder (27k tiles x 4 layers x 196 tokens x 768 x fp16), ~146 GB for five
 frozen encoders, against roughly an hour of GPU forward for the whole UperNet
 and linear-probe grid run inline.
@@ -422,7 +426,7 @@ and linear-probe grid run inline.
   precision declared and the precision used. B7 is A7's UNet, §8's ~298 h was
   priced from A7's bf16 step time, and B3, which C3b sets against B7, runs
   bf16. AdamW, wd 0.05 and torch's default output init are A7's, unchanged.
-  The fp32 ruling in §4.1 is the linear probe's alone.
+  The fp32 ruling in §4.1 and §4.2 covers only the frozen-encoder heads.
 
 ### 4.4 Order of operations
 
