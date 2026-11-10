@@ -801,6 +801,26 @@ def test_the_reference_tensor_is_fp32_whatever_the_compute_dtype(tmp_path, vits_
     assert all(block.dtype == torch.float32 for block in out.intermediates)
 
 
+def test_only_a_caller_that_asks_for_grad_gets_a_graph_through_the_encoder(
+    tmp_path, vits_checkpoint, tile
+):
+    """Task 2's B3 fine-tunes the encoder through the contract (#210); every frozen consumer
+    still gets tensors with no graph, and the two calls return the same numbers."""
+    import torch
+
+    raw, valid = tile
+    extractor = _extractor(tmp_path, vits_checkpoint)
+    frozen = extractor.extract(raw, valid, arm=ARM)
+    assert not frozen.output.requires_grad
+    graph = extractor.extract(raw, valid, arm=ARM, grad=True)
+    assert torch.equal(graph.output.detach(), frozen.output)
+    graph.intermediates[3].sum().backward()
+    model = extractor.encoder(ARM)
+    assert model.blocks[0].attn.qkv.weight.grad is not None
+    assert model.blocks[3].mlp.fc2.weight.grad is not None
+    assert model.blocks[11].attn.qkv.weight.grad is None, "block 12 is past the tap"
+
+
 def test_a_single_tile_and_a_batch_are_the_same_call(tmp_path, vits_checkpoint, tile):
     import torch
 

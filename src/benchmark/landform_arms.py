@@ -53,6 +53,8 @@ class LandformArm:
     trains: str
     #: What the resolution line says this arm is.
     what: str
+    #: The rungs this arm runs at; every rung unless the plan budgets fewer (B3: 100% only).
+    rungs: tuple[str, ...] = ("1%", "10%", "100%")
 
     def __post_init__(self) -> None:
         if self.encoder is not None and self.encoder not in arms.ENCODERS:
@@ -64,6 +66,8 @@ class LandformArm:
             raise ValueError(f"arm {self.name}: heads {self.heads} must be drawn from {HEADS}")
         if self.trains not in TRAINS:
             raise ValueError(f"arm {self.name}: trains {self.trains!r} is not one of {TRAINS}")
+        if not self.rungs or set(self.rungs) - {"1%", "10%", "100%"}:
+            raise ValueError(f"arm {self.name}: rungs {self.rungs} must be drawn from §3.3's")
 
 
 def _arm(name: str, **kwargs) -> tuple[str, LandformArm]:
@@ -135,6 +139,15 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="everything",
             what="Task 1's A7 UNet on one channel, from scratch at B2's batch and epochs, "
             "tuning itself — C2's and C3's bar (§4.3)",
+        ),
+        _arm(
+            "B3",
+            encoder="demae-r5",
+            heads=("upernet",),
+            trains="encoder+head",
+            rungs=("100%",),
+            what="DEMAE R5 fine-tuned, all weights, with §4.2's UperNet under §4.3's literature "
+            "recipe, untuned — C3b, against B7 at 100%",
         ),
     ]
 )

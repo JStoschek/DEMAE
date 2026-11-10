@@ -45,8 +45,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
+from . import landform_arms
 from .config import group_to_dict
-from .landform_config import LandformConfig
+from .landform_config import Finetune, LandformConfig
 
 #: The committed file, in Task 2's artifacts directory.
 RECIPE_LINES_NAME: Final = "recipe_lines.json"
@@ -107,6 +108,54 @@ def assert_tuning_arm(arm: str | None, head: str, *, said: str = "this pass was 
             f"the {head} recipe is shared by every arm at a rung, so only "
             + ("the neutral encoder B6" if want == "B6" else "B7, on itself,")
             + " may choose it"
+        )
+
+
+def fine_tunes(arm: str) -> bool:
+    """Whether ``arm`` trains its encoder (B3), and so trains under §4.3's recipe, not a tuned lr."""
+    return landform_arms.get(arm).trains == "encoder+head"
+
+
+def finetune_line(cfg: LandformConfig) -> str:
+    """The resolution's lr line for a fine-tuned cell: §4.3's three numbers, said as given."""
+    f = cfg.finetune
+    return (
+        f"{'lr':<16} encoder {f.lr:g} with {f.layer_decay:g} layer-wise decay, head lr "
+        f"{f.head_lr:g}, {f.epochs} epochs, {f.precision} — §4.3's literature recipe, used as "
+        f"given and not tuned (#196); the frozen {cfg.head} line supplies the decoder, batch, "
+        f"weight decay and schedule, not its lr"
+    )
+
+
+def assert_not_tuned(arm: str | None) -> None:
+    """Refuse a tuning pass on the fine-tuned arm: §4.3's recipe is used as given (#196)."""
+    if arm in landform_arms.ARMS and fine_tunes(arm):
+        raise ValueError(
+            f"{arm} is not tuned: §4.3 fine-tunes under a literature recipe used as given, and "
+            f"#196 ruled it untuned because {arm} feeds only C3, at one rung. `--tune` is for "
+            f"the heads §4.5 tunes on {sorted(set(TUNING_ARMS.values()))}"
+        )
+
+
+def assert_literature_recipe(cfg: LandformConfig) -> None:
+    """Refuse a fine-tuned cell whose ``finetune`` group is not §4.3's, naming every knob moved.
+
+    §4.3's recipe is the one place B3's optimizer comes from: lr 1e-4 under 0.75 layer-wise
+    decay, head lr 1e-3, 50 epochs, bf16. It has no frozen line because nothing tuned it; the
+    declared :class:`benchmark.landform_config.Finetune` is the line.
+    """
+    declared = group_to_dict(Finetune())
+    now = group_to_dict(cfg.finetune)
+    moved = [
+        f"finetune.{knob} {now.get(knob)!r} (§4.3: {declared.get(knob)!r})"
+        for knob in sorted(set(declared) | set(now))
+        if now.get(knob) != declared.get(knob)
+    ]
+    if moved:
+        raise ValueError(
+            f"{cfg.arm} trains under §4.3's literature recipe, used as given and not tuned "
+            f"(#196), and this cell moves it: {'; '.join(moved)}. A different fine-tune recipe "
+            f"is an amendment to the plan, not a `--set`"
         )
 
 

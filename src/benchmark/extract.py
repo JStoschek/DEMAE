@@ -1508,11 +1508,16 @@ class Extractor:
     # --- ADR-0012's one call
 
     def extract(
-        self, raw_i16, valid_mask, *, arm: str | None = None, encoder_name: str | None = None
+        self, raw_i16, valid_mask, *, arm: str | None = None, encoder_name: str | None = None,
+        grad: bool = False,
     ) -> Features:
         """Raw int16 metres and a valid-pixel mask in; ADR-0012 §5's canonical layout out.
 
         Named by Task 1 arm or by registry encoder (``encoder_name``, #204), exactly one.
+
+        ``grad`` keeps the autograd graph through the encoder, for the one consumer that trains
+        it (Task 2's B3, #210). The contract is otherwise the same call: same normalization,
+        same taps, same layout. Every frozen consumer leaves it off and gets no graph.
 
         The compute dtype is :attr:`benchmark.config.Extract.compute_dtype` and the returned
         tensors are always fp32 — §6's reference — because a task that moves its compute dtype
@@ -1531,7 +1536,7 @@ class Extractor:
         tensor = torch.from_numpy(x).unsqueeze(1).to(self.device)
 
         compute = self.config.extract.compute_dtype
-        tokens, intermediates = self._forward(entry, model, tensor, dtype=compute)
+        tokens, intermediates = self._forward(entry, model, tensor, dtype=compute, grad=grad)
         if compute != self.spec.reference_dtype and entry.name not in self.precision:
             self.precision[entry.name] = self._measure_precision(entry, model, tensor, tokens)
 
@@ -1549,7 +1554,7 @@ class Extractor:
             cls=tokens[:, 0].float() if entry.has_cls else None,
         )
 
-    def _forward(self, entry: EncoderSpec, model, tensor, *, dtype: str):
+    def _forward(self, entry: EncoderSpec, model, tensor, *, dtype: str, grad: bool = False):
         """One pass, at the requested dtype, in the canonical ``(N, 1 + 196, D)`` sequence."""
         import torch
 
@@ -1561,7 +1566,7 @@ class Extractor:
             forward = _forward_terramind_backbone
         else:
             forward = _forward_blocks
-        with torch.no_grad():
+        with torch.enable_grad() if grad else torch.no_grad():
             if dtype == self.spec.reference_dtype:
                 return forward(model, tensor)
             with torch.autocast(torch.device(self.device).type, dtype=_torch_dtype(dtype)):

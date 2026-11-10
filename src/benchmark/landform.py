@@ -63,6 +63,7 @@ from . import (
 )
 from . import geomorphon as gm
 from .artifacts import Resolved
+from .config import group_to_dict
 from .landform_config import LandformConfig
 
 
@@ -205,10 +206,11 @@ class LandformResolution:
         schedule = cfg.schedule
         lines += [
             f"{'trains':<16} {self.arm.trains} — the {cfg.head} head",
-            f"{'schedule':<16} {cfg.steps:,} steps = {recipe.epochs} epochs x "
+            f"{'schedule':<16} {cfg.steps:,} steps = {cfg.epochs} epochs x "
             f"ceil(max({cfg.train_tiles:,} tiles, {schedule.step_floor:,} floor) / batch "
             f"{recipe.batch_size}); {schedule.warmup_frac:.0%} warmup then {schedule.decay} to "
             f"zero; val read {schedule.val_reads}x, best val mIoU kept",
+            landform_recipes.finetune_line(cfg) if cfg.fine_tunes else
             f"{'lr':<16} "
             + (f"{self.recipe_line.lr:g}, the frozen line for this head and rung (§4.5)"
                if self.recipe_line is not None
@@ -305,6 +307,7 @@ def _tuning_args(args: argparse.Namespace) -> argparse.Namespace:
     so the refusal is about the tuning arm and not about which heads that arm trains today.
     """
     head, arm = args.head, args.arm
+    landform_recipes.assert_not_tuned(arm)
     if head is None:
         if arm is None:
             raise ValueError(
@@ -342,6 +345,8 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
                 f"re-tuning is an amendment, whose first act is deleting that line"
             )
     arm = landform_arms.get(cfg.arm)
+    if cfg.fine_tunes:
+        landform_recipes.assert_literature_recipe(cfg)
     # §4.5's frozen line, checked here rather than in `run`, for Task 1's reason: a pre-flight
     # that prints a drifted recipe as a normal one is worse than none. An absent line is said,
     # and `run` refuses it. A tuning pass has no line yet: it is what writes one.
@@ -431,7 +436,9 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
     for text in (
         *_encoder_lines(cfg, encoder, checkpoint, params, spec_item),
-        f"recipe line {line.head} @ {line.rung}: lr {line.lr:g}, the recipe as frozen",
+        f"recipe line {line.head} @ {line.rung}: "
+        + ("its decoder, batch, weight decay and schedule, as frozen; §4.3's lrs, not its "
+           f"lr {line.lr:g}" if cfg.fine_tunes else f"lr {line.lr:g}, the recipe as frozen"),
         f"ladder {cfg.ladder} md5 {ladder.md5}, as its coverage report quotes",
         f"write-once: attempt {attempt}"
         + (f", a rerun for {rerun_reason} (L20)" if rerun_reason else ", a new cell"),
@@ -577,6 +584,8 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     fitted = TRAINERS[cfg.head]()(
         cfg, lr=line.lr, tiles=tiles, on_read=lambda read: print(f"{'':<16} {read.line()}")
     )
+    # B3 trains R5 too: its trainable count is the encoder's weights it moved plus the head's.
+    trainable = fitted.encoder_trained + fitted.parameters
     scored = landform_train.score_test(cfg, fitted, tiles)
     total = sum(tile.confusion for tile in scored)
     collapsed = landform_train.class_collapse(total)
@@ -608,10 +617,11 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
         "labels": labels,
         "ladder_md5": found["ladder_md5"],
         "recipe_line": line.to_dict(),
+        **({"finetune": group_to_dict(cfg.finetune)} if cfg.fine_tunes else {}),
         "inputs": {item.key: item.to_dict() for item in resolution.inputs},
         "parameters": {
             "encoder": found["params"],
-            "trainable": fitted.parameters,
+            "trainable": trainable,
             "total": found["params"] + fitted.parameters,
         },
         "class_collapse": {"count": len(collapsed), "classes": collapsed},
@@ -633,7 +643,10 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
           f"{fitted.best.step}")
     print(f"{'collapse':<16} {len(collapsed)} class(es) present in test truth at IoU 0"
           + (f": {', '.join(collapsed)} (flagged, not excluded — L10)" if collapsed else ""))
-    print(f"{'params':<16} {found['params']:,} frozen + {fitted.parameters:,} trained")
+    print(f"{'params':<16} "
+          + (f"{fitted.encoder_trained:,} encoder + {fitted.parameters:,} head, all trained"
+             if cfg.fine_tunes else
+             f"{found['params']:,} frozen + {fitted.parameters:,} trained"))
     print(f"{'record':<16} run {record['run_id']} appended to "
           f"{results.run_record_path(path)}")
     return 0
