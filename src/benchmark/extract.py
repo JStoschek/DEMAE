@@ -1588,7 +1588,10 @@ class Extractor:
         """
         import torch
 
-        reference, _ = self._forward(entry, model, tensor, dtype=self.spec.reference_dtype)
+        # Autocast off, explicitly: a caller's enclosing autocast (B3's bf16, #210) would
+        # otherwise reach this pass too, and the figure would compare bf16 with bf16.
+        with torch.autocast(torch.device(self.device).type, enabled=False):
+            reference, _ = self._forward(entry, model, tensor, dtype=self.spec.reference_dtype)
         prefix = reference.shape[1] - self.spec.tokens
         a = reference[:, prefix:].float().flatten(0, 1)
         b = computed[:, prefix:].float().flatten(0, 1)

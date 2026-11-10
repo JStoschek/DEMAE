@@ -2011,3 +2011,31 @@ def test_the_r5_encoder_under_the_r4_axis_order_is_refused(tmp_path):
     forged_spec = replace(spec, encoders={**spec.encoders, "demae-r4": forged})
     with pytest.raises(ValueError, match="not sin-cos under the declared 'sincos2d_rowfirst'"):
         Extractor(forged_spec, cfg).encoder("A4-R4")
+
+
+def test_the_fp32_reference_pass_does_not_inherit_a_callers_autocast(monkeypatch):
+    """#197 review: B3 calls `extract` inside its own bf16 autocast (#210), and the reference
+    pass of the agreement used to inherit it, so the figure compared bf16 with bf16. The
+    reference pass runs with autocast off whatever encloses it; the compute pass keeps its own.
+    CPU bf16 would not show the difference numerically, so the autocast state is what is read."""
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    seen = []
+
+    def forward(model, x):
+        seen.append(torch.is_autocast_enabled("cpu"))
+        return torch.ones(1, 1 + 196, 4), ()
+
+    monkeypatch.setattr(extract_module, "_forward_blocks", forward)
+    extractor = object.__new__(Extractor)
+    extractor.spec = SimpleNamespace(reference_dtype="fp32", tokens=196)
+    extractor.config = SimpleNamespace(extract=SimpleNamespace(compute_dtype="bf16"))
+    extractor.device = "cpu"
+    entry = SimpleNamespace(name="demae-r5", output_tap="output", checkpoint_format="timm")
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        measured = extractor._measure_precision(entry, None, torch.zeros(1, 1, 224, 224),
+                                                torch.ones(1, 1 + 196, 4))
+    assert seen == [False], "the fp32 reference ran under the caller's bf16 autocast"
+    assert measured["mean_cosine"] == pytest.approx(1.0)
