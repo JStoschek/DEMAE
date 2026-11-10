@@ -282,6 +282,9 @@ class Fitted:
     encoder: str
     extractor: Any
     precision: dict | None = None
+    #: How a tile becomes logits, for a pass with no frozen encoder behind it (B7, #209).
+    #: ``None`` means the encoder through the contract, then the probe.
+    forward: Any = None
 
     def to_dict(self) -> dict:
         return {
@@ -478,7 +481,8 @@ def score_test(cfg: LandformConfig, fitted: Fitted, tiles: CellTiles) -> list[Sc
     stratum = dict(tiles.test)
     index = TileStore.index_for(cfg.paths.corpus_dir, ids)
     bands = Bands.from_manifest(cfg.paths.corpus_dir, split="test")
-    forward = _Forward(fitted.extractor, fitted.encoder, fitted.module, fitted.device)
+    forward = fitted.forward or _Forward(fitted.extractor, fitted.encoder, fitted.module,
+                                         fitted.device)
     ignore = cfg.geomorphon.ignore_label
     out: list[ScoredTile] = []
     fitted.module.eval()

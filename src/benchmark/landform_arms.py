@@ -101,6 +101,14 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             what="DEMAE ViT-S frozen + the identical linear probe at 384-d — appendix, no "
             "bootstrap pair",
         ),
+        _arm(
+            "B7",
+            encoder=None,
+            heads=("unet",),
+            trains="everything",
+            what="Task 1's A7 UNet on one channel, from scratch at B2's batch and epochs, "
+            "tuning itself — C2's and C3's bar (§4.3)",
+        ),
     ]
 )
 

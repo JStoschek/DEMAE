@@ -21,8 +21,8 @@ What each clause is here:
   but the head's tuning arm; the pass's record goes beside it
   (:func:`benchmark.landform_recipes.tuning_record_path_for`).
 
-Only the linear probe trains today. UperNet is #208 and B7's UNet is #209; asking to tune
-either names its ticket, after the resolver's tuning-arm refusal has had its say.
+The linear probe and B7's UNet (#209) train today. UperNet is #208; asking to tune it names
+its ticket, after the resolver's tuning-arm refusal has had its say.
 """
 
 from __future__ import annotations
@@ -34,14 +34,14 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Final
 
-from . import landform_recipes, landform_train, tune
+from . import landform_recipes, landform_train, landform_unet, tune
 from .landform_config import LandformConfig
 
 #: Each point is scored as the better of this many val reads (§4.5).
 VAL_READS: Final = 2
 
 #: Heads whose trainer is not built yet, and the ticket that builds it.
-PENDING_HEADS: Final = {"upernet": "#208", "unet": "#209"}
+PENDING_HEADS: Final = {"upernet": "#208"}
 
 
 def assert_buildable(head: str) -> None:
@@ -49,7 +49,7 @@ def assert_buildable(head: str) -> None:
     if head in PENDING_HEADS:
         raise NotImplementedError(
             f"the {head} head has no trainer yet ({PENDING_HEADS[head]}), so `run --task "
-            f"landform --tune --head {head}` cannot train its points; the linear probe tunes today"
+            f"landform --tune --head {head}` cannot train its points"
         )
 
 
@@ -181,7 +181,9 @@ def run_pass(
             f"§4.5 tunes at seed {cfg.schedule.tune_seed} on ladder {cfg.schedule.tune_ladder}; "
             f"this pass is seed {cfg.seed} on ladder {cfg.ladder}"
         )
-    trainer = landform_train.train_linear if trainer is None else trainer
+    if trainer is None:
+        trainer = (landform_unet.train_unet if cfg.head == "unet"
+                   else landform_train.train_linear)
     grid = check_tuning_knobs(cfg)
     steps = tune_steps(cfg)
     root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{landform_recipes.rung_tag(cfg.rung)}"

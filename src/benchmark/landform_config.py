@@ -272,6 +272,10 @@ class Unet(Frozen):
     """§4.3's B7: Task 1's A7 UNet on one channel, at B2's batch and epochs, tuning itself."""
 
     in_channels: int = 1
+    #: A7's optimizer block, Task 1's §4.1 head recipe (``benchmark.config.Head``), carried here
+    #: as values so the frozen line states them (#209). The lr is tuned; these are not (§4.5).
+    optimizer: str = "adamw"
+    weight_decay: float = 0.05
     batch_size: int = 64
     epochs: int = 40
     #: Centred on the 3e-3 A7 shared with Task 1's head.
