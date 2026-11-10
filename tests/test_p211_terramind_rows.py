@@ -363,3 +363,20 @@ def test_each_row_carries_its_l9_insulation_and_its_encoders_precision_verdict(
     }
     records = results.read_run_records(results.run_record_path(box / "results.parquet"))
     assert {r["cell"]["arm"]: r["insulated"] for r in records} == {"B4": False, "B4-ALT": True}
+
+
+def test_a_task_2_parquet_under_an_older_schema_is_refused_as_a_schema_mismatch(tmp_path):
+    """#197 review: the refusal used to guess "perhaps Task 1's" for any column mismatch,
+    including Task 2's own file written before a column was added."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from benchmark import landform_results
+
+    older = pa.schema([f for f in landform_results.schema() if f.name != "insulated"])
+    path = tmp_path / "results.parquet"
+    pq.write_table(older.empty_table(), path)
+    with pytest.raises(ValueError, match="schema mismatch") as raised:
+        landform_results.scored_rows(path)
+    assert "Task 1" not in str(raised.value)
+    assert "insulated" in str(raised.value)

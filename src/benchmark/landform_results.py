@@ -103,10 +103,15 @@ def _existing(path: Path):
     if not path.is_file():
         return None
     table = pq.read_table(path)
-    if table.schema.names != schema().names:
+    names, expected = table.schema.names, schema().names
+    if names != expected:
+        missing = [n for n in expected if n not in names]
+        extra = [n for n in names if n not in expected]
         raise ValueError(
-            f"{path} has columns {table.schema.names}, not Task 2's {schema().names}: it is "
-            f"another file, perhaps Task 1's. Task 2 rows go to their own parquet"
+            f"{path}: schema mismatch against Task 2's results schema (missing {missing}, "
+            f"unexpected {extra}"
+            + (", same columns in another order" if not missing and not extra else "")
+            + f"). Its columns are {names}. Rows are appended only to a file of this schema"
         )
     return table.cast(schema())
 
