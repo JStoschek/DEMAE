@@ -21,7 +21,10 @@ owns the parser and the three verbs; ``--task landform`` hands it this module's
 * **A refusal about the cell** (seed bound to ladder, frozen recipe line, tuning arm) goes in
   :func:`resolve`, upstream of ``--dry-run``, for Task 1's reason: a pre-flight that prints a
   drifted cell as a normal one is worse than none.
-* **``run`` and ``report``** name the ticket that builds them (#206, #216) until it does.
+* **``run``** trains and scores the linear-probe cell on geomorphon labels (#206): a pre-flight
+  that refuses by name, then :mod:`benchmark.landform_train`, then
+  :mod:`benchmark.landform_results`. A head or label set no ticket has built names its ticket.
+  **``report``** names #216 until it lands.
 
 ## Why the far side raises
 
@@ -47,7 +50,11 @@ from . import (
     ladders,
     landform_arms,
     landform_config,
+    landform_recipes,
+    landform_results,
+    landform_train,
     prereg,
+    results,
 )
 from . import geomorphon as gm
 from .artifacts import Resolved
@@ -123,9 +130,8 @@ FREEZE_STAGES: Final[tuple[FreezeStage, ...]] = (
 
 #: What a cell reads that is not built yet. Story 4's whole cell is arm, encoder pin, rung,
 #: ladder, label set, frozen recipe line and bar; these are the parts with no artifact yet.
-PENDING_INPUTS: Final[tuple[Pending, ...]] = (
-    Pending("recipe_line", "recipe line", "#207"),
-)
+#: Empty since #206 resolved the recipe-lines file (which #207's ``--tune`` writes).
+PENDING_INPUTS: Final[tuple[Pending, ...]] = ()
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,12 @@ class LandformResolution:
     checkpoint: Resolved | None
     inputs: tuple[Resolved, ...]
     pending: tuple[Pending, ...] = PENDING_INPUTS
+    #: This cell's frozen recipe line, already checked against the cell, or ``None`` while
+    #: #207's tuning pass has not frozen it. ``run`` refuses the ``None``.
+    recipe_line: landform_recipes.RecipeLine | None = None
+
+    def input(self, key: str) -> Resolved:
+        return next(item for item in self.inputs if item.key == key)
 
     @property
     def encoder(self) -> arms.Encoder | None:
@@ -171,6 +183,11 @@ class LandformResolution:
         block += [item.line() for item in self.inputs]
         if verb == "run":
             block += [item.line() for item in self.pending]
+            block.append(
+                self.recipe_line.line() if self.recipe_line is not None else
+                f"{'recipe line':<16} {cfg.head} @ {cfg.rung} not frozen yet "
+                f"(`run --task landform --tune`, #207)"
+            )
         if verb == "freeze":
             block += ["", *(_stage_line(stage) for stage in FREEZE_STAGES)]
         else:
@@ -196,7 +213,10 @@ class LandformResolution:
             f"ceil(max({cfg.train_tiles:,} tiles, {schedule.step_floor:,} floor) / batch "
             f"{recipe.batch_size}); {schedule.warmup_frac:.0%} warmup then {schedule.decay} to "
             f"zero; val read {schedule.val_reads}x, best val mIoU kept",
-            f"{'lr':<16} tuned per rung over {list(recipe.lr_grid)} (§4.5)",
+            f"{'lr':<16} "
+            + (f"{self.recipe_line.lr:g}, the frozen line for this head and rung (§4.5)"
+               if self.recipe_line is not None
+               else f"tuned per rung over {list(recipe.lr_grid)} (§4.5)"),
         ]
         return lines
 
@@ -271,6 +291,13 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
             md5=artifacts.file_md5(geomorphon),
             absent_note="not frozen yet (`freeze --task landform`, #201/#202)",
         ),
+        Resolved(
+            key="recipe_lines",
+            label="recipe lines",
+            path=str(landform_recipes.path_for(cfg)),
+            md5=artifacts.file_md5(landform_recipes.path_for(cfg)),
+            absent_note="not frozen yet (`run --task landform --tune`, #207)",
+        ),
     )
 
 
@@ -284,6 +311,12 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
             "builds; it is not Task 1's single A6 pass and does not run under that one's rules"
         )
     arm = landform_arms.get(cfg.arm)
+    # §4.5's frozen line, checked here rather than in `run`, for Task 1's reason: a pre-flight
+    # that prints a drifted recipe as a normal one is worse than none. An absent line is said,
+    # and `run` refuses it.
+    recipe_line = landform_recipes.lookup(cfg) if args.verb == "run" else None
+    if recipe_line is not None:
+        landform_recipes.check(cfg, recipe_line)
     inputs = (*_inputs(cfg), *_ladders(cfg, args.verb))
     if cfg.label_set == "iwahashi":
         # #203 built this label set: its fingerprint and rebuilt table print, and `run` refuses
@@ -294,6 +327,7 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
         arm=arm,
         checkpoint=_checkpoint(arm, cfg),
         inputs=inputs,
+        recipe_line=recipe_line,
     )
 
 
@@ -343,12 +377,163 @@ def _freeze(resolution: LandformResolution, args: argparse.Namespace) -> int:
     return 0
 
 
+def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict:
+    """Everything ``run`` checks before its first step, each refusal by name; what it found.
+
+    The encoder's pin and checkpoint, the capacity table, the extractor contract, the bar, the
+    frozen recipe line, the ladder md5, and L20's write-once rule. The label fingerprint is
+    checked next, once the cell's tiles are read (:func:`benchmark.geomorphon_pass.check_labels`).
+    """
+    from . import extract
+
+    cfg = resolution.config
+    line = resolution.recipe_line
+    if line is None:
+        landform_recipes.line_for(cfg)  # raises, naming #207
+    missing = [item.label for item in resolution.inputs if item.required and not item.present]
+    if missing:
+        raise FileNotFoundError(
+            f"nothing to train against — {', '.join(missing)} not on this box. Run "
+            f"`python -m benchmark.launch freeze` (Task 1's lists and extractor spec) and "
+            f"`freeze --task landform` first"
+        )
+    encoder = resolution.encoder
+    pinned = encoder.checkpoint_md5
+    if pinned is None:
+        raise ValueError(
+            f"the {encoder.name} encoder is unpinned: `benchmark.arms.ENCODERS` publishes no md5 "
+            f"for it, and an unpinned encoder is unrunnable (ADR-0012 §7.1, plan §1)"
+        )
+    checkpoint = resolution.checkpoint
+    if not checkpoint.present:
+        raise FileNotFoundError(
+            f"arm {cfg.arm} reads the {encoder.name} encoder and {checkpoint.absent_note}"
+        )
+    if checkpoint.md5 != pinned:
+        raise ValueError(
+            f"the {encoder.name} checkpoint at {checkpoint.path} has md5 {checkpoint.md5}, and "
+            f"its pin is {pinned}: a mismatched encoder returns a plausible tensor and raises "
+            f"nothing, so it is refused (ADR-0012 §7.1)"
+        )
+    params = arms.check_capacity(encoder.name)
+    spec_item = resolution.input("extractor_spec")
+    extract.load_spec(spec_item.path).encoder_named(encoder.name)
+    bar_for(cfg)
+    ladder = resolution.input("ladder")
+    cell = {
+        "arm": cfg.arm, "rung": cfg.rung, "seed": cfg.seed, "ladder": cfg.ladder,
+        "label_set": cfg.label_set, "variant": gm.PRIMARY,
+    }
+    attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
+    for text in (
+        f"encoder {encoder.name}: checkpoint md5 {checkpoint.md5} is its pin; {params:,} "
+        f"parameters, as §2's capacity table gives",
+        f"extractor contract {spec_item.path} re-checked",
+        f"bar {bar_path(cfg)}: {prereg.TASK2.adr_name}'s, its phrases still in plan "
+        f"{prereg.TASK2.section.lstrip('# ')}",
+        f"recipe line {line.head} @ {line.rung}: lr {line.lr:g}, the recipe as frozen",
+        f"ladder {cfg.ladder} md5 {ladder.md5}, as its coverage report quotes",
+        f"write-once: attempt {attempt}"
+        + (f", a rerun for {rerun_reason} (L20)" if rerun_reason else ", a new cell"),
+    ):
+        print(f"{'pre-flight':<16} {text}")
+    return {"cell": cell, "params": params, "line": line, "ladder_md5": ladder.md5,
+            "spec_md5": spec_item.md5}
+
+
 def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
-    """``run --task landform`` — one (arm, rung, seed) cell. #206 builds the first one."""
-    raise NotImplementedError(
-        "`run --task landform` trains and scores nothing yet: the linear-probe cell, the Task 2 "
-        "parquet and the run record are #206. `--dry-run` resolves the cell"
+    """``run --task landform`` — one (arm, rung, seed) cell: pre-flight, train, score, append.
+
+    #206 builds the linear-probe cell on geomorphon labels. UperNet (#208), B7 (#209) and the
+    Iwahashi classifier (#212) name their tickets.
+    """
+    from dataset.provenance import git_sha
+
+    cfg = resolution.config
+    if cfg.label_set != "geomorphon":
+        raise NotImplementedError(
+            "the Iwahashi tile classifier and its fitted probe are #212; `run --task landform` "
+            "trains the dense geomorphon cells"
+        )
+    if cfg.head != "linear":
+        raise NotImplementedError(
+            f"the {cfg.head} head is not built yet (#208 UperNet, #209 B7's UNet); #206 runs "
+            f"the linear probe"
+        )
+    rerun_reason = getattr(args, "rerun_reason", None)
+    found = _preflight(resolution, rerun_reason)
+    tiles = landform_train.CellTiles.read(cfg)
+    labels = geomorphon_pass.check_labels(cfg, tiles.every)
+    print(f"{'pre-flight':<16} labels: {labels['tiles_checked']:,} {labels['variant']} rasters "
+          f"match their fingerprints, set {labels['set_fingerprint']}")
+    print(f"{'trains':<16} {cfg.steps:,} steps over {len(tiles.train):,} tiles; val "
+          f"{len(tiles.val):,} tiles read {cfg.schedule.val_reads}x; test {len(tiles.test):,} "
+          f"tiles")
+
+    line = found["line"]
+    fitted = landform_train.train_linear(
+        cfg, lr=line.lr, tiles=tiles, on_read=lambda read: print(f"{'':<16} {read.line()}")
     )
+    scored = landform_train.score_test(cfg, fitted, tiles)
+    total = sum(tile.confusion for tile in scored)
+    collapsed = landform_train.class_collapse(total)
+    rows = [
+        {
+            **found["cell"],
+            "tile_id": tile.tile_id,
+            "band": tile.band,
+            "stratum": tile.stratum,
+            "confusion": tile.confusion.tolist(),
+            **tile.boundary,
+            "config_hash": cfg.config_hash,
+        }
+        for tile in scored
+    ]
+    record = {
+        "task": "landform",
+        "cell": {**found["cell"], "head": cfg.head},
+        "config_hash": cfg.config_hash,
+        "artifact_hash": cfg.artifact_hash,
+        "config": cfg.recipe_dict(),
+        "git_sha": git_sha(),
+        "encoder": {
+            "name": fitted.encoder,
+            "pinned_md5": resolution.encoder.checkpoint_md5,
+            "checkpoint": resolution.checkpoint.to_dict(),
+        },
+        "extractor_spec_md5": found["spec_md5"],
+        "labels": labels,
+        "ladder_md5": found["ladder_md5"],
+        "recipe_line": line.to_dict(),
+        "inputs": {item.key: item.to_dict() for item in resolution.inputs},
+        "parameters": {
+            "encoder": found["params"],
+            "trainable": fitted.parameters,
+            "total": found["params"] + fitted.parameters,
+        },
+        "class_collapse": {"count": len(collapsed), "classes": collapsed},
+        "timing": {
+            "head": cfg.head,
+            "seconds_per_step": round(fitted.seconds_per_step, 6),
+            "steps": fitted.steps,
+            "device": fitted.device,
+        },
+        "training": fitted.to_dict(),
+        "precision": fitted.precision,
+        "produced": {"test_miou": round(landform_train.miou(total), 6)},
+    }
+    path, count, record = landform_results.write(
+        rows, record, cfg.paths.results_path, rerun_reason=rerun_reason
+    )
+    print(f"\n{'scored':<16} {len(rows):,} test tiles into {path} ({count:,} rows in the file); "
+          f"test mIoU {record['produced']['test_miou']:.4f}, best val read at step "
+          f"{fitted.best.step}")
+    print(f"{'collapse':<16} {len(collapsed)} class(es) present in test truth at IoU 0"
+          + (f": {', '.join(collapsed)} (flagged, not excluded — L10)" if collapsed else ""))
+    print(f"{'params':<16} {found['params']:,} frozen + {fitted.parameters:,} trained")
+    print(f"{'record':<16} run {record['run_id']} appended to "
+          f"{results.run_record_path(path)}")
+    return 0
 
 
 def _report(resolution: LandformResolution, args: argparse.Namespace) -> int:

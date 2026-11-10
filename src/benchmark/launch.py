@@ -88,6 +88,7 @@ from . import (
     landform,
     landform_arms,
     landform_config,
+    landform_results,
     masks,
     prereg,
     report,
@@ -728,7 +729,7 @@ TASKS: Final = {
     "void-fill": Task("void-fill", resolve, VERBS, cell_flags=("--size",)),
     "landform": Task(
         "landform", landform.resolve, landform.VERBS,
-        cell_flags=("--rung", "--head", "--label-set"),
+        cell_flags=("--rung", "--head", "--label-set", "--rerun-reason"),
     ),
 }
 DEFAULT_TASK: Final = "void-fill"
@@ -816,6 +817,15 @@ def build_parser() -> argparse.ArgumentParser:
         dest="label_set",
         default=None,
         help=f"Task 2's label set: {list(landform_config.LABEL_SETS)}",
+    )
+    # Task 2's L20 (#206): a finished cell is never rewritten, and a rerun names its
+    # infrastructure failure. Not a knob — it moves no hash; it goes in the run record.
+    run.add_argument(
+        "--rerun-reason",
+        dest="rerun_reason",
+        default=None,
+        choices=landform_results.RERUN_REASONS,
+        help="Task 2: rerun a cell after an infrastructure failure (L20); recorded",
     )
     # A mode rather than a knob: it does not change what a cell *is*, it changes whether this
     # command produces one. Only `run` has it, and only on `--arm A6` does it do anything but

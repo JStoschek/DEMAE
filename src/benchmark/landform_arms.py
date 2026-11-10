@@ -7,9 +7,10 @@ them had to learn to skip. What the two tasks *do* share is the encoder registry
 carries there (ADR-0012, "an unpinned encoder is unrunnable") is the pin this table runs under,
 and there is one place a checkpoint md5 lives.
 
-#198 registers **B1 only**: it is the default cell, the way A4-R5 is Task 1's, and a config needs
-a valid arm to construct. The rows a later ticket runs arrive with it — B6, B1-R4 and B1-S with
-the linear-probe cell (#206), the UperNet rows with #208, B7 with #209, B3 with #210, the
+#198 registered **B1**: it is the default cell, the way A4-R5 is Task 1's, and a config needs
+a valid arm to construct. The rows a later ticket runs arrive with it — B6, B1-R4 and B1-S came
+with the linear-probe cell (#206), each with the linear head only until #208 gives B6 its
+UperNet; the UperNet rows arrive with #208, B7 with #209, B3 with #210, the
 TerraMind rows with #211 — so no row here outruns the code that can run it.
 
 ## What an arm declares
@@ -75,6 +76,30 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             heads=("linear",),
             trains="head",
             what="DEMAE R5 frozen + §4.1's linear probe on `output` — core, C1",
+        ),
+        _arm(
+            "B6",
+            encoder="imagenet-mae",
+            heads=("linear",),
+            trains="head",
+            what="ImageNet-MAE frozen + the identical linear probe — core, C1, and §4.5's "
+            "tuning arm",
+        ),
+        _arm(
+            "B1-R4",
+            encoder="demae-r4",
+            heads=("linear",),
+            trains="head",
+            what="DEMAE R4 (ImageNet warm start) frozen + the identical linear probe — extra "
+            "row, never C1's number (L5, L9)",
+        ),
+        _arm(
+            "B1-S",
+            encoder="demae-vits",
+            heads=("linear",),
+            trains="head",
+            what="DEMAE ViT-S frozen + the identical linear probe at 384-d — appendix, no "
+            "bootstrap pair",
         ),
     ]
 )

@@ -481,6 +481,74 @@ def committed_class_weights(cfg: LandformConfig) -> tuple[float, ...]:
     return tuple(float(body["class_weights"][c]) for c in _classes())
 
 
+def label_dir(cfg: LandformConfig) -> Path:
+    """Where this label config's rasters are on this box (rebuilt, gitignored)."""
+    return Path(cfg.paths.labels_dir) / label_config_hash(cfg.geomorphon)
+
+
+def read_label(cfg: LandformConfig, tile_id: str, variant: str = gm.PRIMARY) -> np.ndarray:
+    """One tile's label raster, as the label pass left it."""
+    path = label_dir(cfg) / variant / f"{tile_id}.npy"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is not on this box: the label rasters are rebuilt, not committed "
+            f"(`freeze --task landform`, #201/#202)"
+        )
+    return np.load(path)
+
+
+def check_labels(cfg: LandformConfig, tile_ids: Iterable[str],
+                 variant: str = gm.PRIMARY) -> dict:
+    """Refuse a cell whose label rasters are not the committed ones — every tile it reads.
+
+    Three links: the committed config is this label config's; the committed fingerprint CSV is
+    the set the config fingerprints; and each raster on this box hashes to its committed line.
+    Returns what the run record quotes.
+    """
+    art = Path(cfg.paths.artifacts_dir)
+    config_path = art / CONFIG_NAME
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"{config_path} is not frozen: the label fingerprint is the geomorphon label "
+            f"pass's (`freeze --task landform`, #202)"
+        )
+    body = json.loads(config_path.read_text())
+    chash = label_config_hash(cfg.geomorphon)
+    if body["label_config_hash"] != chash:
+        raise ValueError(
+            f"label fingerprint mismatch: {config_path} was frozen under label config "
+            f"{body['label_config_hash']} and this cell labels under {chash}"
+        )
+    committed = read_fingerprints(fingerprint_path(art, variant))
+    want_set = body["variants"][variant]["set_fingerprint"]
+    have_set = set_fingerprint(committed.values())
+    if have_set != want_set:
+        raise ValueError(
+            f"label fingerprint mismatch: {fingerprint_path(art, variant)} fingerprints the "
+            f"{variant} set as {have_set}, and {config_path} commits {want_set}"
+        )
+    ids = list(tile_ids)
+    bad = []
+    for tile_id in ids:
+        line = committed.get(tile_id)
+        observed = gm.content_hash(read_label(cfg, tile_id, variant))
+        if line is None or line["content_hash"] != observed:
+            bad.append(tile_id)
+    if bad:
+        raise ValueError(
+            f"label fingerprint mismatch: {len(bad)} of {len(ids)} {variant} label rasters "
+            f"under {label_dir(cfg)} do not hash to their committed fingerprint (e.g. "
+            f"{bad[:3]}). A run never trains or scores on labels it cannot prove are the "
+            f"committed ones; rebuild them (`freeze --task landform`)"
+        )
+    return {
+        "variant": variant,
+        "label_config_hash": chash,
+        "set_fingerprint": want_set,
+        "tiles_checked": len(ids),
+    }
+
+
 def render_config(g: Geomorphon, cen: Census, sets: Mapping[str, dict], pixels: dict,
                   weights: dict) -> bytes:
     """``geomorphon_config.json``: what labels are a function of, and what they came out as."""

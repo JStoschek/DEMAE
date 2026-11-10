@@ -137,7 +137,9 @@ def test_a_dry_run_prints_the_cell_it_resolved_before_any_step(box, flags, capsy
     checkpoint = hashlib.md5((box / "release" / "encoder.pt").read_bytes()).hexdigest()
     assert checkpoint in out
     lines = out.splitlines()
-    assert any(line.startswith("recipe line") and "not built yet" in line for line in lines)
+    # #206 resolves the recipe line; on a bare box #207's tuning pass has not frozen it.
+    assert any(line.startswith("recipe line") and "not frozen yet" in line and "#207" in line
+               for line in lines)
     # #201 built the geomorphon labels: their config resolves by path, not frozen on a bare box.
     assert any(line.startswith("geomorphon") and "not frozen yet" in line for line in lines)
     # #200 built the ladder: seed 2's, by path, and the rung as a prefix of it.
@@ -278,10 +280,24 @@ def test_the_config_round_trips_through_plain_json():
 # --- Past --dry-run, each verb names the ticket that builds it ----------------
 
 
-@pytest.mark.parametrize("verb, ticket", [("run", "#206"), ("report", "#216")])
-def test_past_the_dry_run_a_verb_names_its_ticket_rather_than_returning_zero(verb, ticket, flags):
+def test_past_the_dry_run_report_names_its_ticket_rather_than_returning_zero(flags):
+    with pytest.raises(NotImplementedError, match="#216"):
+        launch.main(["report", *flags])
+
+
+def test_run_on_a_bare_box_refuses_before_a_step_naming_what_freezes_the_recipe(flags):
+    """#206 built `run`; on a box nothing is frozen onto, its first refusal is the recipe line."""
+    with pytest.raises(FileNotFoundError, match="#207"):
+        launch.main(["run", *flags])
+
+
+@pytest.mark.parametrize(
+    "argv, ticket",
+    [(["--label-set", "iwahashi"], "#212")],
+)
+def test_a_cell_whose_head_or_label_set_is_not_built_names_its_ticket(argv, ticket, flags):
     with pytest.raises(NotImplementedError, match=ticket):
-        launch.main([verb, *flags])
+        launch.main(["run", *argv, *flags])
 
 
 def test_freeze_names_every_stage_it_has_no_writer_for_rather_than_returning_zero(
