@@ -337,6 +337,8 @@ tile and label raster. AdamW, wd 0, batch 256, 30 epochs at the 10% and 100%
 rungs, on §4.5's schedule; lr is tuned per rung (§4.5) over
 `{3e-4, 1e-3, 3e-3, 1e-2, 3e-2}`, Task 1's grid. The frozen encoder runs inline
 through the ADR-0012 extractor and the probe reads its `output`.
+The encoder runs at its declared compute dtype; the probe itself (LayerNorm and
+the 1x1 conv) trains in fp32, and the run record says so.
 Inline is what keeps the dihedral augmentation possible: the
 feature of a rotated tile is not the rotated feature of the tile, so a cache
 would have to hold all eight orientations or drop the augmentation. 3 seeds
@@ -417,6 +419,12 @@ and linear-probe grid run inline.
 7. Representation suite (§5): one inline pass per analysis over a fixed tile
    set.
 
+**Reruns (L20).** A run that fails before it writes leaves no rows, so its
+rerun is the cell's attempt 0, with the reason in its run record. A cell that
+has rows is finished and is never replaced: any later run of it lands as the
+next `attempt` beside the original and is printed as a disclosed row. Every
+table scores attempt 0 and never pools a later attempt into it.
+
 ### 4.5 Schedule, val and tuning, shared by every trained head (#196)
 
 **Training length is epochs, with a step floor at the 10% rung.** A run's
@@ -451,9 +459,9 @@ labelled val tiles) is registered rule **L19** ([ADR-0015](../adr/0015-task2-pre
 realism, not fairness.
 
 **Tuning is Task 1's discipline (`benchmark.tune`), run at every rung.** One
-knob, lr; 5 log-spaced points per head (§4.1, §4.2); each point trains the
-first fifth of its rung's schedule (a fifth of the cosine, as Task 1's 10 of 50
-epochs) at one seed on **ladder 0**, and scores as the better of its two val
+knob, lr; 5 log-spaced points per head (§4.1, §4.2); each point trains a
+fifth of its rung's step count, with the 5% warmup and the cosine compressed
+into that fifth (as Task 1's 10 of 50 epochs ran a full 10-epoch cosine), at one seed on **ladder 0**, and scores as the better of its two val
 reads. The neutral encoder **B6** tunes the linear probe and UperNet; **B7
 tunes itself** the same way. The tuning runs **separately at 1%, 10% and 100%**,
 and each rung's winner applies to every arm at that rung, so arms stay matched
@@ -461,7 +469,10 @@ within a rung: the low-label row is the plot the paper turns on, and an lr won
 on 12,520 steps over 20k tiles has no claim on 1,280 steps over 200. Ladder 0's
 regions can bend the 1% pick; full-val checkpoint selection limits the harm.
 **A winner on a grid edge widens the grid by one point that way and reruns the
-whole pass**, as Task 1's did. Winners are copied into one frozen config line
+whole pass**, as Task 1's did. The new point continues the grid's
+half-decade spacing (3e-2 -> 1e-1, 3e-4 -> 1e-4). The grid widens **at most four
+times**; a winner still on an edge after the fourth refuses rather than freezes,
+and a pass whose points all score the same refuses at once. Winners are copied into one frozen config line
 per head per rung; a run whose recipe differs from it is refused. Batch,
 epochs, weight decay, warmup and loss weighting are fixed, not searched. B3 is
 not tuned (§4.3).

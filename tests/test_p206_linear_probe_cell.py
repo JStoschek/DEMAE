@@ -701,3 +701,25 @@ def test_the_training_record_names_the_head_that_trained(box, flags, stub):
     fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
     assert fitted.head == cfg.head
     assert dataclasses.replace(fitted, head="upernet").to_dict()["kind"] == "upernet"
+
+
+def test_a_table_scores_a_cell_s_first_attempt_and_discloses_the_later_ones(tmp_path):
+    """L20: a finished run is never replaced, so attempt 0 is the scored row and a later
+    attempt is a disclosed row beside it, never pooled into the core table."""
+    from benchmark import landform_results
+
+    cell = {"arm": "B1", "rung": "1%", "seed": 0, "ladder": 0, "label_set": "geomorphon",
+            "variant": "primary"}
+    row = {**cell, "tile_id": "t0", "band": 0, "stratum": 0, "confusion": [0] * 100,
+           **{name: 0 for name in landform_results.BOUNDARY_COLUMNS}, "config_hash": "c"}
+    path = tmp_path / "r.parquet"
+    for reason in (None, "oom", "crash"):
+        record = {"cell": dict(cell), "config_hash": "c", "git_sha": "g", "inputs": {},
+                  "recipe_line": {}}
+        landform_results.write([row], record, path, rerun_reason=reason)
+
+    scored = landform_results.scored_rows(path)
+    disclosed = landform_results.disclosed_rows(path)
+    assert scored.column("attempt").to_pylist() == [0]
+    assert sorted(disclosed.column("attempt").to_pylist()) == [1, 2]
+    assert scored.num_rows + disclosed.num_rows == 3

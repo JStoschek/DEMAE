@@ -18,7 +18,11 @@ A cell's rows are written once and never replaced. A second write of a cell that
 refused, unless the run names an infrastructure failure (crash, OOM, corrupt checkpoint, guard
 refusal) as its reason, on the same seed and ladder. Then its rows are appended beside the
 first ones under the next ``attempt`` and the reason goes in its run record. Class collapse is
-a finished run, and not a reason. Which attempt a table reads is ``report``'s rule (#216).
+a finished run, and not a reason.
+
+A table scores a cell's attempt 0 (:func:`scored_rows`). A later attempt is a disclosed row
+beside it (:func:`disclosed_rows`), never pooled into the core table: L20 says a finished run is
+never replaced, and a run that fails before it writes leaves no rows, so its rerun is attempt 0.
 """
 
 from __future__ import annotations
@@ -131,6 +135,29 @@ def append(rows: Sequence[Mapping[str, Any]], path: Path | str) -> tuple[Path, i
     pq.write_table(fresh, tmp, compression="zstd")
     tmp.replace(path)
     return path, fresh.num_rows
+
+
+def scored_rows(path: Path | str):
+    """The rows a table scores: each cell's attempt 0 (L20; plan §4.4)."""
+    import pyarrow.compute as pc
+
+    table = _read(path)
+    return table.filter(pc.equal(table["attempt"], 0))
+
+
+def disclosed_rows(path: Path | str):
+    """Every later attempt: printed beside its cell's scored row, never pooled with it."""
+    import pyarrow.compute as pc
+
+    table = _read(path)
+    return table.filter(pc.greater(table["attempt"], 0))
+
+
+def _read(path: Path | str):
+    table = _existing(Path(path))
+    if table is None:
+        raise FileNotFoundError(f"no Task 2 results at {path}")
+    return table
 
 
 def run_id(record: Mapping[str, Any]) -> str:
