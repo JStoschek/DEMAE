@@ -287,6 +287,9 @@ class Fitted:
     precision: dict | None = None
     #: What the head takes off the extractor's features (:attr:`Head.takes`).
     takes: Callable[[Any], Any] = None  # type: ignore[assignment]  # set by train_head
+    #: How a tile becomes logits, for a pass with no frozen encoder behind it (B7, #209).
+    #: ``None`` means the encoder through the contract, then the probe.
+    forward: Any = None
 
     def to_dict(self) -> dict:
         return {
@@ -329,7 +332,8 @@ def build_head(cfg: LandformConfig, width: int) -> Head:
         return Head(built.module, built.parameters, built.width,
                     lambda f: upernet.read(f, layers))
     raise NotImplementedError(
-        f"the {cfg.head} head trains no frozen encoder here; B7's UNet is #209"
+        f"the {cfg.head} head reads no frozen encoder; B7's UNet trains in "
+        f"benchmark.landform_unet"
     )
 
 
@@ -521,8 +525,8 @@ def score_test(cfg: LandformConfig, fitted: Fitted, tiles: CellTiles) -> list[Sc
     stratum = dict(tiles.test)
     index = TileStore.index_for(cfg.paths.corpus_dir, ids)
     bands = Bands.from_manifest(cfg.paths.corpus_dir, split="test")
-    forward = _Forward(fitted.extractor, fitted.encoder, fitted.module, fitted.device,
-                       fitted.takes)
+    forward = fitted.forward or _Forward(fitted.extractor, fitted.encoder, fitted.module,
+                                         fitted.device, fitted.takes)
     ignore = cfg.geomorphon.ignore_label
     out: list[ScoredTile] = []
     fitted.module.eval()

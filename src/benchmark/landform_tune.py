@@ -21,8 +21,7 @@ What each clause is here:
   but the head's tuning arm; the pass's record goes beside it
   (:func:`benchmark.landform_recipes.tuning_record_path_for`).
 
-The linear probe and UperNet (#208) train today, both on B6. B7's UNet is #209; asking to tune
-it names its ticket, after the resolver's tuning-arm refusal has had its say.
+The linear probe and UperNet (#208) tune on B6, and B7's UNet (#209) tunes on itself.
 """
 
 from __future__ import annotations
@@ -34,25 +33,11 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Final
 
-from . import landform_recipes, landform_train, tune
+from . import landform_recipes, landform_train, landform_unet, tune
 from .landform_config import LandformConfig
 
 #: Each point is scored as the better of this many val reads (§4.5).
 VAL_READS: Final = 2
-
-#: Heads whose trainer is not built yet, and the ticket that builds it.
-PENDING_HEADS: Final = {"unet": "#209"}
-
-
-def assert_buildable(head: str) -> None:
-    """Refuse a head no ticket has built a trainer for yet, naming its ticket."""
-    if head in PENDING_HEADS:
-        raise NotImplementedError(
-            f"the {head} head has no trainer yet ({PENDING_HEADS[head]}), so `run --task "
-            f"landform --tune --head {head}` cannot train its points; the linear probe and UperNet "
-            f"tune today"
-        )
-
 
 def tune_steps(cfg: LandformConfig) -> int:
     """How many steps one point trains: the first fifth (``tune_fraction``) of the cell's run."""
@@ -176,13 +161,14 @@ def run_pass(
 ) -> Tuned:
     """Train every point of the head's grid on the tuning cell, widening on an edge winner."""
     landform_recipes.assert_tuning_arm(cfg.arm, cfg.head)
-    assert_buildable(cfg.head)
     if cfg.seed != cfg.schedule.tune_seed or cfg.ladder != cfg.schedule.tune_ladder:
         raise ValueError(
             f"§4.5 tunes at seed {cfg.schedule.tune_seed} on ladder {cfg.schedule.tune_ladder}; "
             f"this pass is seed {cfg.seed} on ladder {cfg.ladder}"
         )
-    trainer = landform_train.train_head if trainer is None else trainer
+    if trainer is None:
+        trainer = (landform_unet.train_unet if cfg.head == "unet"
+                   else landform_train.train_head)
     grid = check_tuning_knobs(cfg)
     steps = tune_steps(cfg)
     root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{landform_recipes.rung_tag(cfg.rung)}"

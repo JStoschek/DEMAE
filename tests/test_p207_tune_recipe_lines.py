@@ -194,12 +194,6 @@ def test_a_tuning_pass_on_any_arm_but_its_tuning_arm_is_refused(argv, refusal, f
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize("head, ticket", [("unet", "#209")])
-def test_a_head_with_no_trainer_yet_names_its_ticket_on_its_tuning_arm(head, ticket, flags):
-    with pytest.raises(NotImplementedError, match=ticket):
-        launch.main(["run", "--dry-run", "--tune", "--head", head, "--rung", "1%", *flags])
-
-
 def test_tuning_needs_a_head_and_runs_at_the_tuning_seed_alone(flags):
     with pytest.raises(ValueError, match="--head"):
         launch.main(["run", "--dry-run", "--tune", "--rung", "1%", *flags])

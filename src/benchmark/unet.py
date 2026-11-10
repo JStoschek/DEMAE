@@ -109,8 +109,13 @@ def _block(in_ch: int, out_ch: int) -> int:
     return _conv(in_ch, out_ch) + 2 * out_ch + _conv(out_ch, out_ch) + 2 * out_ch
 
 
-def parameter_count(recipe: Unet | None = None) -> int:
+def parameter_count(
+    recipe: Unet | None = None, *, in_channels: int | None = None, classes: int | None = None
+) -> int:
     """§4.4's count, derived from the shape without allocating anything.
+
+    ``in_channels`` and ``classes`` are :func:`build`'s, for Task 2's B7 (#209); A7 passes
+    neither.
 
     Torch-free so that :func:`benchmark.arms.parameter_counts` can print A7's pair without
     importing torch — :mod:`benchmark.arms` is a declarative registry and the freeze path has no
@@ -121,7 +126,7 @@ def parameter_count(recipe: Unet | None = None) -> int:
     recipe = Unet() if recipe is None else recipe
     widths = stage_widths(recipe)
     total = 0
-    channels = recipe.in_channels
+    channels = recipe.in_channels if in_channels is None else in_channels
     for width in widths:
         total += _block(channels, width)
         channels = width
@@ -133,7 +138,7 @@ def parameter_count(recipe: Unet | None = None) -> int:
         total += channels * width * 2 * 2 + width
         total += _block(width * 2, width)
         channels = width
-    return total + _conv(channels, 1, k=1)
+    return total + _conv(channels, 1 if classes is None else classes, k=1)
 
 
 #: §4.4's count at the shipped base width, recorded so §6 item 4's number is a committed fact
@@ -225,11 +230,11 @@ def _build_class():
     class Unet2d(nn.Module):
         """A1's fill and the void mask in, one residual out — §4.4's 4-down/4-up UNet."""
 
-        def __init__(self, recipe: Unet) -> None:
+        def __init__(self, recipe: Unet, in_channels: int, out_channels: int) -> None:
             super().__init__()
             widths = stage_widths(recipe)
             self.down = nn.ModuleList()
-            channels = recipe.in_channels
+            channels = in_channels
             for width in widths:
                 self.down.append(block(channels, width))
                 channels = width
@@ -242,14 +247,16 @@ def _build_class():
                 self.up.append(nn.ConvTranspose2d(channels, width, 2, stride=2))
                 self.merge.append(block(width * 2, width))
                 channels = width
-            self.residual = nn.Conv2d(channels, 1, 1)
+            # A7's residual; B7's ten class logits (#209), under the same name so A7's state
+            # dict keys do not move.
+            self.residual = nn.Conv2d(channels, out_channels, 1)
 
-        def forward(self, image, void):
+        def forward(self, image, void=None):
             # The void mask is a channel rather than a side input: §4.4's input is "the A1-filled
             # tile and the void mask", and a UNet that had to be told twice which pixels are
             # missing would be two conventions. `benchmark.config.Unet.in_channels` refuses
-            # anything but the two.
-            x = torch.cat([image, void], dim=1)
+            # anything but the two. B7 has no void and passes none (#209).
+            x = image if void is None else torch.cat([image, void], dim=1)
             skips = []
             for stage in self.down:
                 x = stage(x)
@@ -271,8 +278,21 @@ class Built:
     parameters: int
 
 
-def build(recipe: Unet | None = None, *, seed: int = 0, tile_px: int = 224) -> Built:
+def build(
+    recipe: Unet | None = None,
+    *,
+    seed: int = 0,
+    tile_px: int = 224,
+    in_channels: int | None = None,
+    classes: int | None = None,
+) -> Built:
     """§4.4's UNet, seeded, zero-initialized at the output, and counted.
+
+    ``in_channels`` and ``classes`` are Task 2's B7 (#209): A7's spec (depth, base width,
+    GroupNorm, the init order and its seed) on one input channel with ``classes`` logits out.
+    ``classes`` set means a classifier, so step 3 below does not apply: the zeroed output is
+    §2.4's residual convention, and a segmentation head starting at all-zero logits is nothing
+    §4.3 asks for. A7 passes neither and builds exactly what it built before.
 
     Three things happen here that are not "call the constructor", and they are
     :func:`benchmark.head.build`'s three:
@@ -308,14 +328,19 @@ def build(recipe: Unet | None = None, *, seed: int = 0, tile_px: int = 224) -> B
     generator = torch.Generator().manual_seed(int(seed))
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(int(torch.randint(0, 2**31 - 1, (1,), generator=generator).item()))
-        module = _build_class()(recipe)
+        module = _build_class()(
+            recipe,
+            recipe.in_channels if in_channels is None else in_channels,
+            1 if classes is None else classes,
+        )
 
-    # §2.4's residual, made exact — zero weight *and* zero bias. See the module docstring.
-    torch.nn.init.zeros_(module.residual.weight)
-    torch.nn.init.zeros_(module.residual.bias)
+    if classes is None:
+        # §2.4's residual, made exact — zero weight *and* zero bias. See the module docstring.
+        torch.nn.init.zeros_(module.residual.weight)
+        torch.nn.init.zeros_(module.residual.bias)
 
     counted = sum(p.numel() for p in module.parameters())
-    expected = parameter_count(recipe)
+    expected = parameter_count(recipe, in_channels=in_channels, classes=classes)
     if counted != expected:
         raise UnetError(
             f"§4.4's UNet built {counted:,} parameters and this recipe derives {expected:,}. "
