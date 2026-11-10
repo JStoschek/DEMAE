@@ -6,7 +6,7 @@ Task 1's naming rule (:func:`benchmark.results.run_record_path`), one JSON line 
 
 ## The rows
 
-One per test tile per cell, keyed by ``(arm, rung, seed, ladder, label_set, variant, tile_id)``
+One per test tile per cell, keyed by ``(arm, head, rung, seed, ladder, label_set, variant, tile_id)``
 plus ``attempt`` (below). Each row holds the tile's 10x10 confusion counts over non-ignore
 pixels (``confusion``, truth-major, length 100), boundary-F1's four counts at 2 px, and the
 tile's ruggedness band and stratum. mIoU, per-class IoU, macro-F1, accuracy, per-band numbers
@@ -37,7 +37,9 @@ from typing import Any, Final
 from . import results
 
 #: What identifies a cell's rows, before the tile.
-CELL_COLUMNS: Final = ("arm", "rung", "seed", "ladder", "label_set", "variant")
+#: The head is in it because an arm may train two (B6, and B9 with #211): B6's linear cell and
+#: its UperNet cell are different cells (#208).
+CELL_COLUMNS: Final = ("arm", "head", "rung", "seed", "ladder", "label_set", "variant")
 
 #: L20's four infrastructure failures, the only reasons a cell may be run again.
 RERUN_REASONS: Final = ("crash", "oom", "corrupt-checkpoint", "guard-refusal")
@@ -53,6 +55,7 @@ def schema():
     return pa.schema(
         [
             ("arm", pa.string()),
+            ("head", pa.string()),
             ("rung", pa.string()),
             ("seed", pa.int64()),
             ("ladder", pa.int64()),
@@ -87,7 +90,7 @@ def _existing(path: Path):
 def attempt_for(path: Path | str, cell: Mapping[str, Any], rerun_reason: str | None) -> int:
     """The attempt this run's rows go under, or the refusal L20 makes.
 
-    A cell is ``(arm, rung, seed, label_set, variant)`` with its ladder: rows for the same
+    A cell is ``(arm, head, rung, seed, label_set, variant)`` with its ladder: rows for the same
     cell under another ladder are a seed paired with another ladder, refused whatever the reason.
     """
     if rerun_reason is not None and rerun_reason not in RERUN_REASONS:

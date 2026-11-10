@@ -12,7 +12,7 @@ What each clause is here:
   resolved further. A widened grid is provenance in the line (``grid``), never drift.
 * **A fifth of the schedule** is ``ceil(cfg.steps x schedule.tune_fraction)`` steps, handed to
   the trainer as a parameter so the frozen line's recipe is the cell's own (see
-  :func:`benchmark.landform_train.train_linear`). Warmup and cosine run over that shorter pass,
+  :func:`benchmark.landform_train.train_head`). Warmup and cosine run over that shorter pass,
   as Task 1's 10 of 50 epochs did.
 * **The better of two val reads** is :data:`VAL_READS` reads and the best of them.
 * **The edge rule** is :func:`benchmark.tune.search`, which this module shares with nothing
@@ -21,8 +21,8 @@ What each clause is here:
   but the head's tuning arm; the pass's record goes beside it
   (:func:`benchmark.landform_recipes.tuning_record_path_for`).
 
-Only the linear probe trains today. UperNet is #208 and B7's UNet is #209; asking to tune
-either names its ticket, after the resolver's tuning-arm refusal has had its say.
+The linear probe and UperNet (#208) train today, both on B6. B7's UNet is #209; asking to tune
+it names its ticket, after the resolver's tuning-arm refusal has had its say.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from .landform_config import LandformConfig
 VAL_READS: Final = 2
 
 #: Heads whose trainer is not built yet, and the ticket that builds it.
-PENDING_HEADS: Final = {"upernet": "#208", "unet": "#209"}
+PENDING_HEADS: Final = {"unet": "#209"}
 
 
 def assert_buildable(head: str) -> None:
@@ -49,7 +49,8 @@ def assert_buildable(head: str) -> None:
     if head in PENDING_HEADS:
         raise NotImplementedError(
             f"the {head} head has no trainer yet ({PENDING_HEADS[head]}), so `run --task "
-            f"landform --tune --head {head}` cannot train its points; the linear probe tunes today"
+            f"landform --tune --head {head}` cannot train its points; the linear probe and UperNet "
+            f"tune today"
         )
 
 
@@ -181,7 +182,7 @@ def run_pass(
             f"§4.5 tunes at seed {cfg.schedule.tune_seed} on ladder {cfg.schedule.tune_ladder}; "
             f"this pass is seed {cfg.seed} on ladder {cfg.ladder}"
         )
-    trainer = landform_train.train_linear if trainer is None else trainer
+    trainer = landform_train.train_head if trainer is None else trainer
     grid = check_tuning_knobs(cfg)
     steps = tune_steps(cfg)
     root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{landform_recipes.rung_tag(cfg.rung)}"

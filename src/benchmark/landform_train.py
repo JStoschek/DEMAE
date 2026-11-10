@@ -1,6 +1,9 @@
-"""Task 2's training pass for a frozen-encoder probe, and the test scoring after it (#206).
+"""Task 2's training pass for a frozen-encoder head, and the test scoring after it (#206, #208).
 
-Plan §4.5 and §4.1, in the order this module runs them:
+One pass for both heads over a frozen encoder: §4.1's linear probe, which reads the extractor's
+``output``, and §4.2's UperNet, which reads its ``intermediates`` at ``upernet.layers``
+(:func:`build_head` is the one place a head is chosen, built and fed). Plan §4.5, §4.1 and §4.2,
+in the order this module runs them:
 
 * **Length is steps**, :attr:`benchmark.landform_config.LandformConfig.steps`: ``epochs x
   ceil(max(n_train, floor) / batch)``. 5% linear warmup then cosine to zero over those steps
@@ -42,7 +45,7 @@ import numpy as np
 from dataset.normalize import land_mask
 from pretrain.artifact import read_tile_strata
 
-from . import arms, artifacts, geomorphon_pass, ladders, landform_arms, probe, train
+from . import arms, artifacts, geomorphon_pass, ladders, landform_arms, probe, train, upernet
 from .landform_config import GEOMORPHON_CLASSES, LandformConfig
 
 #: The eight symmetries of the square: ``k % 4`` quarter turns, then a left-right flip if
@@ -282,6 +285,8 @@ class Fitted:
     encoder: str
     extractor: Any
     precision: dict | None = None
+    #: What the head takes off the extractor's features (:attr:`Head.takes`).
+    takes: Callable[[Any], Any] = None  # type: ignore[assignment]  # set by train_head
 
     def to_dict(self) -> dict:
         return {
@@ -299,18 +304,53 @@ class Fitted:
         }
 
 
-class _Forward:
-    """The frozen encoder through the contract, then the probe — one place, train and eval."""
+@dataclass(frozen=True)
+class Head:
+    """A built head and what it reads off the extractor's :class:`~benchmark.extract.Features`."""
 
-    def __init__(self, extractor, encoder: str, module, device: str):
+    module: Any
+    parameters: int
+    width: int
+    #: ``Features -> the module's input``: ``output`` for the linear probe, the four chosen
+    #: ``intermediates`` for UperNet.
+    takes: Callable[[Any], Any]
+
+
+def build_head(cfg: LandformConfig, width: int) -> Head:
+    """The cell's head for a ``width``-d encoder, initialized under the cell's seed."""
+    if cfg.head == "linear":
+        built = probe.build(width, seed=cfg.seed)
+        return Head(built.module, built.parameters, built.width, lambda f: f.output)
+    if cfg.head == "upernet":
+        recipe = cfg.upernet
+        built = upernet.build(width, channels=recipe.channels, pool_scales=recipe.pool_scales,
+                              seed=cfg.seed)
+        layers = tuple(recipe.layers)
+        return Head(built.module, built.parameters, built.width,
+                    lambda f: upernet.read(f, layers))
+    raise NotImplementedError(
+        f"the {cfg.head} head trains no frozen encoder here; B7's UNet is #209"
+    )
+
+
+def _to(value, device: str):
+    return [v.to(device) for v in value] if isinstance(value, (list, tuple)) else value.to(device)
+
+
+class _Forward:
+    """The frozen encoder through the contract, then the head — one place, train and eval."""
+
+    def __init__(self, extractor, encoder: str, module, device: str,
+                 takes: Callable[[Any], Any]):
         self.extractor = extractor
         self.encoder = encoder
         self.module = module
         self.device = device
+        self.takes = takes
 
     def logits(self, raw: np.ndarray):
         features = self.extractor.extract(raw, land_mask(raw), encoder_name=self.encoder)
-        return self.module(features.output.to(self.device))
+        return self.module(_to(self.takes(features), self.device))
 
 
 def _val_miou(forward: _Forward, cfg: LandformConfig, val: Sequence[str], index: dict,
@@ -327,7 +367,7 @@ def _val_miou(forward: _Forward, cfg: LandformConfig, val: Sequence[str], index:
     return miou(total)
 
 
-def train_linear(
+def train_head(
     cfg: LandformConfig,
     *,
     lr: float,
@@ -338,7 +378,8 @@ def train_linear(
     val_reads: int | None = None,
     checkpoint_dir: Path | str | None = None,
 ) -> Fitted:
-    """Train §4.1's linear probe for one cell over a frozen encoder; return the best val read.
+    """Train the cell's head (§4.1's linear probe or §4.2's UperNet) over a frozen encoder;
+    return the best val read.
 
     ``steps``, ``val_reads`` and ``checkpoint_dir`` are #207's tuning pass and nothing else: a
     point trains a fifth of the cell's steps (warmup and cosine over that shorter run, as Task 1's
@@ -369,9 +410,9 @@ def train_linear(
         param.requires_grad_(False)
     before = train.encoder_checksums(model)
 
-    built = probe.build(encoder.width, seed=cfg.seed)
+    built = build_head(cfg, encoder.width)
     module = built.module.to(device)
-    forward = _Forward(extractor, encoder.name, module, device)
+    forward = _Forward(extractor, encoder.name, module, device, built.takes)
     optimizer = torch.optim.AdamW(
         train.parameter_groups(module, weight_decay=recipe.weight_decay),
         lr=lr, weight_decay=recipe.weight_decay,
@@ -391,7 +432,8 @@ def train_linear(
     sampler = cycling_batches(tiles.train, recipe.batch_size, rng)
     items = [(t, int(rng.integers(DIHEDRAL))) for _ in range(steps) for t in next(sampler)]
 
-    directory = (Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.rung}-seed{cfg.seed}"
+    directory = (Path(cfg.runtime.checkpoint_dir)
+                 / f"{cfg.arm}-{cfg.head}-{cfg.rung}-seed{cfg.seed}"
                  if checkpoint_dir is None else Path(checkpoint_dir))
     directory.mkdir(parents=True, exist_ok=True)
     best_path = directory / "best.pt"
@@ -455,6 +497,7 @@ def train_linear(
         encoder=encoder.name,
         extractor=extractor,
         precision=extractor.precision_agreement(encoder_name=encoder.name),
+        takes=built.takes,
     )
 
 
@@ -478,7 +521,8 @@ def score_test(cfg: LandformConfig, fitted: Fitted, tiles: CellTiles) -> list[Sc
     stratum = dict(tiles.test)
     index = TileStore.index_for(cfg.paths.corpus_dir, ids)
     bands = Bands.from_manifest(cfg.paths.corpus_dir, split="test")
-    forward = _Forward(fitted.extractor, fitted.encoder, fitted.module, fitted.device)
+    forward = _Forward(fitted.extractor, fitted.encoder, fitted.module, fitted.device,
+                       fitted.takes)
     ignore = cfg.geomorphon.ignore_label
     out: list[ScoredTile] = []
     fitted.module.eval()

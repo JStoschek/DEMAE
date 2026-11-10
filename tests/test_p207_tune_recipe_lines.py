@@ -114,7 +114,7 @@ def test_an_edge_winner_widens_the_grid_one_point_reruns_the_whole_pass_and_says
 ):
     calls: list = []
     # Peaks between 3e-2 and 1e-1, nearer 3e-2: 3e-2 wins on the top edge, then inside.
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(0.05, calls))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(0.05, calls))
     assert launch.main([*tune_argv(), *flags]) == 0
 
     record = record_of(bare)
@@ -133,7 +133,7 @@ def test_an_edge_winner_widens_the_grid_one_point_reruns_the_whole_pass_and_says
 
 
 def test_a_low_edge_winner_widens_downwards(bare, flags, stub, monkeypatch):
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(2e-4, []))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(2e-4, []))
     assert launch.main([*tune_argv(), *flags]) == 0
     assert lines_of(bare)["linear"]["1%"]["grid"] == [1e-4, *LINEAR_GRID]
     assert record_of(bare)["passes"][0]["widened"] == "low"
@@ -142,14 +142,14 @@ def test_a_low_edge_winner_widens_downwards(bare, flags, stub, monkeypatch):
 def test_tuned_lines_are_per_rung_and_a_cell_then_runs_at_its_rung_s_line(
     bare, flags, stub, monkeypatch, capsys
 ):
-    real = landform_train.train_linear
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, []))
+    real = landform_train.train_head
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(3e-3, []))
     assert launch.main([*tune_argv(), *flags]) == 0
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(1e-3, []))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(1e-3, []))
     assert launch.main(["run", "--tune", "--head", "linear", "--rung", "10%", *flags]) == 0
     lines = lines_of(bare)["linear"]
     assert (lines["1%"]["lr"], lines["10%"]["lr"]) == (3e-3, 1e-3)
-    monkeypatch.setattr(landform_train, "train_linear", real)  # the scored cell trains for real
+    monkeypatch.setattr(landform_train, "train_head", real)  # the scored cell trains for real
     capsys.readouterr()
 
     assert launch.main(["run", "--arm", "B1", "--rung", "1%", "--seed", "0", *flags]) == 0
@@ -159,7 +159,7 @@ def test_tuned_lines_are_per_rung_and_a_cell_then_runs_at_its_rung_s_line(
 def test_a_run_whose_recipe_differs_from_its_tuned_line_is_refused(
     bare, flags, stub, monkeypatch
 ):
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, []))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(3e-3, []))
     assert launch.main([*tune_argv(), *flags]) == 0
     with pytest.raises(ValueError, match="recipe drifted from its frozen line.*weight_decay"):
         launch.main(["run", "--dry-run", "--rung", "1%", *flags,
@@ -170,7 +170,7 @@ def test_a_second_pass_over_a_frozen_line_is_refused_before_it_trains(
     bare, flags, stub, monkeypatch
 ):
     calls: list = []
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, calls))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(3e-3, calls))
     assert launch.main([*tune_argv(), *flags]) == 0
     calls.clear()
     with pytest.raises(ValueError, match="already freezes linear @ 1%.*amendment"):
@@ -194,7 +194,7 @@ def test_a_tuning_pass_on_any_arm_but_its_tuning_arm_is_refused(argv, refusal, f
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize("head, ticket", [("upernet", "#208"), ("unet", "#209")])
+@pytest.mark.parametrize("head, ticket", [("unet", "#209")])
 def test_a_head_with_no_trainer_yet_names_its_ticket_on_its_tuning_arm(head, ticket, flags):
     with pytest.raises(NotImplementedError, match=ticket):
         launch.main(["run", "--dry-run", "--tune", "--head", head, "--rung", "1%", *flags])
@@ -222,7 +222,7 @@ def test_a_tuning_pass_off_section_4_5_s_tuning_knobs_is_refused_by_name(
     overrides, named, bare, flags, stub, monkeypatch
 ):
     calls: list = []
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, calls))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(3e-3, calls))
     sets = [arg for o in overrides for arg in ("--set", o)]
     argv = [*tune_argv(), *flags, *sets]
     if "schedule.tune_seed=1" in overrides:
@@ -235,7 +235,7 @@ def test_a_tuning_pass_off_section_4_5_s_tuning_knobs_is_refused_by_name(
 
 
 def test_tune_writes_nothing_of_task_one_s_and_scores_nothing(bare, flags, stub, monkeypatch):
-    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, []))
+    monkeypatch.setattr(landform_train, "train_head", curve_trainer(3e-3, []))
     assert launch.main([*tune_argv(), *flags]) == 0
     assert not list(bare.rglob(tune.TUNING_NAME))
     assert not (bare / "results.parquet").exists()

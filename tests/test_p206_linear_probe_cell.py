@@ -636,7 +636,7 @@ def test_every_optimizer_step_runs_at_its_step_s_warmup_then_cosine_lr(
     box, flags, stub, lrs_stepped
 ):
     cfg, tiles = _trainer_cell(flags)
-    landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    landform_train.train_head(cfg, lr=1e-2, tiles=tiles)
     assert lrs_stepped == pytest.approx([_cosine(1e-2, s) for s in range(STEPS)])
 
 
@@ -646,7 +646,7 @@ def test_the_fitted_probe_carries_the_best_val_read_s_weights_not_the_last_step_
     scores = iter([0.9, *[0.1] * (STEPS - 1)])  # the first read is the best one
     monkeypatch.setattr(landform_train, "_val_miou", lambda *a, **k: next(scores))
     cfg, tiles = _trainer_cell(flags)
-    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    fitted = landform_train.train_head(cfg, lr=1e-2, tiles=tiles)
     saved = torch.load(fitted.checkpoint)
     assert fitted.best.step == saved["step"] == 1
     state = fitted.module.state_dict()
@@ -674,7 +674,7 @@ def test_an_all_ignore_batch_takes_no_optimizer_step_but_keeps_its_place_in_the_
         return label
 
     monkeypatch.setattr(geomorphon_pass, "read_label", read_label)
-    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    fitted = landform_train.train_head(cfg, lr=1e-2, tiles=tiles)
     assert fitted.steps == STEPS and len(fitted.reads) == STEPS
     assert lrs_stepped == pytest.approx([_cosine(1e-2, s) for s in range(5, STEPS)])
 
@@ -682,8 +682,8 @@ def test_an_all_ignore_batch_takes_no_optimizer_step_but_keeps_its_place_in_the_
 def test_writing_a_cell_returns_the_stamped_record_and_leaves_the_caller_s_alone(tmp_path):
     from benchmark import landform_results
 
-    cell = {"arm": "B1", "rung": "1%", "seed": 0, "ladder": 0, "label_set": "geomorphon",
-            "variant": "primary"}
+    cell = {"arm": "B1", "head": "linear", "rung": "1%", "seed": 0, "ladder": 0,
+            "label_set": "geomorphon", "variant": "primary"}
     record = {"cell": dict(cell), "config_hash": "c", "git_sha": "g", "inputs": {},
               "recipe_line": {}, "produced": {"test_miou": 0.5}}
     before = json.loads(json.dumps(record))
@@ -698,7 +698,7 @@ def test_writing_a_cell_returns_the_stamped_record_and_leaves_the_caller_s_alone
 
 def test_the_training_record_names_the_head_that_trained(box, flags, stub):
     cfg, tiles = _trainer_cell(flags)
-    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    fitted = landform_train.train_head(cfg, lr=1e-2, tiles=tiles)
     assert fitted.head == cfg.head
     assert dataclasses.replace(fitted, head="upernet").to_dict()["kind"] == "upernet"
 
@@ -708,8 +708,8 @@ def test_a_table_scores_a_cell_s_first_attempt_and_discloses_the_later_ones(tmp_
     attempt is a disclosed row beside it, never pooled into the core table."""
     from benchmark import landform_results
 
-    cell = {"arm": "B1", "rung": "1%", "seed": 0, "ladder": 0, "label_set": "geomorphon",
-            "variant": "primary"}
+    cell = {"arm": "B1", "head": "linear", "rung": "1%", "seed": 0, "ladder": 0,
+            "label_set": "geomorphon", "variant": "primary"}
     row = {**cell, "tile_id": "t0", "band": 0, "stratum": 0, "confusion": [0] * 100,
            **{name: 0 for name in landform_results.BOUNDARY_COLUMNS}, "config_hash": "c"}
     path = tmp_path / "r.parquet"

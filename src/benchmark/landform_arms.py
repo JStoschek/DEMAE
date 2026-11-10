@@ -9,9 +9,12 @@ and there is one place a checkpoint md5 lives.
 
 #198 registered **B1**: it is the default cell, the way A4-R5 is Task 1's, and a config needs
 a valid arm to construct. The rows a later ticket runs arrive with it — B6, B1-R4 and B1-S came
-with the linear-probe cell (#206), each with the linear head only until #208 gives B6 its
-UperNet; the UperNet rows arrive with #208, B7 with #209, B3 with #210, the
-TerraMind rows with #211 — so no row here outruns the code that can run it.
+with the linear-probe cell (#206); B2, B2-R4, B2-S and B6's second head, the UperNet, came with
+#208; B7 arrives with #209, B3 with #210, the TerraMind rows with #211 — so no row here outruns
+the code that can run it.
+
+B6 is one row with two heads, as plan §1 has it: ``--head upernet`` names its UperNet cell, and
+the parquet keys a cell by its head as well as its arm, so B6's two cells never collide.
 
 ## What an arm declares
 
@@ -80,10 +83,10 @@ ARMS: Final[dict[str, LandformArm]] = dict(
         _arm(
             "B6",
             encoder="imagenet-mae",
-            heads=("linear",),
+            heads=("linear", "upernet"),
             trains="head",
-            what="ImageNet-MAE frozen + the identical linear probe — core, C1, and §4.5's "
-            "tuning arm",
+            what="ImageNet-MAE frozen + the identical linear probe or UperNet — core, C1, and "
+            "§4.5's tuning arm for both",
         ),
         _arm(
             "B1-R4",
@@ -100,6 +103,30 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="head",
             what="DEMAE ViT-S frozen + the identical linear probe at 384-d — appendix, no "
             "bootstrap pair",
+        ),
+        _arm(
+            "B2",
+            encoder="demae-r5",
+            heads=("upernet",),
+            trains="head",
+            what="DEMAE R5 frozen + §4.2's UperNet (PANGAEA's) on intermediates[3, 5, 7, 11] — "
+            "core, C1, and C2's money plot",
+        ),
+        _arm(
+            "B2-R4",
+            encoder="demae-r4",
+            heads=("upernet",),
+            trains="head",
+            what="DEMAE R4 (ImageNet warm start) frozen + the identical UperNet — extra row, "
+            "never C1's number (L5, L9)",
+        ),
+        _arm(
+            "B2-S",
+            encoder="demae-vits",
+            heads=("upernet",),
+            trains="head",
+            what="DEMAE ViT-S frozen + the identical UperNet at 384-d — appendix, no bootstrap "
+            "pair",
         ),
     ]
 )

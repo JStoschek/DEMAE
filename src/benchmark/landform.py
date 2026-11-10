@@ -18,7 +18,8 @@ owns the parser and the three verbs; ``--task landform`` hands it this module's
 * **A refusal about the cell** (seed bound to ladder, frozen recipe line, tuning arm) goes in
   :func:`resolve`, upstream of ``--dry-run``, for Task 1's reason: a pre-flight that prints a
   drifted cell as a normal one is worse than none.
-* **``run``** trains and scores the linear-probe cell on geomorphon labels (#206): a pre-flight
+* **``run``** trains and scores a frozen-encoder cell on geomorphon labels, the linear probe
+  (#206) or UperNet (#208), through one path: a pre-flight
   that refuses by name, then :mod:`benchmark.landform_train`, then
   :mod:`benchmark.landform_results`. A head or label set no ticket has built names its ticket.
 * **``run --tune``** is §4.5's lr pass for one head at one rung (#207): the resolver fills in
@@ -423,7 +424,8 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     encoder = resolution.encoder
     ladder = resolution.input("ladder")
     cell = {
-        "arm": cfg.arm, "rung": cfg.rung, "seed": cfg.seed, "ladder": cfg.ladder,
+        "arm": cfg.arm, "head": cfg.head, "rung": cfg.rung, "seed": cfg.seed,
+        "ladder": cfg.ladder,
         "label_set": cfg.label_set, "variant": gm.PRIMARY,
     }
     attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
@@ -530,8 +532,8 @@ def _tune(resolution: LandformResolution, args: argparse.Namespace) -> int:
 def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     """``run --task landform`` — one (arm, rung, seed) cell: pre-flight, train, score, append.
 
-    #206 builds the linear-probe cell on geomorphon labels. UperNet (#208), B7 (#209) and the
-    Iwahashi classifier (#212) name their tickets.
+    #206 built the linear-probe cell on geomorphon labels and #208 put UperNet through the same
+    path. B7 (#209) and the Iwahashi classifier (#212) name their tickets.
     """
     from dataset.provenance import git_sha
 
@@ -543,10 +545,10 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
             "the Iwahashi tile classifier and its fitted probe are #212; `run --task landform` "
             "trains the dense geomorphon cells"
         )
-    if cfg.head != "linear":
+    if cfg.head == "unet":
         raise NotImplementedError(
-            f"the {cfg.head} head is not built yet (#208 UperNet, #209 B7's UNet); #206 runs "
-            f"the linear probe"
+            "B7's UNet is not built yet (#209); `run --task landform` trains the linear probe "
+            "(#206) and UperNet (#208) over a frozen encoder"
         )
     rerun_reason = getattr(args, "rerun_reason", None)
     found = _preflight(resolution, rerun_reason)
@@ -559,7 +561,7 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
           f"tiles")
 
     line = found["line"]
-    fitted = landform_train.train_linear(
+    fitted = landform_train.train_head(
         cfg, lr=line.lr, tiles=tiles, on_read=lambda read: print(f"{'':<16} {read.line()}")
     )
     scored = landform_train.score_test(cfg, fitted, tiles)
@@ -579,7 +581,7 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     ]
     record = {
         "task": "landform",
-        "cell": {**found["cell"], "head": cfg.head},
+        "cell": found["cell"],
         "config_hash": cfg.config_hash,
         "artifact_hash": cfg.artifact_hash,
         "config": cfg.recipe_dict(),
