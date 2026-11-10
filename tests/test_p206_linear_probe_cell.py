@@ -579,14 +579,14 @@ def test_a_recipe_line_is_written_once_idempotently_and_never_replaced(tmp_path)
 
 
 def test_only_the_tuning_arm_writes_a_line_and_a_line_from_another_arm_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="tunes it on B6"):
+    with pytest.raises(ValueError, match="tunes the linear head on B6 alone.*frozen from arm B1"):
         landform_recipes.write_line(_lines_cfg(tmp_path).replace(arm="B1"), lr=1e-3)
     cfg = _lines_cfg(tmp_path)
     path, _ = landform_recipes.write_line(cfg, lr=1e-3)
     body = json.loads(path.read_text())
     body["lines"]["linear"]["100%"]["tuned_on"]["arm"] = "B1"
     path.write_text(json.dumps(body))
-    with pytest.raises(ValueError, match="tuned on B1; §4.5 tunes the linear head on B6 alone"):
+    with pytest.raises(ValueError, match="tunes the linear head on B6 alone.*says it was tuned on B1"):
         landform_recipes.line_for(cfg)
 
 

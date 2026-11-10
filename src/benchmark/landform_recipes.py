@@ -81,21 +81,29 @@ def tuning_record_path_for(artifacts_dir: Path | str, head: str, rung: str) -> P
     Provenance, like Task 1's ``head_tuning.json``: nothing loads an lr from it. The line is the
     source; this says how the line was chosen and whether the grid had to widen.
     """
-    return Path(artifacts_dir) / TUNING_DIR_NAME / f"{head}-{rung.replace('%', 'pct')}.json"
+    return Path(artifacts_dir) / TUNING_DIR_NAME / f"{head}-{rung_tag(rung)}.json"
 
 
-def assert_tuning_arm(arm: str, head: str) -> None:
-    """Refuse a tuning pass for ``head`` on any arm but its tuning arm (§4.5, story 54).
+def rung_tag(rung: str) -> str:
+    """A rung as a file or directory name can carry it: ``1%`` -> ``1pct``."""
+    return rung.replace("%", "pct")
+
+
+def assert_tuning_arm(arm: str | None, head: str, *, said: str = "this pass was asked for arm"
+                      ) -> None:
+    """Refuse ``head``'s recipe coming from any arm but its tuning arm (§4.5, story 54).
 
     B6, the neutral encoder, tunes the linear probe and UperNet; B7 tunes itself. Any other arm
-    tuning a shared recipe is the thumb on the scale the rule exists to prevent.
+    tuning a shared recipe is the thumb on the scale the rule exists to prevent. The one refusal
+    for a pass asked for (the default), a line being written, and a line read back: ``said`` is
+    what the arm is, in the refusal's words.
     """
     if head not in TUNING_ARMS:
         raise ValueError(f"unknown head {head!r}; the tuned heads are {list(TUNING_ARMS)}")
     want = TUNING_ARMS[head]
     if arm != want:
         raise ValueError(
-            f"§4.5 tunes the {head} head on {want} alone, and this pass was asked for arm {arm}: "
+            f"§4.5 tunes the {head} head on {want} alone, and {said} {arm}: "
             f"the {head} recipe is shared by every arm at a rung, so only "
             + ("the neutral encoder B6" if want == "B6" else "B7, on itself,")
             + " may choose it"
@@ -168,12 +176,8 @@ def lookup(cfg: LandformConfig) -> RecipeLine | None:
 
 def check(cfg: LandformConfig, line: RecipeLine) -> RecipeLine:
     """Refuse a cell whose recipe differs from its frozen line, naming every knob that moved."""
-    want = TUNING_ARMS[cfg.head]
-    if line.tuned_on.get("arm") != want:
-        raise ValueError(
-            f"the frozen recipe line for {cfg.head} @ {cfg.rung} says it was tuned on "
-            f"{line.tuned_on.get('arm')}; §4.5 tunes the {cfg.head} head on {want} alone"
-        )
+    assert_tuning_arm(line.tuned_on.get("arm"), cfg.head,
+                      said=f"the frozen line for {cfg.head} @ {cfg.rung} says it was tuned on")
     now = frozen_recipe(cfg)
     moved = [
         f"{group}.{knob} {now[group].get(knob)!r} (line: {frozen.get(knob)!r})"
@@ -215,11 +219,7 @@ def write_line(
     §4.5's (``schedule.tune_seed``/``tune_ladder``). Idempotent for an identical line; refuses
     to replace a different one.
     """
-    want = TUNING_ARMS[cfg.head]
-    if cfg.arm != want:
-        raise ValueError(
-            f"arm {cfg.arm} cannot freeze the {cfg.head} recipe: §4.5 tunes it on {want}"
-        )
+    assert_tuning_arm(cfg.arm, cfg.head, said="this line would be frozen from arm")
     line = RecipeLine(
         head=cfg.head,
         rung=cfg.rung,

@@ -491,7 +491,7 @@ def score_test(cfg: LandformConfig, fitted: Fitted, tiles: CellTiles) -> list[Sc
                 out.append(ScoredTile(
                     tile_id=tile_id,
                     stratum=int(stratum[tile_id]),
-                    band=bands.of(index[tile_id][3]),
+                    band=bands.of(index[tile_id].slope_mean),
                     confusion=confusion(label[i], pred[i], ignore=ignore),
                     boundary=boundary_counts(label[i], pred[i], ignore=ignore),
                 ))

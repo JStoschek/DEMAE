@@ -58,10 +58,6 @@ def tune_steps(cfg: LandformConfig) -> int:
     return max(1, math.ceil(cfg.steps * cfg.schedule.tune_fraction))
 
 
-def _rung_tag(rung: str) -> str:
-    return rung.replace("%", "pct")
-
-
 def plan_tuning_knobs(cfg: LandformConfig) -> dict[str, Any]:
     """§4.5's tuning knobs for this cell's head, as the plan states them: the head group's
     ``lr_grid`` and every ``schedule.tune_*``, at their committed defaults."""
@@ -188,7 +184,7 @@ def run_pass(
     trainer = landform_train.train_linear if trainer is None else trainer
     grid = check_tuning_knobs(cfg)
     steps = tune_steps(cfg)
-    root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{_rung_tag(cfg.rung)}"
+    root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{landform_recipes.rung_tag(cfg.rung)}"
     shared = {"extractor": extractor}
     started = time.perf_counter()
 

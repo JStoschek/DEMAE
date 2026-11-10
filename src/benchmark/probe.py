@@ -17,12 +17,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from dataset.config import TILE_PX  # the tile the logits are upsampled to
+
 from .head import token_grid
+from .landform_config import GEOMORPHON_CLASSES
 
 #: WhiteboxTools' ten geomorphon forms (§3.1).
-CLASSES = 10
-#: The tile the logits are upsampled to.
-TILE_PX = 224
+CLASSES = len(GEOMORPHON_CLASSES)
 
 
 def parameter_count(width: int, classes: int = CLASSES) -> int:

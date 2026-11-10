@@ -60,7 +60,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final, Iterable, Sequence
+from typing import Any, Callable, Final, Iterable, NamedTuple, Sequence
 
 import numpy as np
 
@@ -75,6 +75,17 @@ from .config import BenchmarkConfig
 #: off the shard. ``slope_mean`` is here because §5's ruggedness bands are cut on it — see
 #: :func:`bands_for` on why that column and not ``stratum_id``.
 MANIFEST_COLUMNS: Final = ("tile_id", "shard_id", "row_index", "lat", "slope_mean")
+
+
+class IndexEntry(NamedTuple):
+    """One tile's row in :meth:`TileStore.index_for`: where it is, and the two numbers a pass
+    reads off the manifest without opening the shard. Still a plain tuple to every caller."""
+
+    shard_id: int
+    row_index: int
+    lat: float
+    slope_mean: float
+
 
 #: How tight the golden-tile gate is. The same tolerance
 #: ``tests/test_benchmark_metrics.py`` asserts the fixture at, so the two altitudes agree about
@@ -126,7 +137,7 @@ class TileStore:
 
     @staticmethod
     def index_for(corpus_dir: Path | str, tile_ids: Iterable[str] | None = None) -> dict:
-        """``tile_id -> (shard_id, row_index, lat, slope_mean)`` — everything :meth:`read` needs.
+        """``tile_id ->`` :class:`IndexEntry` — everything :meth:`read` needs.
 
         ``tile_ids`` narrows it to the tiles a caller can actually reach, which is what makes the
         result small enough to hand to workers: a training pass touches 27,000 of the corpus's
@@ -152,7 +163,7 @@ class TileStore:
         for i, tile_id in enumerate(column["tile_id"].astype(str)):
             name = str(tile_id)
             if wanted is None or name in wanted:
-                out[name] = (
+                out[name] = IndexEntry(
                     int(column["shard_id"][i]),
                     int(column["row_index"][i]),
                     float(column["lat"][i]),
