@@ -601,3 +601,79 @@ def test_a_class_present_in_truth_at_iou_zero_is_collapse_and_an_absent_one_is_n
     m[0, 0] = 5  # flat: right
     m[1, 0] = 3  # peak: present, never right
     assert landform_train.class_collapse(m.ravel()) == ["peak"]
+
+
+# --- The trainer itself, on the fixture box ------------------------------------
+
+
+def _trainer_cell(flags):
+    cfg = build_config(arm="B1", rung="1%", seed=0, overrides=flags[2:][1::2])
+    return cfg, landform_train.CellTiles.read(cfg)
+
+
+def _cosine(peak: float, step: int) -> float:
+    """§4.5's curve at the fixture's ten steps: 5% warmup rounds to one step at the peak, then
+    cosine to zero over the other nine."""
+    import math
+
+    return peak if step == 0 else peak * 0.5 * (1 + math.cos(math.pi * (step - 1) / 9))
+
+
+@pytest.fixture
+def lrs_stepped():
+    """The lr in force at each optimizer step taken, in order."""
+    seen: list[float] = []
+    from torch.optim.optimizer import register_optimizer_step_pre_hook
+
+    handle = register_optimizer_step_pre_hook(
+        lambda optimizer, args, kwargs: seen.append(optimizer.param_groups[0]["lr"])
+    )
+    yield seen
+    handle.remove()
+
+
+def test_every_optimizer_step_runs_at_its_step_s_warmup_then_cosine_lr(
+    box, flags, stub, lrs_stepped
+):
+    cfg, tiles = _trainer_cell(flags)
+    landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    assert lrs_stepped == pytest.approx([_cosine(1e-2, s) for s in range(STEPS)])
+
+
+def test_the_fitted_probe_carries_the_best_val_read_s_weights_not_the_last_step_s(
+    box, flags, stub, monkeypatch
+):
+    scores = iter([0.9, *[0.1] * (STEPS - 1)])  # the first read is the best one
+    monkeypatch.setattr(landform_train, "_val_miou", lambda *a, **k: next(scores))
+    cfg, tiles = _trainer_cell(flags)
+    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    saved = torch.load(fitted.checkpoint)
+    assert fitted.best.step == saved["step"] == 1
+    state = fitted.module.state_dict()
+    assert set(state) == set(saved["state_dict"])
+    for key, value in state.items():
+        assert torch.equal(value.cpu(), saved["state_dict"][key].cpu()), key
+
+
+def test_an_all_ignore_batch_takes_no_optimizer_step_but_keeps_its_place_in_the_schedule(
+    box, flags, stub, monkeypatch, lrs_stepped
+):
+    cfg, tiles = _trainer_cell(flags)
+    train_ids = set(tiles.train)
+    real = geomorphon_pass.read_label
+    train_reads = [0]
+
+    def read_label(cfg, tile_id):
+        """The first five batches' train labels are every pixel ignored; val is untouched."""
+        label = real(cfg, tile_id)
+        if tile_id in train_ids:
+            batch = train_reads[0] // cfg.linear.batch_size
+            train_reads[0] += 1
+            if batch < 5:
+                return np.full_like(label, cfg.geomorphon.ignore_label)
+        return label
+
+    monkeypatch.setattr(geomorphon_pass, "read_label", read_label)
+    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    assert fitted.steps == STEPS and len(fitted.reads) == STEPS
+    assert lrs_stepped == pytest.approx([_cosine(1e-2, s) for s in range(5, STEPS)])

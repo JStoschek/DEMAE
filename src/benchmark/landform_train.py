@@ -403,17 +403,17 @@ def train_linear(
     tick = mark()
     for raw, label in _loader(cfg, items, index, recipe.batch_size):
         schedule.apply(optimizer, step)
-        optimizer.zero_grad(set_to_none=True)
-        target = torch.from_numpy(label.astype(np.int64)).to(device)
-        logits = forward.logits(raw)
-        if bool((target != ignore).any()):
+        # A batch of all-ignored pixels teaches nothing (and CE's mean over it is NaN). It takes
+        # no optimizer step, since AdamW would still decay the weights and advance its moments,
+        # but it keeps its step: the count and the cosine stay those of the cell's schedule.
+        if bool((label != ignore).any()):
+            optimizer.zero_grad(set_to_none=True)
+            target = torch.from_numpy(label.astype(np.int64)).to(device)
             loss = torch.nn.functional.cross_entropy(
-                logits, target, weight=weights, ignore_index=ignore
+                forward.logits(raw), target, weight=weights, ignore_index=ignore
             )
-        else:  # a batch of all-ignored pixels teaches nothing, and CE's mean over it is NaN
-            loss = logits.sum() * 0.0
-        loss.backward()
-        optimizer.step()
+            loss.backward()
+            optimizer.step()
         step += 1
         train_seconds += mark() - tick
         if step in reads_at:
