@@ -266,6 +266,8 @@ class Fitted:
     """What one probe pass produced, and what the run record quotes about it."""
 
     module: Any
+    #: The head that trained, as the cell names it.
+    head: str
     parameters: int
     width: int
     steps: int
@@ -283,7 +285,7 @@ class Fitted:
 
     def to_dict(self) -> dict:
         return {
-            "kind": "linear",
+            "kind": self.head,
             "lr": self.lr,
             "steps": self.steps,
             "train_tiles": self.train_tiles,
@@ -438,6 +440,7 @@ def train_linear(
     train.assert_encoder_frozen(model, name=encoder.name, before=before)
     return Fitted(
         module=module,
+        head=cfg.head,
         parameters=built.parameters,
         width=built.width,
         steps=steps,

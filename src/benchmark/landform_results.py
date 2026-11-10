@@ -95,6 +95,8 @@ def attempt_for(path: Path | str, cell: Mapping[str, Any], rerun_reason: str | N
         row for row in table.select([*CELL_COLUMNS, "attempt", "run_id"]).to_pylist()
         if all(row[k] == cell[k] for k in CELL_COLUMNS if k != "ladder")
     ]
+    # The config ties ladder to seed, so a command-built cell cannot reach this; it guards a
+    # hand-built cell (or a hand-edited table) pairing a seed with another ladder.
     ladders = {row["ladder"] for row in same} - {cell["ladder"]}
     if ladders:
         raise ValueError(
@@ -143,12 +145,16 @@ def run_id(record: Mapping[str, Any]) -> str:
 def write(rows: Sequence[Mapping[str, Any]], record: dict, path: Path | str,
           *, rerun_reason: str | None) -> tuple[Path, int, dict]:
     """Land one cell: the write-once check again (the file may have moved since pre-flight),
-    the rows, then the record. Fills ``attempt`` and ``run_id`` into both."""
+    the rows, then the record. Returns the record with ``attempt`` and ``run_id`` filled in, as
+    a new dict: the caller's is left as it was."""
     path = Path(path)
     attempt = attempt_for(path, record["cell"], rerun_reason)
-    record["cell"]["attempt"] = attempt
-    if rerun_reason is not None:
-        record["rerun"] = {"reason": rerun_reason, "attempt": attempt}
+    record = {
+        **record,
+        "cell": {**record["cell"], "attempt": attempt},
+        **({"rerun": {"reason": rerun_reason, "attempt": attempt}}
+           if rerun_reason is not None else {}),
+    }
     record["run_id"] = run_id(record)
     record["written_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     record["produced"] = {"rows": len(rows), **record.get("produced", {})}

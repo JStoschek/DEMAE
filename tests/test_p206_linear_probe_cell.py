@@ -677,3 +677,27 @@ def test_an_all_ignore_batch_takes_no_optimizer_step_but_keeps_its_place_in_the_
     fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
     assert fitted.steps == STEPS and len(fitted.reads) == STEPS
     assert lrs_stepped == pytest.approx([_cosine(1e-2, s) for s in range(5, STEPS)])
+
+
+def test_writing_a_cell_returns_the_stamped_record_and_leaves_the_caller_s_alone(tmp_path):
+    from benchmark import landform_results
+
+    cell = {"arm": "B1", "rung": "1%", "seed": 0, "ladder": 0, "label_set": "geomorphon",
+            "variant": "primary"}
+    record = {"cell": dict(cell), "config_hash": "c", "git_sha": "g", "inputs": {},
+              "recipe_line": {}, "produced": {"test_miou": 0.5}}
+    before = json.loads(json.dumps(record))
+    row = {**cell, "tile_id": "t0", "band": 0, "stratum": 0, "confusion": [0] * 100,
+           **{name: 0 for name in landform_results.BOUNDARY_COLUMNS}, "config_hash": "c"}
+    _, _, written = landform_results.write([row], record, tmp_path / "r.parquet",
+                                           rerun_reason=None)
+    assert record == before
+    assert written["cell"]["attempt"] == 0 and written["produced"]["rows"] == 1
+    assert written["run_id"] and written["written_at"]
+
+
+def test_the_training_record_names_the_head_that_trained(box, flags, stub):
+    cfg, tiles = _trainer_cell(flags)
+    fitted = landform_train.train_linear(cfg, lr=1e-2, tiles=tiles)
+    assert fitted.head == cfg.head
+    assert dataclasses.replace(fitted, head="upernet").to_dict()["kind"] == "upernet"
