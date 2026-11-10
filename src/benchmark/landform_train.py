@@ -402,6 +402,24 @@ def finetune_groups(encoder, head, recipe, *, weight_decay: float) -> list[dict]
     return [groups[key] for key in sorted(groups)]
 
 
+def optimizer_for(cfg: LandformConfig, groups, *, lr: float):
+    """The head recipe's optimizer over ``groups``: AdamW, the one every Task 2 recipe names.
+
+    The recipe's ``optimizer`` is read rather than stated beside a hard-coded AdamW, so a line
+    frozen under another name is refused here instead of trained under AdamW and recorded as
+    whatever it said (#197 review).
+    """
+    import torch
+
+    recipe = cfg.recipe
+    if recipe.optimizer != "adamw":
+        raise ValueError(
+            f"{cfg.head}.optimizer {recipe.optimizer!r}: Task 2's heads train under AdamW "
+            f"(Task 1's §4.1 optimizer block), and no other optimizer is built"
+        )
+    return torch.optim.AdamW(groups, lr=lr, weight_decay=recipe.weight_decay)
+
+
 def _to(value, device: str):
     return [v.to(device) for v in value] if isinstance(value, (list, tuple)) else value.to(device)
 
@@ -509,7 +527,7 @@ def train_head(
         before = train.encoder_checksums(model)
         groups = train.parameter_groups(module, weight_decay=recipe.weight_decay)
         forward = _Forward(extractor, encoder.name, module, device, built.takes)
-    optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=recipe.weight_decay)
+    optimizer = optimizer_for(cfg, groups, lr=lr)
     steps = cfg.steps if steps is None else steps
     if steps < 1:
         raise ValueError(f"a pass of {steps} steps trains nothing")

@@ -178,3 +178,12 @@ def test_tune_head_unet_on_any_other_arm_is_refused(arm, bare, flags, capsys):
             launch.main(["run", "--tune", "--head", "unet", "--arm", arm, "--rung", "1%",
                          *flags, *dry])
     assert not (bare / "task2" / landform_recipes.RECIPE_LINES_NAME).exists()
+
+
+def test_b7_trains_under_the_optimizer_its_config_names_and_refuses_any_but_adamw(bare, flags):
+    """#197 review: `unet.optimizer` is read by the trainer, not stated beside a hard-coded
+    AdamW. A tuning pass would otherwise freeze an `sgd` line it never trained under."""
+    with pytest.raises(ValueError, match=r"unet\.optimizer 'sgd'.*AdamW"):
+        launch.main(["run", "--tune", "--head", "unet", "--rung", "1%", *flags,
+                     "--set", 'unet.optimizer="sgd"'])
+    assert not (bare / "task2" / landform_recipes.RECIPE_LINES_NAME).exists()

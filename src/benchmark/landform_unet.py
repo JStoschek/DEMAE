@@ -51,6 +51,7 @@ from .landform_train import (
     _loader,
     _val_miou,
     cycling_batches,
+    optimizer_for,
     val_read_steps,
 )
 
@@ -117,9 +118,8 @@ def train_unet(
     expected = trunk_parameters()
     train.assert_everything_trains(module, expected=expected)
     forward = ScratchForward(module, device)
-    optimizer = torch.optim.AdamW(
-        train.parameter_groups(module, weight_decay=recipe.weight_decay),
-        lr=lr, weight_decay=recipe.weight_decay,
+    optimizer = optimizer_for(
+        cfg, train.parameter_groups(module, weight_decay=recipe.weight_decay), lr=lr
     )
     steps = cfg.steps if steps is None else steps
     if steps < 1:
