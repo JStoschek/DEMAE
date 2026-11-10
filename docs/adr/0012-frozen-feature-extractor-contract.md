@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
-- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). And 2026-10-15 ([issue #195](https://github.com/JStoschek/DEMAE/issues/195), on [#194](https://github.com/JStoschek/DEMAE/issues/194)'s measurements) — a second TerraMind encoder, the backbone, makes three sentences written for the tokenizer false for it; see the notes under Context fact 1 and Decisions 3, 5 and 7.2, and [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9). No decision changes in any of them.
+- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). And 2026-10-15 ([issue #195](https://github.com/JStoschek/DEMAE/issues/195), on [#194](https://github.com/JStoschek/DEMAE/issues/194)'s measurements) — a second TerraMind encoder, the backbone, makes three sentences written for the tokenizer false for it; see the notes under Context fact 1 and Decisions 3, 5 and 7.2, and [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9). And 2026-11-10 ([issue #197](https://github.com/JStoschek/DEMAE/issues/197)'s review, on [#210](https://github.com/JStoschek/DEMAE/issues/210)) — the call gains `grad=`, for B3's fine-tune alone; see the note under Decision 1. No decision changes in any of them.
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
@@ -61,6 +61,14 @@ pretraining loader's output un-passable renders the bug unrepresentable rather t
 The mask is defined as **valid = land ∧ ¬void**: Task 1 passes the void-aware mask (§2.1's non-void
 stats, which is what stops the leak), Task 2 passes land-only, and the same code path serves both.
 TerraMind's normalizer ignores the mask — its affine is global, and the A1 fill happened upstream.
+
+> *(Amended 2026-11-10 — [#197](https://github.com/JStoschek/DEMAE/issues/197)'s review, on
+> [#210](https://github.com/JStoschek/DEMAE/issues/210).* `Extractor.extract` takes `grad=`, default
+> `False`. It exists only for Task 2's B3, which fine-tunes R5 and so needs the autograd graph through
+> the encoder; every frozen consumer leaves it off and gets no graph, as before. With it on, the call is
+> otherwise this contract unchanged: the same normalization, taps, layout and fp32 return. It does not
+> unfreeze anything itself. B3 unfreezes the encoder in its own trainer, and the frozen arms still
+> assert theirs unmoved.*)
 
 **2. Statistics are always recomputed from the passed mask; never read from the manifest.** One code
 path, no branch whose two sides belong to different tasks. Context fact 3 is the price and it is
