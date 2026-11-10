@@ -67,8 +67,39 @@ RULE: Final = (
 )
 
 
+#: Where each tuning pass's record goes, one file per head per rung, beside the lines file.
+TUNING_DIR_NAME: Final = "tuning"
+
+
 def path_for(cfg: LandformConfig) -> Path:
     return Path(cfg.paths.artifacts_dir) / RECIPE_LINES_NAME
+
+
+def tuning_record_path_for(artifacts_dir: Path | str, head: str, rung: str) -> Path:
+    """The record of the pass that froze ``head`` at ``rung``: every pass, point and read.
+
+    Provenance, like Task 1's ``head_tuning.json``: nothing loads an lr from it. The line is the
+    source; this says how the line was chosen and whether the grid had to widen.
+    """
+    return Path(artifacts_dir) / TUNING_DIR_NAME / f"{head}-{rung.replace('%', 'pct')}.json"
+
+
+def assert_tuning_arm(arm: str, head: str) -> None:
+    """Refuse a tuning pass for ``head`` on any arm but its tuning arm (§4.5, story 54).
+
+    B6, the neutral encoder, tunes the linear probe and UperNet; B7 tunes itself. Any other arm
+    tuning a shared recipe is the thumb on the scale the rule exists to prevent.
+    """
+    if head not in TUNING_ARMS:
+        raise ValueError(f"unknown head {head!r}; the tuned heads are {list(TUNING_ARMS)}")
+    want = TUNING_ARMS[head]
+    if arm != want:
+        raise ValueError(
+            f"§4.5 tunes the {head} head on {want} alone, and this pass was asked for arm {arm}: "
+            f"the {head} recipe is shared by every arm at a rung, so only "
+            + ("the neutral encoder B6" if want == "B6" else "B7, on itself,")
+            + " may choose it"
+        )
 
 
 def frozen_recipe(cfg: LandformConfig) -> dict[str, dict]:

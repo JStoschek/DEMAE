@@ -24,6 +24,10 @@ owns the parser and the three verbs; ``--task landform`` hands it this module's
 * **``run``** trains and scores the linear-probe cell on geomorphon labels (#206): a pre-flight
   that refuses by name, then :mod:`benchmark.landform_train`, then
   :mod:`benchmark.landform_results`. A head or label set no ticket has built names its ticket.
+* **``run --tune``** is §4.5's lr pass for one head at one rung (#207): the resolver fills in
+  and checks the head's tuning arm (B6 for the probes, B7 for itself) before the config is
+  built, then :mod:`benchmark.landform_tune` trains the grid and freezes the winner as the
+  head's recipe line, with a record of every pass beside it.
   **``report``** names #216 until it lands.
 
 ## Why the far side raises
@@ -53,6 +57,7 @@ from . import (
     landform_recipes,
     landform_results,
     landform_train,
+    landform_tune,
     prereg,
     results,
 )
@@ -147,6 +152,8 @@ class LandformResolution:
     #: This cell's frozen recipe line, already checked against the cell, or ``None`` while
     #: #207's tuning pass has not frozen it. ``run`` refuses the ``None``.
     recipe_line: landform_recipes.RecipeLine | None = None
+    #: ``run --tune``: this resolution is §4.5's tuning pass for the cell's head and rung (#207).
+    tuning: bool = False
 
     def input(self, key: str) -> Resolved:
         return next(item for item in self.inputs if item.key == key)
@@ -165,7 +172,7 @@ class LandformResolution:
         cfg = self.config
         if verb == "run":
             block = [
-                f"DEMAE Task 2 — run   arm {cfg.arm}, rung {cfg.rung} "
+                f"DEMAE Task 2 — {'run --tune' if self.tuning else 'run'}   arm {cfg.arm}, rung {cfg.rung} "
                 f"({cfg.train_tiles:,} tiles), seed {cfg.seed}, head {cfg.head}, "
                 f"label set {cfg.label_set}   config {cfg.config_hash}",
                 f"{'':<16} {self.arm.what}",
@@ -183,11 +190,20 @@ class LandformResolution:
         block += [item.line() for item in self.inputs]
         if verb == "run":
             block += [item.line() for item in self.pending]
-            block.append(
-                self.recipe_line.line() if self.recipe_line is not None else
-                f"{'recipe line':<16} {cfg.head} @ {cfg.rung} not frozen yet "
-                f"(`run --task landform --tune`, #207)"
-            )
+            if self.tuning:
+                block.append(
+                    f"{'tuning':<16} {cfg.head} @ {cfg.rung} over {list(cfg.recipe.lr_grid)}, "
+                    f"{landform_tune.tune_steps(cfg):,} steps per point "
+                    f"({cfg.schedule.tune_fraction:g} of {cfg.steps:,}), better of "
+                    f"{landform_tune.VAL_READS} val reads; the winner is frozen as this head's "
+                    f"line at this rung (§4.5)"
+                )
+            else:
+                block.append(
+                    self.recipe_line.line() if self.recipe_line is not None else
+                    f"{'recipe line':<16} {cfg.head} @ {cfg.rung} not frozen yet "
+                    f"(`run --task landform --tune`, #207)"
+                )
         if verb == "freeze":
             block += ["", *(_stage_line(stage) for stage in FREEZE_STAGES)]
         else:
@@ -301,20 +317,56 @@ def _inputs(cfg: LandformConfig) -> tuple[Resolved, ...]:
     )
 
 
+def _tuning_args(args: argparse.Namespace) -> argparse.Namespace:
+    """``run --tune``'s cell flags with §4.5's tuning arm filled in, refusing any other arm.
+
+    The head names the pass; the arm follows it (B6 for the linear probe and UperNet, B7 for
+    itself), and a named arm that is not that one is refused here, before the config is built,
+    so the refusal is about the tuning arm and not about which heads that arm trains today. A
+    head with no trainer yet names its ticket after that.
+    """
+    head, arm = args.head, args.arm
+    if head is None:
+        if arm is None:
+            raise ValueError(
+                f"`run --task landform --tune` tunes one head at one rung: name it with "
+                f"--head ({list(landform_recipes.TUNING_ARMS)})"
+            )
+        head = landform_arms.get(arm).heads[0]
+    want = landform_recipes.TUNING_ARMS.get(head)
+    landform_recipes.assert_tuning_arm(want if arm is None else arm, head)
+    landform_tune.assert_buildable(head)
+    return argparse.Namespace(**{**vars(args), "head": head, "arm": want})
+
+
 def resolve(args: argparse.Namespace) -> LandformResolution:
     """The config, then the arm, then every input — the config first, so a typo'd override
-    raises before a single file is stat'd."""
+    raises before a single file is stat'd. Under ``run --tune`` the tuning arm is checked even
+    before the config (:func:`_tuning_args`)."""
+    tuning = args.verb == "run" and getattr(args, "tune", False)
+    if tuning:
+        args = _tuning_args(args)
     cfg = landform_config.config_from_args(args)
-    if args.verb == "run" and getattr(args, "tune", False):
-        raise ValueError(
-            "`run --task landform --tune` is §4.5's per-head, per-rung lr tuning, which #207 "
-            "builds; it is not Task 1's single A6 pass and does not run under that one's rules"
-        )
+    if tuning:
+        if args.seed is None:
+            cfg = cfg.replace(seed=cfg.schedule.tune_seed)
+        if cfg.seed != cfg.schedule.tune_seed:
+            raise ValueError(
+                f"§4.5 tunes at one seed on ladder {cfg.schedule.tune_ladder} "
+                f"(schedule.tune_seed {cfg.schedule.tune_seed}); --seed {cfg.seed} is not it"
+            )
+        frozen = landform_recipes.lookup(cfg)
+        if frozen is not None:
+            raise ValueError(
+                f"{landform_recipes.path_for(cfg)} already freezes {cfg.head} @ {cfg.rung} at lr "
+                f"{frozen.lr:g}. A frozen line is not re-tuned by running the pass again: "
+                f"re-tuning is an amendment, whose first act is deleting that line"
+            )
     arm = landform_arms.get(cfg.arm)
     # §4.5's frozen line, checked here rather than in `run`, for Task 1's reason: a pre-flight
     # that prints a drifted recipe as a normal one is worse than none. An absent line is said,
-    # and `run` refuses it.
-    recipe_line = landform_recipes.lookup(cfg) if args.verb == "run" else None
+    # and `run` refuses it. A tuning pass has no line yet: it is what writes one.
+    recipe_line = landform_recipes.lookup(cfg) if args.verb == "run" and not tuning else None
     if recipe_line is not None:
         landform_recipes.check(cfg, recipe_line)
     inputs = (*_inputs(cfg), *_ladders(cfg, args.verb))
@@ -328,6 +380,7 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
         checkpoint=_checkpoint(arm, cfg),
         inputs=inputs,
         recipe_line=recipe_line,
+        tuning=tuning,
     )
 
 
@@ -384,13 +437,53 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     frozen recipe line, the ladder md5, and L20's write-once rule. The label fingerprint is
     checked next, once the cell's tiles are read (:func:`benchmark.geomorphon_pass.check_labels`).
     """
-    from . import extract
-
     cfg = resolution.config
     line = resolution.recipe_line
     if line is None:
         landform_recipes.line_for(cfg)  # raises, naming #207
-    missing = [item.label for item in resolution.inputs if item.required and not item.present]
+    params, spec_item, checkpoint = _preflight_encoder(resolution)
+    encoder = resolution.encoder
+    ladder = resolution.input("ladder")
+    cell = {
+        "arm": cfg.arm, "rung": cfg.rung, "seed": cfg.seed, "ladder": cfg.ladder,
+        "label_set": cfg.label_set, "variant": gm.PRIMARY,
+    }
+    attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
+    for text in (
+        *_encoder_lines(cfg, encoder, checkpoint, params, spec_item),
+        f"recipe line {line.head} @ {line.rung}: lr {line.lr:g}, the recipe as frozen",
+        f"ladder {cfg.ladder} md5 {ladder.md5}, as its coverage report quotes",
+        f"write-once: attempt {attempt}"
+        + (f", a rerun for {rerun_reason} (L20)" if rerun_reason else ", a new cell"),
+    ):
+        print(f"{'pre-flight':<16} {text}")
+    return {"cell": cell, "params": params, "line": line, "ladder_md5": ladder.md5,
+            "spec_md5": spec_item.md5}
+
+
+def _encoder_lines(cfg, encoder, checkpoint, params, spec_item) -> tuple[str, ...]:
+    return (
+        f"encoder {encoder.name}: checkpoint md5 {checkpoint.md5} is its pin; {params:,} "
+        f"parameters, as §2's capacity table gives",
+        f"extractor contract {spec_item.path} re-checked",
+        f"bar {bar_path(cfg)}: {prereg.TASK2.adr_name}'s, its phrases still in plan "
+        f"{prereg.TASK2.section.lstrip('# ')}",
+    )
+
+
+def _preflight_encoder(resolution: LandformResolution) -> tuple[int, Resolved, Resolved]:
+    """The checks ``run`` and ``run --tune`` share: every input present, the encoder pinned and
+    its checkpoint the pinned one, the capacity table, the extractor contract and the bar."""
+    from . import extract
+
+    cfg = resolution.config
+    # A tuning pass is what writes the recipe lines, so it is the one command that may run
+    # before they exist.
+    missing = [
+        item.label for item in resolution.inputs
+        if item.required and not item.present
+        and not (resolution.tuning and item.key == "recipe_lines")
+    ]
     if missing:
         raise FileNotFoundError(
             f"nothing to train against — {', '.join(missing)} not on this box. Run "
@@ -419,26 +512,41 @@ def _preflight(resolution: LandformResolution, rerun_reason: str | None) -> dict
     spec_item = resolution.input("extractor_spec")
     extract.load_spec(spec_item.path).encoder_named(encoder.name)
     bar_for(cfg)
-    ladder = resolution.input("ladder")
-    cell = {
-        "arm": cfg.arm, "rung": cfg.rung, "seed": cfg.seed, "ladder": cfg.ladder,
-        "label_set": cfg.label_set, "variant": gm.PRIMARY,
-    }
-    attempt = landform_results.attempt_for(cfg.paths.results_path, cell, rerun_reason)
-    for text in (
-        f"encoder {encoder.name}: checkpoint md5 {checkpoint.md5} is its pin; {params:,} "
-        f"parameters, as §2's capacity table gives",
-        f"extractor contract {spec_item.path} re-checked",
-        f"bar {bar_path(cfg)}: {prereg.TASK2.adr_name}'s, its phrases still in plan "
-        f"{prereg.TASK2.section.lstrip('# ')}",
-        f"recipe line {line.head} @ {line.rung}: lr {line.lr:g}, the recipe as frozen",
-        f"ladder {cfg.ladder} md5 {ladder.md5}, as its coverage report quotes",
-        f"write-once: attempt {attempt}"
-        + (f", a rerun for {rerun_reason} (L20)" if rerun_reason else ", a new cell"),
-    ):
+    return params, spec_item, checkpoint
+
+
+def _tune(resolution: LandformResolution, args: argparse.Namespace) -> int:
+    """``run --task landform --tune`` — §4.5's lr pass for one head at one rung, frozen as its
+    line (#207). Scores nothing on test and appends nothing to the parquet."""
+    from dataset.provenance import git_sha
+
+    cfg = resolution.config
+    if cfg.label_set != "geomorphon":
+        raise NotImplementedError(
+            "the Iwahashi probe is fitted, not trained, and its L2 pass is #212; `--tune` "
+            "tunes the dense heads on geomorphon labels"
+        )
+    params, spec_item, checkpoint = _preflight_encoder(resolution)
+    for text in _encoder_lines(cfg, resolution.encoder, checkpoint, params, spec_item):
         print(f"{'pre-flight':<16} {text}")
-    return {"cell": cell, "params": params, "line": line, "ladder_md5": ladder.md5,
-            "spec_md5": spec_item.md5}
+    tiles = landform_train.CellTiles.read(cfg)
+    labels = geomorphon_pass.check_labels(cfg, [*tiles.train, *tiles.val])
+    print(f"{'pre-flight':<16} labels: {labels['tiles_checked']:,} {labels['variant']} rasters "
+          f"match their fingerprints, set {labels['set_fingerprint']}")
+    tuned = landform_tune.run_pass(
+        cfg, tiles=tiles,
+        on_point=lambda p: print(f"{'':<16} lr {p['lr']:<10g} val mIoU {p['score']:.4f} "
+                                 f"(better of {len(p['reads'])} reads)"),
+    )
+    line_path, record = landform_tune.freeze(tuned, git_sha=git_sha())
+    print()
+    for text in tuned.lines():
+        print(text)
+    print(f"{'froze':<16} {cfg.head} @ {cfg.rung} at lr {tuned.selected:g} in {line_path}")
+    print(f"{'record':<16} {record}")
+    print(f"{'scored':<16} nothing — the tuning pass reads val only; every arm's {cfg.head} "
+          f"cell at {cfg.rung} now trains at this line")
+    return 0
 
 
 def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
@@ -449,6 +557,8 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     """
     from dataset.provenance import git_sha
 
+    if resolution.tuning:
+        return _tune(resolution, args)
     cfg = resolution.config
     if cfg.label_set != "geomorphon":
         raise NotImplementedError(

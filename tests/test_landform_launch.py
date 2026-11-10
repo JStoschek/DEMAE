@@ -227,9 +227,13 @@ def test_a_cell_that_does_not_exist_is_refused_by_name(argv, refusal, flags, cap
     assert capsys.readouterr().out == ""
 
 
-def test_tuning_is_not_task_ones_pass_and_names_its_ticket(flags):
-    with pytest.raises(ValueError, match="#207"):
+def test_tuning_is_not_task_ones_pass_it_is_per_head_on_the_head_s_tuning_arm(flags):
+    """#207: Task 2's `--tune` is §4.5's per-head pass, not Task 1's A6 one. It names a head,
+    and refuses any arm but that head's tuning arm (tests/test_p207_tune_recipe_lines.py)."""
+    with pytest.raises(ValueError, match="--head"):
         launch.main(["run", "--dry-run", "--tune", *flags])
+    with pytest.raises(ValueError, match="on B6 alone.*arm A6"):
+        launch.main(["run", "--dry-run", "--tune", "--arm", "A6", "--head", "linear", *flags])
 
 
 # --- Task 2's own config hash ------------------------------------------------

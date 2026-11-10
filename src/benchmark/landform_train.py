@@ -332,8 +332,18 @@ def train_linear(
     tiles: CellTiles,
     extractor=None,
     on_read: Callable[[ValRead], None] | None = None,
+    steps: int | None = None,
+    val_reads: int | None = None,
+    checkpoint_dir: Path | str | None = None,
 ) -> Fitted:
-    """Train §4.1's linear probe for one cell over a frozen encoder; return the best val read."""
+    """Train §4.1's linear probe for one cell over a frozen encoder; return the best val read.
+
+    ``steps``, ``val_reads`` and ``checkpoint_dir`` are #207's tuning pass and nothing else: a
+    point trains a fifth of the cell's steps (warmup and cosine over that shorter run, as Task 1's
+    10 of 50 epochs did), reads val twice, and checkpoints into its own directory so five points
+    do not overwrite one ``best.pt``. They are parameters rather than config knobs because a
+    config with fewer epochs would land in the frozen line's recipe. A scored cell passes none.
+    """
     import torch
 
     from . import extract
@@ -364,19 +374,23 @@ def train_linear(
         train.parameter_groups(module, weight_decay=recipe.weight_decay),
         lr=lr, weight_decay=recipe.weight_decay,
     )
-    steps = cfg.steps
+    steps = cfg.steps if steps is None else steps
+    if steps < 1:
+        raise ValueError(f"a pass of {steps} steps trains nothing")
     schedule = train.Cosine(
         peak_lr=lr, total_steps=steps,
         warmup_steps=max(1, int(round(steps * cfg.schedule.warmup_frac))),
     )
-    reads_at = set(val_read_steps(steps, cfg.schedule.val_reads))
+    reads_at = set(val_read_steps(steps, cfg.schedule.val_reads if val_reads is None
+                                  else val_reads))
     index = TileStore.index_for(cfg.paths.corpus_dir, [*tiles.train, *tiles.val])
 
     rng = np.random.default_rng(cfg.seed)
     sampler = cycling_batches(tiles.train, recipe.batch_size, rng)
     items = [(t, int(rng.integers(DIHEDRAL))) for _ in range(steps) for t in next(sampler)]
 
-    directory = Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.rung}-seed{cfg.seed}"
+    directory = (Path(cfg.runtime.checkpoint_dir) / f"{cfg.arm}-{cfg.rung}-seed{cfg.seed}"
+                 if checkpoint_dir is None else Path(checkpoint_dir))
     directory.mkdir(parents=True, exist_ok=True)
     best_path = directory / "best.pt"
     mark = train._clock(device)

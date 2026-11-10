@@ -447,3 +447,108 @@ def format_frozen(recipe: Head | None = None) -> Sequence[str]:
         f"{'head recipe':<16} {knobs}",
         f"{'':<16} tuned once on {TUNING_ARM} using val only, then frozen for every arm (§4.1)",
     ]
+
+
+# --- The edge rule, generalised (#207) ----------------------------------------
+#
+# Task 1's pass widened its grid by hand, once, after a winner landed on its top point (see
+# :data:`GRID`). Task 2 runs the same discipline per head per rung (plan §4.5) and writes the
+# rule down as a mechanism: *a winner on a grid edge widens the grid by one point that way and
+# reruns the whole pass*. Nothing above this line uses it, so Task 1's record and its refusal
+# are exactly what they were.
+
+#: How many times one search may widen before it refuses. Not a number §4.5 states: the rule
+#: says widen and rerun, and says nothing about a score that keeps climbing off the grid. A
+#: search still on an edge after this many widenings has not bracketed an optimum, and freezing
+#: its pick would be freezing a wall, so it refuses and the grid becomes an amendment.
+MAX_WIDENINGS: Final = 4
+
+
+def widen(grid: Sequence[float], edge: str) -> tuple[float, ...]:
+    """``grid`` with one more point beyond ``edge`` (``"low"`` or ``"high"``), on its log spacing.
+
+    The new point is the second-from-edge point moved by the ratio spanning the edge's two
+    steps — ``1e-2 x (3e-2 / 3e-3) = 1e-1`` past ``(..., 3e-3, 1e-2, 3e-2)`` — so a half-decade
+    ``1, 3, 10`` grid stays one, and a uniformly log-spaced grid gets its own next step. Rounded
+    to ten significant digits so ``0.09999999999999999`` is written as ``0.1``.
+    """
+    grid = tuple(float(x) for x in grid)
+    if len(grid) < 3:
+        raise TuningError(f"a grid of {len(grid)} points has no spacing to widen along")
+    if edge == "high":
+        new = grid[-2] * (grid[-1] / grid[-3])
+        return (*grid, float(f"{new:.10g}"))
+    if edge == "low":
+        new = grid[1] * (grid[0] / grid[2])
+        return (float(f"{new:.10g}"), *grid)
+    raise ValueError(f"edge {edge!r} is not 'low' or 'high'")
+
+
+@dataclass(frozen=True)
+class GridPass:
+    """One whole pass over a grid: every point's score and whatever its trainer reported."""
+
+    grid: tuple[float, ...]
+    scores: tuple[float, ...]
+    details: tuple[Any, ...]
+    maximize: bool
+
+    @property
+    def winner_index(self) -> int:
+        """The best score, ties going to the earliest point — :attr:`Tuning.winner`'s rule."""
+        sign = -1.0 if self.maximize else 1.0
+        return min(range(len(self.scores)), key=lambda i: sign * self.scores[i])
+
+    @property
+    def winner(self) -> float:
+        return self.grid[self.winner_index]
+
+    @property
+    def edge(self) -> str | None:
+        """``"low"`` or ``"high"`` if the winner sits on that end of the grid, else ``None``."""
+        i = self.winner_index
+        if i == 0:
+            return "low"
+        if i == len(self.grid) - 1:
+            return "high"
+        return None
+
+
+def search(
+    grid: Sequence[float],
+    score: Callable[[float, int], tuple[float, Any]],
+    *,
+    maximize: bool,
+    max_widenings: int = MAX_WIDENINGS,
+    on_pass: Callable[[GridPass], None] | None = None,
+) -> tuple[GridPass, ...]:
+    """Score every point of ``grid``; on an edge winner widen one point that way and rerun it all.
+
+    ``score(value, pass_index)`` trains one point and returns ``(score, detail)``. The pass index
+    is there so a trainer can keep each pass's checkpoints apart. Every pass is returned, the
+    last one holding the winner, so a record can say which passes widened and why. A winner
+    still on an edge after ``max_widenings`` widenings is refused rather than returned.
+    """
+    passes: list[GridPass] = []
+    grid = tuple(float(x) for x in grid)
+    while True:
+        index = len(passes)
+        scored = [score(value, index) for value in grid]
+        done = GridPass(
+            grid=grid,
+            scores=tuple(float(s) for s, _ in scored),
+            details=tuple(d for _, d in scored),
+            maximize=maximize,
+        )
+        passes.append(done)
+        if on_pass is not None:
+            on_pass(done)
+        if done.edge is None:
+            return tuple(passes)
+        if index >= max_widenings:
+            raise TuningError(
+                f"the winner {done.winner:g} is still on the {done.edge} edge of {list(grid)} "
+                f"after {index} widening(s): the optimum is not bracketed, and a boundary pick "
+                f"is not frozen (§4.5). Widen the grid by amendment and rerun the pass"
+            )
+        grid = widen(grid, done.edge)
