@@ -368,46 +368,54 @@ UNREAD_ENCODER_PREFIXES: Final = ("norm.",)
 NO_DECAY_TENSORS: Final = ("cls_token",)
 
 
+def _trains(name: str) -> bool:
+    """Whether B3 trains the encoder tensor ``name``: all but the fixed and the unread."""
+    return name not in FIXED_ENCODER_TENSORS and not name.startswith(UNREAD_ENCODER_PREFIXES)
+
+
 def unfreeze(model) -> None:
     """Every encoder weight trains except :data:`FIXED_ENCODER_TENSORS` and the tensors under
     :data:`UNREAD_ENCODER_PREFIXES`."""
     for name, param in model.named_parameters():
-        param.requires_grad_(name not in FIXED_ENCODER_TENSORS
-                             and not name.startswith(UNREAD_ENCODER_PREFIXES))
+        param.requires_grad_(_trains(name))
 
 
 def finetune_groups(encoder, head, recipe, *, weight_decay: float) -> list[dict]:
     """§4.3's AdamW groups: the encoder at ``recipe.lr`` under ``recipe.layer_decay`` per layer,
     the head at ``recipe.head_lr``.
 
-    The ladder is MAE's, the one Task 1's fine-tune climbs
-    (:func:`benchmark.finetune._encoder_layer`): the patch embedding and the CLS token are layer
-    0, block *i* is layer *i + 1*, the final norm is the top, and layer *l* trains at
-    ``lr * layer_decay ** (top - l)``. Weights decay at ``weight_decay``; 1-d tensors and the CLS
-    token do not. Each group carries ``part``, ``layer`` and ``lr``, which torch ignores beside
-    its own keys and a test reads.
+    The ladder is Task 1's fine-tune's own (:func:`benchmark.finetune.parameter_groups`), called
+    on the encoder alone: the patch embedding and the CLS token are layer 0, block *i* is layer
+    *i + 1*, the final norm is the top (frozen here, :data:`UNREAD_ENCODER_PREFIXES`), and
+    layer *l* trains at ``lr * layer_decay ** (top - l)``. What B3 adds is the head, a module of
+    its own one layer above the top, and the weight-decay split Task 1's groups do not make:
+    weights decay at ``weight_decay``, 1-d tensors and the CLS token do not. Each group carries
+    ``part``, ``layer`` and ``lr``, which torch ignores beside its own keys and a test reads.
     """
-    from .finetune import _encoder_layer
+    from types import SimpleNamespace
 
+    from .finetune import parameter_groups
+
+    # The encoder holds no decoder tensor, so the ladder's decoder lr is never read.
+    ladder = parameter_groups(encoder, SimpleNamespace(
+        encoder_lr=recipe.lr, layer_decay=recipe.layer_decay, decoder_lr=None))
     top = len(encoder.blocks) + 1
-    groups: dict[tuple, dict] = {}
-
-    def add(part: str, layer: int, lr: float, name: str, param) -> None:
-        if not param.requires_grad or name in FIXED_ENCODER_TENSORS:
-            return
-        decays = param.ndim > 1 and name not in NO_DECAY_TENSORS
-        group = groups.setdefault((part, layer, decays), {
-            "part": part, "layer": layer, "lr": lr,
-            "weight_decay": weight_decay if decays else 0.0, "params": [],
-        })
-        group["params"].append(param)
-
-    for name, param in encoder.named_parameters():
-        layer = _encoder_layer(name, top=top)
-        add("encoder", layer, recipe.lr * recipe.layer_decay ** (top - layer), name, param)
-    for name, param in head.named_parameters():
-        add("head", top + 1, recipe.head_lr, name, param)
-    return [groups[key] for key in sorted(groups)]
+    rungs = [*ladder, {"part": "head", "layer": top + 1, "lr": recipe.head_lr,
+                       "params": [p for p in head.parameters() if p.requires_grad]}]
+    name_of = {id(p): n for n, p in encoder.named_parameters()}
+    groups = []
+    for rung in rungs:
+        if rung["part"] not in ("encoder", "head"):
+            raise ValueError(f"B3's encoder holds {rung['part']} tensors; it should hold none")
+        trained = [p for p in rung["params"] if id(p) not in name_of or _trains(name_of[id(p)])]
+        for decays in (False, True):
+            params = [p for p in trained if decays == (
+                p.ndim > 1 and name_of.get(id(p)) not in NO_DECAY_TENSORS)]
+            if params:
+                groups.append({"part": rung["part"], "layer": rung["layer"], "lr": rung["lr"],
+                               "weight_decay": weight_decay if decays else 0.0,
+                               "params": params})
+    return groups
 
 
 def optimizer_for(cfg: LandformConfig, groups, *, lr: float):
@@ -528,6 +536,8 @@ def train_head(
         groups = finetune_groups(model, module, cfg.finetune, weight_decay=recipe.weight_decay)
         forward = _Forward(extractor, encoder.name, module, device, built.takes,
                            precision=cfg.finetune.precision)
+        # What trains, keyed as the checkpoint stores it: the best read restores both.
+        trained = {"state_dict": module, "encoder_state_dict": model}
     else:
         model.eval()
         for param in model.parameters():
@@ -535,6 +545,7 @@ def train_head(
         before = train.encoder_checksums(model)
         groups = train.parameter_groups(module, weight_decay=recipe.weight_decay)
         forward = _Forward(extractor, encoder.name, module, device, built.takes)
+        trained = {"state_dict": module}
     optimizer = optimizer_for(cfg, groups, lr=lr)
     steps = cfg.steps if steps is None else steps
     if steps < 1:
@@ -567,15 +578,11 @@ def train_head(
     step = 0
 
     def training_mode() -> None:
-        module.train()
-        if fine_tunes:
-            model.train()
+        for part in trained.values():
+            part.train()
 
     def snapshot() -> dict:
-        state = {"state_dict": copy.deepcopy(module.state_dict())}
-        if fine_tunes:
-            state["encoder_state_dict"] = copy.deepcopy(model.state_dict())
-        return state
+        return {key: copy.deepcopy(part.state_dict()) for key, part in trained.items()}
 
     training_mode()
     tick = mark()
@@ -615,13 +622,11 @@ def train_head(
     if step != steps or best is None:
         raise train.TrainError(f"the pass took {step} of {steps} steps and read val "
                                f"{len(reads)} times")
-    module.load_state_dict(best_state["state_dict"])
-    module.eval()
-    if fine_tunes:
-        # The best read's encoder is the one test scores: the extractor holds this very model.
-        model.load_state_dict(best_state["encoder_state_dict"])
-        model.eval()
-    else:
+    # The best read's head, and B3's encoder with it: test scores the model the extractor holds.
+    for key, part in trained.items():
+        part.load_state_dict(best_state[key])
+        part.eval()
+    if not fine_tunes:
         train.assert_encoder_frozen(model, name=encoder.name, before=before)
     return Fitted(
         module=module,
