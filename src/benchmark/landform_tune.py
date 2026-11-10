@@ -7,8 +7,9 @@ are copied into one frozen config line per head per rung.*
 
 What each clause is here:
 
-* **The grid** is the head group's ``lr_grid``, and it must hold ``schedule.tune_points``
-  points. A widened grid is provenance in the line (``grid``), never drift.
+* **The grid** is the head group's ``lr_grid``. It and every ``schedule.tune_*`` knob must be
+  §4.5's committed values (:func:`check_tuning_knobs`), refused by name before the config is
+  resolved further. A widened grid is provenance in the line (``grid``), never drift.
 * **A fifth of the schedule** is ``ceil(cfg.steps x schedule.tune_fraction)`` steps, handed to
   the trainer as a parameter so the frozen line's recipe is the cell's own (see
   :func:`benchmark.landform_train.train_linear`). Warmup and cosine run over that shorter pass,
@@ -29,7 +30,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Final
 
@@ -61,14 +62,41 @@ def _rung_tag(rung: str) -> str:
     return rung.replace("%", "pct")
 
 
-def check_grid(cfg: LandformConfig) -> tuple[float, ...]:
-    grid = tuple(float(x) for x in cfg.recipe.lr_grid)
-    if len(grid) != cfg.schedule.tune_points:
+def plan_tuning_knobs(cfg: LandformConfig) -> dict[str, Any]:
+    """§4.5's tuning knobs for this cell's head, as the plan states them: the head group's
+    ``lr_grid`` and every ``schedule.tune_*``, at their committed defaults."""
+    schedule = type(cfg.schedule)()
+    return {
+        f"{cfg.head}.lr_grid": tuple(float(x) for x in type(cfg.recipe)().lr_grid),
+        **{
+            f"schedule.{f.name}": getattr(schedule, f.name)
+            for f in fields(schedule) if f.name.startswith("tune_")
+        },
+    }
+
+
+def check_tuning_knobs(cfg: LandformConfig) -> tuple[float, ...]:
+    """Refuse a pass whose grid or ``tune_*`` knobs are not §4.5's, naming every one that moved.
+
+    The frozen line records the grid it searched as provenance, so a ``--set`` grid or a
+    ``tune_fraction`` of 1.0 would otherwise freeze a line that looks like §4.5's and is not.
+    Changing how tuning runs is an amendment to the plan, not a flag. Returns the grid.
+    """
+    now = {
+        f"{cfg.head}.lr_grid": tuple(float(x) for x in cfg.recipe.lr_grid),
+        **{
+            f"schedule.{f.name}": getattr(cfg.schedule, f.name)
+            for f in fields(cfg.schedule) if f.name.startswith("tune_")
+        },
+    }
+    moved = [f"{knob} {now[knob]!r} (§4.5: {want!r})"
+             for knob, want in plan_tuning_knobs(cfg).items() if now[knob] != want]
+    if moved:
         raise ValueError(
-            f"{cfg.head}.lr_grid holds {len(grid)} points and schedule.tune_points is "
-            f"{cfg.schedule.tune_points}: §4.5 tunes over exactly that many log-spaced points"
+            f"a tuning pass runs on §4.5's tuning knobs, and this one moved {'; '.join(moved)}. "
+            f"How lr is tuned is an amendment to the plan, not a `--set`"
         )
-    return grid
+    return now[f"{cfg.head}.lr_grid"]
 
 
 @dataclass(frozen=True)
@@ -158,7 +186,7 @@ def run_pass(
             f"this pass is seed {cfg.seed} on ladder {cfg.ladder}"
         )
     trainer = landform_train.train_linear if trainer is None else trainer
-    grid = check_grid(cfg)
+    grid = check_tuning_knobs(cfg)
     steps = tune_steps(cfg)
     root = Path(cfg.runtime.checkpoint_dir) / f"tune-{cfg.arm}-{cfg.head}-{_rung_tag(cfg.rung)}"
     shared = {"extractor": extractor}

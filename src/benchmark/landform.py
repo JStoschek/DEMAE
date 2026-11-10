@@ -348,6 +348,7 @@ def resolve(args: argparse.Namespace) -> LandformResolution:
         args = _tuning_args(args)
     cfg = landform_config.config_from_args(args)
     if tuning:
+        landform_tune.check_tuning_knobs(cfg)
         if args.seed is None:
             cfg = cfg.replace(seed=cfg.schedule.tune_seed)
         if cfg.seed != cfg.schedule.tune_seed:

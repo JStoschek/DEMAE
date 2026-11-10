@@ -207,6 +207,33 @@ def test_tuning_needs_a_head_and_runs_at_the_tuning_seed_alone(flags):
         launch.main([*tune_argv("--dry-run", "--seed", "1"), *flags])
 
 
+@pytest.mark.parametrize(
+    "overrides, named",
+    [
+        (["linear.lr_grid=[1e-4, 3e-4, 1e-3, 3e-3, 1e-2]"], "linear.lr_grid"),
+        (["schedule.tune_fraction=1.0"], "schedule.tune_fraction"),
+        (["schedule.tune_points=6", "linear.lr_grid=[1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]"],
+         "schedule.tune_points"),
+        (["schedule.tune_seed=1"], "schedule.tune_seed"),
+        (["schedule.tune_ladder=1"], "schedule.tune_ladder"),
+    ],
+)
+def test_a_tuning_pass_off_section_4_5_s_tuning_knobs_is_refused_by_name(
+    overrides, named, bare, flags, stub, monkeypatch
+):
+    calls: list = []
+    monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, calls))
+    sets = [arg for o in overrides for arg in ("--set", o)]
+    argv = [*tune_argv(), *flags, *sets]
+    if "schedule.tune_seed=1" in overrides:
+        argv += ["--seed", "1"]
+    for dry in (["--dry-run"], []):
+        with pytest.raises(ValueError, match=rf"{named}.*§4\.5"):
+            launch.main([*argv, *dry])
+    assert calls == []
+    assert not (bare / "task2" / landform_recipes.RECIPE_LINES_NAME).exists()
+
+
 def test_tune_writes_nothing_of_task_one_s_and_scores_nothing(bare, flags, stub, monkeypatch):
     monkeypatch.setattr(landform_train, "train_linear", curve_trainer(3e-3, []))
     assert launch.main([*tune_argv(), *flags]) == 0
