@@ -287,13 +287,20 @@ class Fitted:
     precision: dict | None = None
     #: What the head takes off the extractor's features (:attr:`Head.takes`).
     takes: Callable[[Any], Any] = None  # type: ignore[assignment]  # set by train_head
-    #: How a tile becomes logits, for a pass with no frozen encoder behind it (B7, #209).
-    #: ``None`` means the encoder through the contract, then the probe.
+    #: How a tile becomes logits, for a pass with no frozen encoder behind it (B7, #209; B3's
+    #: fine-tuned one, #210). ``None`` means the frozen encoder through the contract, then the
+    #: probe.
     forward: Any = None
+    #: Encoder weights this pass trained: 0 for a frozen encoder, R5's less its sin-cos for B3.
+    encoder_trained: int = 0
+    #: The precision the head trained in, as declared and as this box could honour it
+    #: (:func:`benchmark.train.precision_on`). The probes train in fp32; B3 declares bf16.
+    precision_declared: str = "fp32"
+    precision_used: str = "fp32"
 
     def to_dict(self) -> dict:
         return {
-            "kind": self.head,
+            "kind": "finetune" if self.encoder_trained else self.head,
             "lr": self.lr,
             "steps": self.steps,
             "train_tiles": self.train_tiles,
@@ -302,7 +309,9 @@ class Fitted:
             "best_val_miou": round(self.best.miou, 6),
             "checkpoint": self.checkpoint,
             "device": self.device,
-            "precision_head": "fp32",
+            "precision_head": self.precision_used,
+            "precision_declared": self.precision_declared,
+            "precision_used": self.precision_used,
             "seconds": round(self.seconds, 3),
         }
 
@@ -342,6 +351,57 @@ def build_head(cfg: LandformConfig, encoder: arms.Encoder) -> Head:
     )
 
 
+# --- §4.3's B3: the encoder unfrozen under layer-wise decay -------------------
+
+#: Encoder tensors B3 does not train. R5's ``pos_embed`` is fixed sin-cos, verified as such when
+#: the extractor loads it (ADR-0011): it was never a learned weight, so the fine-tune does not
+#: learn one.
+FIXED_ENCODER_TENSORS: Final = ("pos_embed",)
+
+#: Encoder tensors that skip weight decay beside every 1-d tensor (MAE's no-decay list).
+NO_DECAY_TENSORS: Final = ("cls_token",)
+
+
+def unfreeze(model) -> None:
+    """Every encoder weight trains except :data:`FIXED_ENCODER_TENSORS`."""
+    for name, param in model.named_parameters():
+        param.requires_grad_(name not in FIXED_ENCODER_TENSORS)
+
+
+def finetune_groups(encoder, head, recipe, *, weight_decay: float) -> list[dict]:
+    """§4.3's AdamW groups: the encoder at ``recipe.lr`` under ``recipe.layer_decay`` per layer,
+    the head at ``recipe.head_lr``.
+
+    The ladder is MAE's, the one Task 1's fine-tune climbs
+    (:func:`benchmark.finetune._encoder_layer`): the patch embedding and the CLS token are layer
+    0, block *i* is layer *i + 1*, the final norm is the top, and layer *l* trains at
+    ``lr * layer_decay ** (top - l)``. Weights decay at ``weight_decay``; 1-d tensors and the CLS
+    token do not. Each group carries ``part``, ``layer`` and ``lr``, which torch ignores beside
+    its own keys and a test reads.
+    """
+    from .finetune import _encoder_layer
+
+    top = len(encoder.blocks) + 1
+    groups: dict[tuple, dict] = {}
+
+    def add(part: str, layer: int, lr: float, name: str, param) -> None:
+        if not param.requires_grad or name in FIXED_ENCODER_TENSORS:
+            return
+        decays = param.ndim > 1 and name not in NO_DECAY_TENSORS
+        group = groups.setdefault((part, layer, decays), {
+            "part": part, "layer": layer, "lr": lr,
+            "weight_decay": weight_decay if decays else 0.0, "params": [],
+        })
+        group["params"].append(param)
+
+    for name, param in encoder.named_parameters():
+        layer = _encoder_layer(name, top=top)
+        add("encoder", layer, recipe.lr * recipe.layer_decay ** (top - layer), name, param)
+    for name, param in head.named_parameters():
+        add("head", top + 1, recipe.head_lr, name, param)
+    return [groups[key] for key in sorted(groups)]
+
+
 def _to(value, device: str):
     return [v.to(device) for v in value] if isinstance(value, (list, tuple)) else value.to(device)
 
@@ -350,16 +410,26 @@ class _Forward:
     """The frozen encoder through the contract, then the head — one place, train and eval."""
 
     def __init__(self, extractor, encoder: str, module, device: str,
-                 takes: Callable[[Any], Any]):
+                 takes: Callable[[Any], Any], *, precision: str | None = None):
         self.extractor = extractor
         self.encoder = encoder
         self.module = module
         self.device = device
         self.takes = takes
+        #: B3's declared precision: set, the encoder runs with a graph whenever gradients are on
+        #: and the head under :func:`benchmark.train._autocast`. ``None`` is a frozen encoder.
+        self.precision = precision
 
     def logits(self, raw: np.ndarray):
-        features = self.extractor.extract(raw, land_mask(raw), encoder_name=self.encoder)
-        return self.module(_to(self.takes(features), self.device))
+        if self.precision is None:
+            features = self.extractor.extract(raw, land_mask(raw), encoder_name=self.encoder)
+            return self.module(_to(self.takes(features), self.device))
+        import torch
+
+        with train._autocast(self.device, self.precision):
+            features = self.extractor.extract(raw, land_mask(raw), encoder_name=self.encoder,
+                                              grad=torch.is_grad_enabled())
+            return self.module(_to(self.takes(features), self.device)).float()
 
 
 def _val_miou(forward: _Forward, cfg: LandformConfig, val: Sequence[str], index: dict,
@@ -368,6 +438,8 @@ def _val_miou(forward: _Forward, cfg: LandformConfig, val: Sequence[str], index:
 
     total = np.zeros(CLASSES * CLASSES, dtype=np.int64)
     forward.module.eval()
+    if getattr(forward, "precision", None) is not None:  # B3's encoder reads val in eval
+        forward.extractor.encoder(encoder_name=forward.encoder).eval()
     with torch.no_grad():
         for raw, label in _loader(cfg, [(t, 0) for t in val], index, batch_size):
             pred = forward.logits(raw).argmax(1).cpu().numpy()
@@ -389,6 +461,11 @@ def train_head(
 ) -> Fitted:
     """Train the cell's head (§4.1's linear probe or §4.2's UperNet) over a frozen encoder;
     return the best val read.
+
+    B3 (#210) runs the same pass with its encoder unfrozen: :func:`finetune_groups`' per-layer
+    lrs scaled by the one cosine, a graph through the extractor while training, bf16 where the
+    box has it, and the best read's encoder restored with its head, since test scores through
+    that same model.
 
     ``steps``, ``val_reads`` and ``checkpoint_dir`` are #207's tuning pass and nothing else: a
     point trains a fifth of the cell's steps (warmup and cosine over that shorter run, as Task 1's
@@ -414,25 +491,35 @@ def train_head(
         spec = Path(cfg.paths.task1_artifacts_dir) / extract.SPEC_FILENAME
         extractor = extract.Extractor(extract.load_spec(spec), cfg, device=device)
     model = extractor.encoder(encoder_name=encoder.name)
-    model.eval()
-    for param in model.parameters():
-        param.requires_grad_(False)
-    before = train.encoder_checksums(model)
-
+    fine_tunes = cfg.fine_tunes
     built = build_head(cfg, encoder)
     module = built.module.to(device)
-    forward = _Forward(extractor, encoder.name, module, device, built.takes)
-    optimizer = torch.optim.AdamW(
-        train.parameter_groups(module, weight_decay=recipe.weight_decay),
-        lr=lr, weight_decay=recipe.weight_decay,
-    )
+    if fine_tunes:
+        # B3 (§4.3): the encoder trains with the head, each layer at its own lr. The frozen
+        # checksum is not taken, because moving the encoder is this arm's whole point.
+        unfreeze(model)
+        before = None
+        groups = finetune_groups(model, module, cfg.finetune, weight_decay=recipe.weight_decay)
+        forward = _Forward(extractor, encoder.name, module, device, built.takes,
+                           precision=cfg.finetune.precision)
+    else:
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad_(False)
+        before = train.encoder_checksums(model)
+        groups = train.parameter_groups(module, weight_decay=recipe.weight_decay)
+        forward = _Forward(extractor, encoder.name, module, device, built.takes)
+    optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=recipe.weight_decay)
     steps = cfg.steps if steps is None else steps
     if steps < 1:
         raise ValueError(f"a pass of {steps} steps trains nothing")
+    # The fine-tune's groups each peak at their own lr, so its curve is a factor (peak 1) that
+    # scales every group's; a frozen head's one lr is the curve itself, as Task 1's was.
     schedule = train.Cosine(
-        peak_lr=lr, total_steps=steps,
+        peak_lr=1.0 if fine_tunes else lr, total_steps=steps,
         warmup_steps=max(1, int(round(steps * cfg.schedule.warmup_frac))),
     )
+    peaks = [group["lr"] for group in optimizer.param_groups]
     reads_at = set(val_read_steps(steps, cfg.schedule.val_reads if val_reads is None
                                   else val_reads))
     index = TileStore.index_for(cfg.paths.corpus_dir, [*tiles.train, *tiles.val])
@@ -452,10 +539,27 @@ def train_head(
     best_state = None
     train_seconds = 0.0
     step = 0
-    module.train()
+
+    def training_mode() -> None:
+        module.train()
+        if fine_tunes:
+            model.train()
+
+    def snapshot() -> dict:
+        state = {"state_dict": copy.deepcopy(module.state_dict())}
+        if fine_tunes:
+            state["encoder_state_dict"] = copy.deepcopy(model.state_dict())
+        return state
+
+    training_mode()
     tick = mark()
     for raw, label in _loader(cfg, items, index, recipe.batch_size):
-        schedule.apply(optimizer, step)
+        if fine_tunes:
+            factor = schedule.at(step)
+            for group, peak in zip(optimizer.param_groups, peaks):
+                group["lr"] = peak * factor
+        else:
+            schedule.apply(optimizer, step)
         # A batch of all-ignored pixels teaches nothing (and CE's mean over it is NaN). It takes
         # no optimizer step, since AdamW would still decay the weights and advance its moments,
         # but it keeps its step: the count and the cosine stay those of the cell's schedule.
@@ -476,19 +580,23 @@ def train_head(
             reads.append(read)
             if best is None or read.miou > best.miou:
                 best = read
-                best_state = copy.deepcopy(module.state_dict())
-                torch.save({"step": step, "val_miou": score, "state_dict": best_state},
-                           best_path)
+                best_state = snapshot()
+                torch.save({"step": step, "val_miou": score, **best_state}, best_path)
             if on_read is not None:
                 on_read(read)
-            module.train()
+            training_mode()
         tick = mark()
     if step != steps or best is None:
         raise train.TrainError(f"the pass took {step} of {steps} steps and read val "
                                f"{len(reads)} times")
-    module.load_state_dict(best_state)
+    module.load_state_dict(best_state["state_dict"])
     module.eval()
-    train.assert_encoder_frozen(model, name=encoder.name, before=before)
+    if fine_tunes:
+        # The best read's encoder is the one test scores: the extractor holds this very model.
+        model.load_state_dict(best_state["encoder_state_dict"])
+        model.eval()
+    else:
+        train.assert_encoder_frozen(model, name=encoder.name, before=before)
     return Fitted(
         module=module,
         head=cfg.head,
@@ -507,6 +615,12 @@ def train_head(
         extractor=extractor,
         precision=extractor.precision_agreement(encoder_name=encoder.name),
         takes=built.takes,
+        forward=forward if fine_tunes else None,
+        encoder_trained=sum(p.numel() for p in model.parameters() if p.requires_grad)
+        if fine_tunes else 0,
+        precision_declared=cfg.finetune.precision if fine_tunes else "fp32",
+        precision_used=train.precision_on(device, cfg.finetune.precision) if fine_tunes
+        else "fp32",
     )
 
 

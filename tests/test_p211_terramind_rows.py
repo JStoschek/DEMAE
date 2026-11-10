@@ -94,7 +94,7 @@ def test_each_terramind_row_resolves_under_dry_run_with_its_encoder_pin_and_diet
 def test_b8_and_the_alt_rows_are_refused_at_any_rung_but_100(name, rung, box, corpus, capsys):
     argv = ["run", "--dry-run", "--arm", name, "--rung", rung, "--seed", "0",
             *_flags(box, corpus), *_mounts(box)]
-    with pytest.raises(ValueError, match=rf"arm {name} runs at \['100%'\] only.*rung '{rung}'"):
+    with pytest.raises(ValueError, match=rf"arm {name} runs at \['100%'\] only, so rung {rung} "):
         launch.main(argv)
 
 

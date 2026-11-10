@@ -77,13 +77,6 @@ RUNGS: Final = ("1%", "10%", "100%")
 #: What each rung is, in tiles: an exact budget, whole geocells plus at most one partial one.
 RUNG_TILES: Final = {"1%": 200, "10%": 2_000, "100%": 20_000}
 
-# An arm restricted to some rungs (B8 and the ALT rows, #211) names rungs that exist: checked
-# here because the arm table cannot import this module.
-for _arm in landform_arms.ARMS.values():
-    if _arm.rungs is not None and not set(_arm.rungs) <= set(RUNGS):
-        raise ValueError(f"arm {_arm.name} names rungs {_arm.rungs} outside {RUNGS}")
-del _arm
-
 #: The two label sets: §3.1's geomorphons (primary) and §3.2's Iwahashi & Pike groups
 #: (the independence check).
 LABEL_SETS: Final = ("geomorphon", "iwahashi")
@@ -535,11 +528,6 @@ class LandformConfig(Frozen):
         arm = landform_arms.get(self.arm)  # refuses, naming the table
         if self.rung not in RUNGS:
             raise ValueError(f"unknown rung {self.rung!r} (§3.3's tile budgets: {list(RUNGS)})")
-        if arm.rungs is not None and self.rung not in arm.rungs:
-            raise ValueError(
-                f"arm {arm.name} runs at {list(arm.rungs)} only (plan §1), so rung "
-                f"{self.rung!r} is not a cell it has"
-            )
         if self.seed < 0:
             raise ValueError(f"seed {self.seed} must be >= 0")
         if self.label_set not in LABEL_SETS:
@@ -553,6 +541,11 @@ class LandformConfig(Frozen):
                 f"has — name an arm that trains it"
             )
         object.__setattr__(self, "head", head)
+        if self.rung not in arm.rungs:
+            raise ValueError(
+                f"arm {arm.name} runs at {list(arm.rungs)} only, so rung {self.rung} is not a "
+                f"cell it has (plan §4.3's budget)"
+            )
 
     # --- derived numbers (computed, never stored, so they cannot drift)
 
@@ -572,10 +565,21 @@ class LandformConfig(Frozen):
         return getattr(self, self.head)
 
     @property
+    def fine_tunes(self) -> bool:
+        """Whether this cell trains its encoder (B3), under :attr:`finetune` rather than a line."""
+        return landform_arms.get(self.arm).trains == "encoder+head"
+
+    @property
+    def epochs(self) -> int:
+        """The cell's epochs: its head recipe's, or §4.3's 50 for the fine-tune (B3), which
+        shares §4.2's UperNet and batch but not its 40 epochs."""
+        return self.finetune.epochs if self.fine_tunes else self.recipe.epochs
+
+    @property
     def steps(self) -> int:
         """This cell's run length under §4.5's floor — see :func:`steps`."""
         return steps(
-            epochs=self.recipe.epochs,
+            epochs=self.epochs,
             batch_size=self.recipe.batch_size,
             n_train=self.train_tiles,
             floor=self.schedule.step_floor,
