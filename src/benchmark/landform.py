@@ -599,6 +599,8 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     scored = landform_train.score_test(cfg, fitted, tiles)
     total = sum(tile.confusion for tile in scored)
     collapsed = landform_train.class_collapse(total)
+    insulated = resolution.arm.insulated
+    verdict = landform_results.precision_columns(fitted.precision)
     rows = [
         {
             **found["cell"],
@@ -607,6 +609,8 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
             "stratum": tile.stratum,
             "confusion": tile.confusion.tolist(),
             **tile.boundary,
+            "insulated": insulated,
+            **verdict,
             "config_hash": cfg.config_hash,
         }
         for tile in scored
@@ -614,6 +618,8 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     record = {
         "task": "landform",
         "cell": found["cell"],
+        # ADR-0015 L9: the row carries no claim and never stands in for a core row.
+        "insulated": insulated,
         "config_hash": cfg.config_hash,
         "artifact_hash": cfg.artifact_hash,
         "config": cfg.recipe_dict(),

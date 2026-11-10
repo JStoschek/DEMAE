@@ -308,3 +308,58 @@ def test_the_insulated_rows_are_l9s_and_no_core_row_is_one():
     concatenation row is a suite cell, not an arm)."""
     l9 = {"B4-ALT", "B5-ALT", "B8", "B1-S", "B2-S", "B1-R4", "B2-R4"}
     assert {name for name, arm in landform_arms.ARMS.items() if arm.insulated} == l9
+
+
+# --- #197 review: what a stored row says about its arm and its encoder's precision ----
+
+#: A verdict below #134's bar, as :meth:`benchmark.extract.Extractor._measure_precision` writes
+#: one: the case B9's bf16 hit, which the rows must let a reader tell apart.
+FAILED_VERDICT = {
+    "encoder": "terramind-per-tile", "reference_dtype": "fp32", "compute_dtype": "bf16",
+    "device": "cpu", "tiles": 1, "tokens": 196, "mean_cosine": 0.95, "min_cosine": 0.9,
+    "p01_cosine": 0.91, "relative_rms": 0.3, "threshold": 0.99, "immaterial": False,
+}
+
+
+class _VerdictStub(_LatentAwareStub):
+    """A failed agreement for the ALT encoder, and none measured for B4's."""
+
+    def precision_agreement(self, arm=None, *, encoder_name=None):
+        return FAILED_VERDICT if encoder_name == "terramind-per-tile" else None
+
+
+def test_each_row_carries_its_l9_insulation_and_its_encoders_precision_verdict(
+    box, corpus, monkeypatch
+):
+    """L9's `insulated` left the dry-run line for the run record and the parquet; the encoder's
+    measured agreement rides on every row, null where none was measured, so a failing encoder's
+    rows are distinguishable without the run record."""
+    import pyarrow.parquet as pq
+
+    from benchmark import extract as extract_module
+    from benchmark import results
+    from benchmark.config import BenchmarkConfig
+
+    monkeypatch.setattr(extract_module, "Extractor", _VerdictStub)
+    pin_stub_checkpoint(monkeypatch, "terramind", "terramind-per-tile")
+    (box / "task1" / "extractor_spec.json").unlink()
+    base = BenchmarkConfig()
+    extract_module.write_spec(base.replace(paths=base.paths.replace(
+        artifacts_dir=str(box / "task1"))))
+    argv = [*_flags(box, corpus), *_mounts(box)]
+    for name in ("B4", "B4-ALT"):
+        assert launch.main(["run", "--arm", name, "--rung", "100%", "--seed", "0", *argv]) == 0
+
+    rows = pq.read_table(box / "results.parquet").to_pylist()
+    by_arm = {}
+    for row in rows:
+        by_arm.setdefault(row["arm"], set()).add((
+            row["insulated"], row["compute_dtype"], row["precision_mean_cosine"],
+            row["precision_immaterial"],
+        ))
+    assert by_arm == {
+        "B4": {(False, None, None, None)},
+        "B4-ALT": {(True, "bf16", 0.95, False)},
+    }
+    records = results.read_run_records(results.run_record_path(box / "results.parquet"))
+    assert {r["cell"]["arm"]: r["insulated"] for r in records} == {"B4": False, "B4-ALT": True}

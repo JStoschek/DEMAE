@@ -9,7 +9,10 @@ Task 1's naming rule (:func:`benchmark.results.run_record_path`), one JSON line 
 One per test tile per cell, keyed by ``(arm, head, rung, seed, ladder, label_set, variant, tile_id)``
 plus ``attempt`` (below). Each row holds the tile's 10x10 confusion counts over non-ignore
 pixels (``confusion``, truth-major, length 100), boundary-F1's four counts at 2 px, and the
-tile's ruggedness band and stratum. mIoU, per-class IoU, macro-F1, accuracy, per-band numbers
+tile's ruggedness band and stratum. It also says whether its arm is L9-insulated
+(``insulated``) and carries its encoder's measured precision verdict (``compute_dtype``,
+``precision_mean_cosine``, ``precision_immaterial``; null where none was measured), so neither
+needs the run record to be read. mIoU, per-class IoU, macro-F1, accuracy, per-band numbers
 and the L2 bootstrap are all sums over these rows; none is stored (story 56).
 
 ## Appended once (L20)
@@ -67,10 +70,31 @@ def schema():
             ("stratum", pa.int64()),
             ("confusion", pa.list_(pa.int64())),
             *((name, pa.int64()) for name in BOUNDARY_COLUMNS),
+            ("insulated", pa.bool_()),
+            ("compute_dtype", pa.string()),
+            ("precision_mean_cosine", pa.float64()),
+            ("precision_immaterial", pa.bool_()),
             ("run_id", pa.string()),
             ("config_hash", pa.string()),
         ]
     )
+
+
+def precision_columns(precision: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The encoder's measured fp32-versus-compute-dtype verdict, as a row's three columns.
+
+    All three are null where nothing was measured: an arm with no encoder (B7), or one whose
+    extractor ran at the reference dtype. The verdict is recorded, not acted on: what a row
+    below #134's bar means for a table is a ruling, not this module's.
+    """
+    if precision is None:
+        return {"compute_dtype": None, "precision_mean_cosine": None,
+                "precision_immaterial": None}
+    return {
+        "compute_dtype": precision["compute_dtype"],
+        "precision_mean_cosine": float(precision["mean_cosine"]),
+        "precision_immaterial": bool(precision["immaterial"]),
+    }
 
 
 def _existing(path: Path):
