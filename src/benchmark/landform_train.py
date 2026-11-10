@@ -319,10 +319,15 @@ class Head:
     takes: Callable[[Any], Any]
 
 
-def build_head(cfg: LandformConfig, width: int) -> Head:
-    """The cell's head for a ``width``-d encoder, initialized under the cell's seed."""
+def build_head(cfg: LandformConfig, encoder: arms.Encoder) -> Head:
+    """The cell's head over ``encoder``, initialized under the cell's seed.
+
+    The linear probe reads `output`, so it is built at the encoder's `output` width — 5 for B8's
+    pre-FSQ latent (#211) — and UperNet reads the blocks, at the block width.
+    """
+    width = encoder.width
     if cfg.head == "linear":
-        built = probe.build(width, seed=cfg.seed)
+        built = probe.build(encoder.output_width, seed=cfg.seed)
         return Head(built.module, built.parameters, built.width, lambda f: f.output)
     if cfg.head == "upernet":
         recipe = cfg.upernet
@@ -414,7 +419,7 @@ def train_head(
         param.requires_grad_(False)
     before = train.encoder_checksums(model)
 
-    built = build_head(cfg, encoder.width)
+    built = build_head(cfg, encoder)
     module = built.module.to(device)
     forward = _Forward(extractor, encoder.name, module, device, built.takes)
     optimizer = torch.optim.AdamW(

@@ -199,8 +199,18 @@ class LandformResolution:
         else:
             lines = [
                 f"{'encoder':<16} {encoder.name}, pinned md5 {encoder.checkpoint_md5}",
+                # §2.1's diet, with the modality key that selects its constant pair (ADR-0012
+                # §7.2): B4 and B9 share a pair under two keys, and ALT shares B4's weights
+                # under DEMAE's diet, so the diet is what tells those rows apart on the page.
+                f"{'diet':<16} {encoder.normalization}"
+                + (f" under {encoder.modality}" if encoder.modality else ""),
                 self.checkpoint.line(),
             ]
+            if self.arm.insulated:
+                lines.append(
+                    f"{'insulated':<16} L9: this row carries no claim and never stands in for "
+                    f"a core row; it prints beside the core grid"
+                )
         recipe = cfg.recipe
         schedule = cfg.schedule
         lines += [
@@ -634,9 +644,28 @@ def _run(resolution: LandformResolution, args: argparse.Namespace) -> int:
     print(f"{'collapse':<16} {len(collapsed)} class(es) present in test truth at IoU 0"
           + (f": {', '.join(collapsed)} (flagged, not excluded — L10)" if collapsed else ""))
     print(f"{'params':<16} {found['params']:,} frozen + {fitted.parameters:,} trained")
+    if fitted.precision is not None:
+        print(precision_line(fitted.precision))
     print(f"{'record':<16} run {record['run_id']} appended to "
           f"{results.run_record_path(path)}")
     return 0
+
+
+def precision_line(precision: dict) -> str:
+    """ADR-0012 §6's measured agreement, as the run record carries it, with #134's verdict.
+
+    Every encoder measures its own figure on its run's first batch (:meth:`benchmark.extract.
+    Extractor.precision_agreement`), and the run record keeps it. B9's is the one Amendment 2
+    leaves unmeasured until its first run, so this line is where that number is first read.
+    """
+    verdict = ("immaterial" if precision["immaterial"]
+               else "BELOW the bar: the declared compute dtype is not immaterial for this encoder")
+    return (
+        f"{'precision':<16} {precision['encoder']} {precision['compute_dtype']} against "
+        f"{precision['reference_dtype']}: mean cosine {precision['mean_cosine']:.5f} (p01 "
+        f"{precision['p01_cosine']:.4f}) over {precision['tokens']:,} tokens on "
+        f"{precision['device']}, against #134's {precision['threshold']} bar — {verdict}"
+    )
 
 
 #: The trainer for each built head, looked up when the cell runs (so a test's stand-in is seen).

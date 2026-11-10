@@ -53,6 +53,12 @@ class LandformArm:
     trains: str
     #: What the resolution line says this arm is.
     what: str
+    #: The rungs plan §1 runs this arm at, or ``None`` for every rung. A cell at any other rung
+    #: is refused by name (:class:`benchmark.landform_config.LandformConfig`).
+    rungs: tuple[str, ...] | None = None
+    #: ADR-0015 L9: an insulated row carries no claim and never stands in for a core row. It
+    #: prints beside the core grid, never in it.
+    insulated: bool = False
 
     def __post_init__(self) -> None:
         if self.encoder is not None and self.encoder not in arms.ENCODERS:
@@ -95,6 +101,7 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="head",
             what="DEMAE R4 (ImageNet warm start) frozen + the identical linear probe — extra "
             "row, never C1's number (L5, L9)",
+            insulated=True,
         ),
         _arm(
             "B1-S",
@@ -103,6 +110,7 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="head",
             what="DEMAE ViT-S frozen + the identical linear probe at 384-d — appendix, no "
             "bootstrap pair",
+            insulated=True,
         ),
         _arm(
             "B2",
@@ -119,6 +127,7 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="head",
             what="DEMAE R4 (ImageNet warm start) frozen + the identical UperNet — extra row, "
             "never C1's number (L5, L9)",
+            insulated=True,
         ),
         _arm(
             "B2-S",
@@ -127,6 +136,7 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="head",
             what="DEMAE ViT-S frozen + the identical UperNet at 384-d — appendix, no bootstrap "
             "pair",
+            insulated=True,
         ),
         _arm(
             "B7",
@@ -135,6 +145,63 @@ ARMS: Final[dict[str, LandformArm]] = dict(
             trains="everything",
             what="Task 1's A7 UNet on one channel, from scratch at B2's batch and epochs, "
             "tuning itself — C2's and C3's bar (§4.3)",
+        ),
+        # The TerraMind rows (#211). B4/B5 read the DEM tokenizer, B9 the v1 base backbone; B8
+        # and the ALT rows are registry entries of their own on the `terramind-bicubic`
+        # precedent, so a control can never delete the row it sits beside.
+        _arm(
+            "B4",
+            encoder="terramind",
+            heads=("linear",),
+            trains="head",
+            what="TerraMind DEM tokenizer frozen (768-d `feats`, pre-`quant_proj`) + the "
+            "identical linear probe — core, C1",
+        ),
+        _arm(
+            "B5",
+            encoder="terramind",
+            heads=("upernet",),
+            trains="head",
+            what="TerraMind DEM tokenizer frozen + the identical UperNet on "
+            "intermediates[3, 5, 7, 11] — core, C1",
+        ),
+        _arm(
+            "B9",
+            encoder="terramind-backbone",
+            heads=("linear", "upernet"),
+            trains="head",
+            what="TerraMind v1 base backbone frozen on raw DEM + the identical linear probe "
+            "(on the normed `output`) or UperNet — core, C1",
+        ),
+        _arm(
+            "B8",
+            encoder="terramind-latent",
+            heads=("linear",),
+            trains="head",
+            what="TerraMind tokenizer's post-`quant_proj`, pre-FSQ 5-d latent + the linear probe "
+            "— ablation, insulated (L9)",
+            rungs=("100%",),
+            insulated=True,
+        ),
+        _arm(
+            "B4-ALT",
+            encoder="terramind-per-tile",
+            heads=("linear",),
+            trains="head",
+            what="TerraMind tokenizer fed DEMAE's per-tile diet + the identical linear probe — "
+            "altitude-passthrough control, insulated (L9)",
+            rungs=("100%",),
+            insulated=True,
+        ),
+        _arm(
+            "B5-ALT",
+            encoder="terramind-per-tile",
+            heads=("upernet",),
+            trains="head",
+            what="TerraMind tokenizer fed DEMAE's per-tile diet + the identical UperNet — "
+            "altitude-passthrough control, insulated (L9)",
+            rungs=("100%",),
+            insulated=True,
         ),
     ]
 )
