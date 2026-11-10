@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
-- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). And 2026-10-15 ([issue #195](https://github.com/JStoschek/DEMAE/issues/195), on [#194](https://github.com/JStoschek/DEMAE/issues/194)'s measurements) — a second TerraMind encoder, the backbone, makes three sentences written for the tokenizer false for it; see the notes under Context fact 1 and Decisions 3, 5 and 7.2, and [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9). And 2026-11-10 ([issue #197](https://github.com/JStoschek/DEMAE/issues/197)'s review, on [#210](https://github.com/JStoschek/DEMAE/issues/210)) — the call gains `grad=`, for B3's fine-tune alone; see the note under Decision 1. No decision changes in any of them.
+- **Amended by:** the build, 2026-08-12 ([issue #156](https://github.com/JStoschek/DEMAE/issues/156)) — Decision 5's "CLS is DEMAE-family only" is narrowed to what its own reason supports; see the note under that decision. And 2026-08-13 ([issue #157](https://github.com/JStoschek/DEMAE/issues/157)) — Decision 6's *unmeasured half* is measured; see [Amendment 1](#amendment-1-2026-08-13--decision-6s-unmeasured-half-is-measured). And 2026-10-15 ([issue #195](https://github.com/JStoschek/DEMAE/issues/195), on [#194](https://github.com/JStoschek/DEMAE/issues/194)'s measurements) — a second TerraMind encoder, the backbone, makes three sentences written for the tokenizer false for it; see the notes under Context fact 1 and Decisions 3, 5 and 7.2, and [Amendment 2](#amendment-2-2026-10-15--a-second-terramind-encoder-the-backbone-b9). And 2026-11-10 ([issue #197](https://github.com/JStoschek/DEMAE/issues/197)'s review, on [#210](https://github.com/JStoschek/DEMAE/issues/210)) — the call gains `grad=`, for B3's fine-tune alone; see the note under Decision 1. And 2026-11-10 ([issue #197](https://github.com/JStoschek/DEMAE/issues/197)'s decisions, on [#211](https://github.com/JStoschek/DEMAE/issues/211)'s measurement) — B9's bf16 agreement fails #134's bar, and B9 keeps bf16 anyway, disclosed on every row; see [Amendment 3](#amendment-3-2026-11-10--b9s-precision-fails-the-bar-and-b9-keeps-bf16). No numbered decision changes in any of them; Amendment 3 overrules Amendment 2's "unless that measurement fails" for B9.
 - **Context ticket:** "Decide what the frozen-feature extractor commits to, now that Task 2 inherits a contract and not a cache" ([issue #137](https://github.com/JStoschek/DEMAE/issues/137)), part of the Task-1 void-fill map ([#117](https://github.com/JStoschek/DEMAE/issues/117))
 - **Evidence:** [`p118-terramind-encoder-probe.md`](../research/p118-terramind-encoder-probe.md) §5.3 and §7 (TerraMind's intermediates and the normalization trap); [`src/pretrain/model.py`](../../src/pretrain/model.py) `encode`/`_transform`; [`src/dataset/loader.py`](../../src/dataset/loader.py) (the manifest-stat read); two measurements taken for this ticket, reproducible from [`p137-extractor-contract-checks.md`](../research/p137-extractor-contract-checks.md)
 - **Amends:** [`docs/research/task1-void-fill-plan.md`](../research/task1-void-fill-plan.md) §2.1, §3.4, §4.1, §9.4 *(Amended 2026-08-11 — [#129](https://github.com/JStoschek/DEMAE/issues/129): the committed-artifacts section was §3.5 when this ADR was written; [#128](https://github.com/JStoschek/DEMAE/issues/128) deleted the Diff-DEM cross-eval section above it and everything below renumbered. Pointer only — no decision in this ADR changes)*
@@ -293,3 +293,48 @@ its tensor in the file, and the unrolled forward bit-identical to terratorch's r
 different network, and its bf16-against-fp32 agreement does not exist yet. The build measures it on
 first run against #134's 0.99 bar, as #157 did for the tokenizer. The backbone keeps the declared bf16
 compute dtype unless that measurement fails.
+
+> *(Amended 2026-11-10 — [#197](https://github.com/JStoschek/DEMAE/issues/197)'s decisions.* The
+> measurement failed, and the backbone keeps bf16 regardless. See [Amendment 3](#amendment-3-2026-11-10--b9s-precision-fails-the-bar-and-b9-keeps-bf16).*)
+
+### Amendment 3 (2026-11-10) — B9's precision fails the bar, and B9 keeps bf16
+
+**Source:** [#211](https://github.com/JStoschek/DEMAE/issues/211), the build of B9's rows, which
+took the measurement Amendment 2 left owing. The decision is the project owner's, recorded in
+[#197](https://github.com/JStoschek/DEMAE/issues/197)'s decisions. **Supersedes:** Amendment 2's
+last clause, "unless that measurement fails", for B9 alone. Decision 6 stands as taken: fp32 is
+the reference and the compute dtype is a per-task declared field. Task 2 declares `bf16`, and B9
+runs at it.
+
+**The outcome.** Mean per-token cosine between `torch.autocast(bf16)` and the fp32 reference for
+`terramind-backbone` is **0.937** over 60 corpus tiles on MPS (3 per stratum, p157's tile rule),
+with a 1st-percentile token at **0.461** and a worst token at **−0.065**. On CPU, over 40 tiles,
+it is **0.933**. #134's bar is 0.99, so the verdict is *not immaterial*, and by a wide margin:
+the tokenizer's 0.99888 (Amendment 1) and DEMAE's 0.999968 (Context fact 4) both clear it.
+
+**Where it comes from.** The disagreement builds up block by block: 0.9999 after block 1, falling
+to **0.905** at block 12. It is not our unrolled forward: terratorch's own forward, under the same
+autocast, gives the same number.
+
+**The decision: B9 runs at the declared bf16 compute dtype anyway.** Task 2's declared compute
+dtype stays one value for every encoder, and B9 is not moved to fp32. No rule refuses a sub-bar
+run: neither register (ADR-0013 for Task 1, ADR-0015 for Task 2) holds one, and
+`benchmark.results`' precision block records a sub-threshold figure without consulting it.
+Nothing in the arm table moves.
+
+**The cost is disclosure, and it is owed in two places:**
+
+- **Every B9 row** carries the measured verdict, as every Task 2 row does: `compute_dtype` =
+  `bf16`, `precision_mean_cosine` = that run's figure, and `precision_immaterial` = **False**.
+  The run record keeps the full figure (mean, p01, min, relative RMS, tokens, device), and
+  `run` prints it with "BELOW the bar". Nothing refuses these rows and nothing relabels them.
+  No code in `benchmark.landform`, `benchmark.landform_results` or `benchmark.results` reads
+  `immaterial`, and the build checked that when this amendment was taken.
+- **The results memo** must state that B9's features are bf16 features, and that they differ
+  from the fp32 reference at this level (mean cosine ~0.93, decaying to ~0.90 at block 12). A
+  B9 number is a number about TerraMind's backbone *as run in bf16*. A reader comparing B9 with
+  B6 or B1 is comparing an encoder whose bf16 features are ~0.07 cosine away from its own fp32
+  features with encoders whose bf16 features are not.
+
+**What this does not settle.** Whether B9's fp32 features would score differently is not
+measured, and this amendment claims nothing about it.
