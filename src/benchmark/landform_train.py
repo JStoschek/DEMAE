@@ -358,14 +358,22 @@ def build_head(cfg: LandformConfig, encoder: arms.Encoder) -> Head:
 #: learn one.
 FIXED_ENCODER_TENSORS: Final = ("pos_embed",)
 
+#: Encoder tensors B3 leaves frozen because nothing it trains reads them. The final ``norm``
+#: makes `output`, and UperNet reads the raw blocks (`intermediates[3, 5, 7, 11]`, ADR-0012
+#: Amendment 2), so the norm would get no gradient: unfrozen, it would sit in an AdamW group
+#: and in the trainable count while never moving (#197 review).
+UNREAD_ENCODER_PREFIXES: Final = ("norm.",)
+
 #: Encoder tensors that skip weight decay beside every 1-d tensor (MAE's no-decay list).
 NO_DECAY_TENSORS: Final = ("cls_token",)
 
 
 def unfreeze(model) -> None:
-    """Every encoder weight trains except :data:`FIXED_ENCODER_TENSORS`."""
+    """Every encoder weight trains except :data:`FIXED_ENCODER_TENSORS` and the tensors under
+    :data:`UNREAD_ENCODER_PREFIXES`."""
     for name, param in model.named_parameters():
-        param.requires_grad_(name not in FIXED_ENCODER_TENSORS)
+        param.requires_grad_(name not in FIXED_ENCODER_TENSORS
+                             and not name.startswith(UNREAD_ENCODER_PREFIXES))
 
 
 def finetune_groups(encoder, head, recipe, *, weight_decay: float) -> list[dict]:

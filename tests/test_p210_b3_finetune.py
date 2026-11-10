@@ -36,8 +36,11 @@ def _vit(depth: int = 2):
 
 def test_layer_wise_decay_gives_each_encoder_layer_its_own_lr_and_the_head_1e_3():
     """Two blocks: layer 0 is the patch embedding and the CLS token, blocks 0 and 1 are layers 1
-    and 2, and the final norm is the top (3). Layer l trains at 1e-4 x 0.75^(3 - l)."""
+    and 2, and the top of MAE's ladder (3) is the final norm's. Layer l trains at
+    1e-4 x 0.75^(3 - l). The norm itself is left frozen: it makes `output`, which UperNet never
+    reads, so it would get no gradient (#197 review)."""
     encoder, head = _vit(depth=2), torch.nn.Conv2d(48, 10, 1)
+    landform_train.unfreeze(encoder)
     groups = landform_train.finetune_groups(encoder, head, Finetune(), weight_decay=0.05)
     lr_of = {id(p): g["lr"] for g in groups for p in g["params"]}
     by_name = {n: lr_of.get(id(p)) for n, p in encoder.named_parameters()}
@@ -47,17 +50,19 @@ def test_layer_wise_decay_gives_each_encoder_layer_its_own_lr_and_the_head_1e_3(
     assert by_name["blocks.0.attn.qkv.weight"] == pytest.approx(5.625e-05)
     assert by_name["blocks.0.mlp.fc2.bias"] == pytest.approx(5.625e-05)
     assert by_name["blocks.1.attn.proj.weight"] == pytest.approx(7.5e-05)
-    assert by_name["norm.weight"] == pytest.approx(1e-04)
+    assert by_name["norm.weight"] is None and by_name["norm.bias"] is None
     assert all(lr_of[id(p)] == pytest.approx(1e-03) for p in head.parameters())
 
 
-def test_the_12_block_ladder_runs_from_1e_4_at_the_top_to_2_4e_6_at_the_patch_embedding():
+def test_the_12_block_ladder_runs_from_7_5e_5_at_block_12_to_2_4e_6_at_the_patch_embedding():
+    """MAE's ladder keeps its top (13, 1e-4) at the final norm, which B3 leaves frozen, so the
+    highest layer that trains is block 12, one decay below."""
     encoder = _vit(depth=12)
+    landform_train.unfreeze(encoder)
     groups = landform_train.finetune_groups(encoder, torch.nn.Identity(), Finetune(),
                                             weight_decay=0.05)
     by_layer = {g["layer"]: g["lr"] for g in groups if g["part"] == "encoder"}
-    assert sorted(by_layer) == list(range(14))
-    assert by_layer[13] == pytest.approx(1e-4)
+    assert sorted(by_layer) == list(range(13))
     assert by_layer[12] == pytest.approx(7.5e-5)        # block 12 of 12
     assert by_layer[1] == pytest.approx(3.1676352e-06)  # block 1 of 12
     assert by_layer[0] == pytest.approx(2.3757264e-06)  # patch embedding, CLS
@@ -254,11 +259,15 @@ def test_a_b3_cell_fine_tunes_encoder_and_upernet_and_appends_rows(box, flags, t
     assert record["training"]["precision_used"] == "fp32", "CPU drops bf16 and says so"
 
     model = trainable.instances[-1]._model
-    encoder_trained = sum(p.numel() for n, p in model.named_parameters() if n != "pos_embed")
+    every_but_sin_cos = sum(p.numel() for n, p in model.named_parameters() if n != "pos_embed")
+    # The final norm makes `output`, which UperNet never reads (it reads raw intermediates[3, 5,
+    # 7, 11]): it gets no gradient, so it is left frozen and not counted. LayerNorm(768): 1,536.
+    encoder_trained = every_but_sin_cos - 1_536
     head = upernet.parameter_count(WIDTH, channels=32)
     assert record["parameters"] == {
         "encoder": 85_254_144, "trainable": encoder_trained + head, "total": 85_254_144 + head,
-    }, "the encoder's weights train, all but its fixed sin-cos position embedding"
+    }, "the encoder's weights train, all but its fixed sin-cos position embedding and final norm"
+    assert torch.equal(model.state_dict()["norm.weight"], start["norm.weight"])
 
     # The encoder that scored is the fine-tuned one: its weights moved, its sin-cos did not.
     now = model.state_dict()
@@ -273,3 +282,34 @@ def test_a_b3_cell_whose_decoder_drifts_from_the_upernet_line_is_refused(box, fl
     """'Same decoder, same layers' (§4.3) is B6's frozen UperNet line at 100%, not a copy."""
     with pytest.raises(ValueError, match="recipe drifted from its frozen line.*upernet.channels"):
         launch.main([*b3("--dry-run"), *flags, "--set", "upernet.channels=64"])
+
+
+def test_the_optimizer_steps_each_layer_at_its_own_lr_under_the_one_cosine(
+    box, flags, trainable, monkeypatch
+):
+    """#197 review: the run loop's per-group lr, as the optimizer sees it on each step. Every
+    group peaks at its own §4.3 lr (literals, as above) and all groups share one cosine factor,
+    so the ratio between any two groups is the same on every step."""
+    seen: list[dict] = []
+
+    class SpyAdamW(torch.optim.AdamW):
+        def step(self, closure=None):
+            seen.append({(g["part"], g["layer"]): g["lr"] for g in self.param_groups})
+            return super().step(closure)
+
+    monkeypatch.setattr(torch.optim, "AdamW", SpyAdamW)
+    assert launch.main([*b3(), *flags]) == 0
+
+    assert len(seen) > 1
+    peak = {key: max(step[key] for step in seen) for key in seen[0]}
+    head = [key for key in peak if key[0] == "head"]
+    assert len(head) == 1 and peak[head[0]] == pytest.approx(1e-3)
+    assert peak[("encoder", 12)] == pytest.approx(7.5e-05)         # block 12 of 12
+    assert peak[("encoder", 1)] == pytest.approx(3.1676352e-06)    # block 1 of 12
+    assert peak[("encoder", 0)] == pytest.approx(2.3757264e-06)    # patch embedding, CLS
+    assert ("encoder", 13) not in peak, "the unread final norm has no group"
+    for step in seen:
+        factor = step[head[0]] / 1e-3
+        assert factor <= 1.0 + 1e-12
+        for key, lr in step.items():
+            assert lr == pytest.approx(peak[key] * factor, rel=1e-9, abs=1e-15), key
